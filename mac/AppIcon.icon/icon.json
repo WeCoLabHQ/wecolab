@@ -1,0 +1,27 @@
+{
+  "fill": {
+    "solid": "extended-srgb:0.05882,0.06667,0.07843,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "glass": false,
+          "image-name": "AppIcon.png",
+          "name": "AppIcon"
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

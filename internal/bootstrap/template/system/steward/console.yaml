@@ -1,0 +1,106 @@
+# The Console at every steward (docs/architecture.md, "The Console"). The Door routes console.<zone>
+# to the writer's, on the manager's Nebula address, port 30800. It commits to this site's copy of the
+# Fabric, which admits it only at the writer.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: wecolab-console, namespace: wecolab-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: wecolab-console }
+rules:
+  # Every change is first tried as the signed-in person: a user, never a group (system:masters is one).
+  - apiGroups: [""]
+    resources: [users]
+    verbs: [impersonate]
+  # Reading what the pages show, and writing through what was committed.
+  - apiGroups: [wecolab.io]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: [namespaces, nodes, pods, services, persistentvolumeclaims, configmaps]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, patch, update]
+  - apiGroups: [kustomize.toolkit.fluxcd.io, source.toolkit.fluxcd.io]
+    resources: ["*"]
+    verbs: [get, list, watch, patch]
+---
+# The fabric's secrets at this steward: invites, projects' vaults, the object storage key. Here only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: wecolab-console, namespace: wecolab-system }
+rules: [{ apiGroups: [""], resources: [secrets], verbs: [get, create, update, patch] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: wecolab-console, namespace: wecolab-system }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: wecolab-console }
+subjects: [{ kind: ServiceAccount, name: wecolab-console, namespace: wecolab-system }]
+---
+# After a commit, Flux here is asked to fetch it at once rather than within its minute; this site's age
+# key opens the fabric's secrets to encrypt them again for a new steward.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: wecolab-console, namespace: flux-system }
+rules:
+  - { apiGroups: [source.toolkit.fluxcd.io], resources: [gitrepositories], resourceNames: [fabric], verbs: [get, patch] }
+  - { apiGroups: [""], resources: [secrets], resourceNames: [sops-age], verbs: [get] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: wecolab-console, namespace: flux-system }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: wecolab-console }
+subjects: [{ kind: ServiceAccount, name: wecolab-console, namespace: wecolab-system }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: wecolab-console }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: wecolab-console }
+subjects: [{ kind: ServiceAccount, name: wecolab-console, namespace: wecolab-system }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: wecolab-console, namespace: wecolab-system }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: wecolab-console } }
+  template:
+    metadata: { labels: { app: wecolab-console } }
+    spec:
+      serviceAccountName: wecolab-console
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: console
+          image: ghcr.io/wecolabhq/console:{{ .Version }}
+          imagePullPolicy: IfNotPresent
+          args: [--listen=:8080, "--site=${SITE}"]
+          env:
+            - { name: WECOLAB_GIT_URL, value: "http://forgejo.wecolab-system.svc:3000" }
+            - name: WECOLAB_GIT_TOKEN
+              valueFrom: { secretKeyRef: { name: git, key: token } }
+            - name: NETBIRD_URL
+              valueFrom: { secretKeyRef: { name: netbird, key: url, optional: true } }
+            - name: WECOLAB_SESSION_KEY
+              valueFrom: { secretKeyRef: { name: console, key: session-key } }
+          ports: [{ containerPort: 8080 }]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: dist, mountPath: /dist, readOnly: true }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, readOnlyRootFilesystem: true }
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 } }
+          resources: { requests: { cpu: 20m, memory: 48Mi }, limits: { memory: 256Mi } }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        # What a joining box downloads before a registry holds WeCoLab's images (decision 13).
+        - { name: dist, hostPath: { path: /var/lib/wecolab/dist, type: DirectoryOrCreate } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: wecolab-console, namespace: wecolab-system }
+spec:
+  type: NodePort
+  selector: { app: wecolab-console }
+  ports: [{ port: 80, targetPort: 8080, nodePort: 30800 }]

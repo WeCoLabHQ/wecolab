@@ -1,0 +1,74 @@
+# On laptop nodes (a Mac's VM): mirrors whether the person is using the laptop into the wecolab.io/idle
+# taint, from the mode file WeCoLab for Mac writes into the VM's share. Best-effort pods tolerate the
+# taint only while it is absent. A laptop registers with the taint (install.sh), so no work lands on it
+# before the agent has looked.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: wecolab-node-agent, namespace: wecolab-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: wecolab-node-agent }
+rules: [{ apiGroups: [""], resources: [nodes], verbs: [get, patch] }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: wecolab-node-agent }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: wecolab-node-agent }
+subjects: [{ kind: ServiceAccount, name: wecolab-node-agent, namespace: wecolab-system }]
+---
+# The agent's token is bound to its pod, and so to the node the pod runs on: with it, a laptop's owner
+# may change only the idle taint of that node. Not another node, not its labels or other taints (a
+# laptop labelled a manager, without the laptop taint, would get the manager's workloads).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: wecolab-node-agent }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [""], apiVersions: [v1], operations: [UPDATE], resources: [nodes] }
+  matchConditions:
+    - name: node-agent
+      expression: request.userInfo.username == 'system:serviceaccount:wecolab-system:wecolab-node-agent'
+  validations:
+    - expression: >-
+        has(request.userInfo.extra) && 'authentication.kubernetes.io/node-name' in request.userInfo.extra &&
+        request.userInfo.extra['authentication.kubernetes.io/node-name'][0] == object.metadata.name
+      message: the node agent may change only the node it runs on
+    - expression: >-
+        (has(object.metadata.labels) ? object.metadata.labels : {}) == (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {})
+      message: the node agent may not change a node's labels
+    - expression: >-
+        (has(object.spec.taints) ? object.spec.taints : []).filter(t, t.key != 'wecolab.io/idle') ==
+        (has(oldObject.spec.taints) ? oldObject.spec.taints : []).filter(t, t.key != 'wecolab.io/idle')
+      message: the node agent may change only the wecolab.io/idle taint
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: wecolab-node-agent }
+spec:
+  policyName: wecolab-node-agent
+  validationActions: [Deny]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: { name: wecolab-node-agent, namespace: wecolab-system }
+spec:
+  selector: { matchLabels: { app: wecolab-node-agent } }
+  template:
+    metadata: { labels: { app: wecolab-node-agent } }
+    spec:
+      serviceAccountName: wecolab-node-agent
+      nodeSelector: { wecolab.io/laptop: "true" }
+      tolerations: [{ operator: Exists }]
+      containers:
+        - name: agent
+          image: ghcr.io/wecolabhq/warden:{{ .Version }}
+          imagePullPolicy: IfNotPresent
+          args: [node-agent, --mode-file=/wecolab/mode]
+          env: [{ name: NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }]
+          # The Mac mounts its share after the VM boots: the pod sees it appear.
+          volumeMounts: [{ name: share, mountPath: /wecolab, readOnly: true, mountPropagation: HostToContainer }]
+          resources: { requests: { cpu: 5m, memory: 16Mi }, limits: { memory: 64Mi } }
+      volumes: [{ name: share, hostPath: { path: /wecolab, type: DirectoryOrCreate } }]

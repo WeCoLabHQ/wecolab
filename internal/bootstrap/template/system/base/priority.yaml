@@ -1,0 +1,12 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: wecolab-protected }
+value: 1000000
+description: Protected primary and standby workloads. Never preempted by best-effort work.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: wecolab-best-effort }
+value: -1000
+preemptionPolicy: Never
+description: Laptops and idle capacity. Preempted first when protected or the owner's work needs room.

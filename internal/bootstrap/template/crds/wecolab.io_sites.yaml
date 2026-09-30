@@ -1,0 +1,213 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: sites.wecolab.io
+spec:
+  group: wecolab.io
+  names:
+    kind: Site
+    listKind: SiteList
+    plural: sites
+    singular: site
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.owner
+      name: Owner
+      type: string
+    - jsonPath: .spec.steward
+      name: Steward
+      type: boolean
+    - jsonPath: .spec.public.address
+      name: Public
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Site is one site of the fabric.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SiteSpec is one site: one k3s cluster and the boxes it is made of. Written by the Console when the
+              site and its boxes join; every box's Nebula identity is here, so any steward can renew it.
+            properties:
+              boxes:
+                description: Boxes are the site's machines; the first is its manager.
+                items:
+                  description: Box is one machine of a site, as Nebula knows it.
+                  properties:
+                    added:
+                      description: Added is when the box joined.
+                      format: date-time
+                      type: string
+                    certs:
+                      description: |-
+                        Certs are the certificates the Console signed for the box when it joined, newest last, so removing
+                        the box blocks them wherever the stewards' own records cannot be reached.
+                      items:
+                        description: IssuedCert is one certificate issued for a box.
+                        properties:
+                          fingerprint:
+                            type: string
+                          notAfter:
+                            format: date-time
+                            type: string
+                        required:
+                        - fingerprint
+                        - notAfter
+                        type: object
+                      maxItems: 8
+                      type: array
+                    ip:
+                      description: IP is the box's Nebula address.
+                      format: ipv4
+                      type: string
+                    key:
+                      description: Key is the box's Nebula public key, PEM. Renewals
+                        only ever re-sign this key.
+                      type: string
+                    laptop:
+                      description: 'Laptop marks capacity that yields to its person:
+                        best-effort work only.'
+                      type: boolean
+                    name:
+                      description: 'Name is the box''s Nebula name and Kubernetes
+                        node name: <site>-<host>, unique across the fabric.'
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    role:
+                      description: Role is manager (the site's k3s server) or node.
+                      enum:
+                      - manager
+                      - node
+                      type: string
+                  required:
+                  - added
+                  - ip
+                  - key
+                  - name
+                  - role
+                  type: object
+                type: array
+              index:
+                description: 'Index places the site''s boxes in the Nebula network:
+                  10.77.<index>.0/24 by default.'
+                maximum: 254
+                minimum: 0
+                type: integer
+              nextBox:
+                description: |-
+                  NextBox is the host number the next box gets in the site's network. Numbers are never reused, so a
+                  removed box's address never belongs to anyone else while its certificate may still be valid.
+                maximum: 255
+                minimum: 0
+                type: integer
+              owner:
+                description: 'Owner is the project that owns the site: its members
+                  manage it.'
+                type: string
+              public:
+                description: |-
+                  Public is set when the site's manager has a public address: it then runs the Door, Names and a
+                  Nebula lighthouse and relay.
+                properties:
+                  address:
+                    description: Address is the manager's public IPv4 address.
+                    format: ipv4
+                    type: string
+                required:
+                - address
+                type: object
+              steward:
+                description: 'Steward sites hold the fabric: its secrets, the Nebula
+                  CA, and the right to become the writer.'
+                type: boolean
+            required:
+            - index
+            - owner
+            type: object
+          status:
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

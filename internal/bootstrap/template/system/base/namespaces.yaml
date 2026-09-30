@@ -1,0 +1,8 @@
+# The fabric's own namespace at every site: Warden, Forgejo, the Console, the Door. Infrastructure,
+# exempt from the site's default Pod Security (install.sh); never a project's.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wecolab-system
+  labels: { pod-security.kubernetes.io/enforce: privileged }
+  annotations: { kustomize.toolkit.fluxcd.io/prune: disabled }

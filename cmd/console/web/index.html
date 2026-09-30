@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en" data-theme="graphite" data-accent="teal" data-density="normal" class="booting">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WeCoLab Console</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ───────────────────────── Themes ───────────────────────── */
+:root{
+  --font-ui:"Instrument Sans",ui-sans-serif,system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --radius:6px; --radius-lg:10px;
+  --nav-w:232px; --top-h:52px;
+  --sp:8px; --pad:16px; --row:36px; --fs:13.5px;
+}
+[data-density="compact"]{ --sp:6px; --pad:12px; --row:30px; --fs:12.5px; }
+[data-density="comfortable"]{ --sp:10px; --pad:20px; --row:42px; --fs:14px; }
+
+/* Graphite — dark, neutral, Grafana-adjacent */
+[data-theme="graphite"]{
+  --bg:#0f1114; --bg-1:#15181c; --bg-2:#1b1f24; --bg-3:#22272e;
+  --line:#262b32; --line-2:#30363f;
+  --fg:#e6e8eb; --fg-1:#b3b8c0; --fg-2:#7c848f; --fg-3:#555c66;
+  --ok:#3fbf7f; --warn:#e0a83a; --bad:#e35d5d; --info:#5b9cf6;
+  --shadow:none; --grain:.035;
+}
+/* Paper — light, warm gray, editorial */
+[data-theme="paper"]{
+  --bg:#f6f5f2; --bg-1:#ffffff; --bg-2:#faf9f6; --bg-3:#f0eee9;
+  --line:#e4e1da; --line-2:#d5d1c8;
+  --fg:#1a1b1e; --fg-1:#3c3f45; --fg-2:#6d7178; --fg-3:#a2a6ad;
+  --ok:#1f8f5a; --warn:#b77b12; --bad:#c43c3c; --info:#2f6fd0;
+  --shadow:0 1px 2px rgba(20,18,12,.06),0 0 0 1px rgba(20,18,12,.02); --grain:.02;
+}
+/* Dusk — dark with a blue-black tint, slightly higher contrast */
+[data-theme="dusk"]{
+  --bg:#0b0e14; --bg-1:#10141c; --bg-2:#151a24; --bg-3:#1b2230;
+  --line:#1f2733; --line-2:#2b3542;
+  --fg:#e9edf3; --fg-1:#b8c0cc; --fg-2:#7f8a99; --fg-3:#535d6b;
+  --ok:#4cc38a; --warn:#eab04b; --bad:#f06a6a; --info:#6aa7ff;
+  --shadow:none; --grain:.04;
+}
+/* Accents */
+[data-accent="teal"]{ --accent:#2dd4bf; --accent-ink:#052e2b; }
+[data-accent="blue"]{ --accent:#4f8ef7; --accent-ink:#071a3a; }
+[data-accent="amber"]{ --accent:#f5b544; --accent-ink:#2e1d02; }
+[data-accent="rose"]{ --accent:#f472a6; --accent-ink:#3a0b20; }
+[data-theme="paper"][data-accent="teal"]{ --accent:#0f9a8a; --accent-ink:#fff; }
+[data-theme="paper"][data-accent="blue"]{ --accent:#2f6fd0; --accent-ink:#fff; }
+[data-theme="paper"][data-accent="amber"]{ --accent:#c07a00; --accent-ink:#fff; }
+[data-theme="paper"][data-accent="rose"]{ --accent:#d0367a; --accent-ink:#fff; }
+
+/* ───────────────────────── Base ───────────────────────── */
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:400 var(--fs)/1.45 var(--font-ui);-webkit-font-smoothing:antialiased;letter-spacing:.005em}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:var(--grain);z-index:0;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.mono{font-family:var(--font-mono);font-size:.92em;letter-spacing:0}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;letter-spacing:0}
+.muted{color:var(--fg-2)}
+.dim{color:var(--fg-3)}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .info{color:var(--info)} .acc{color:var(--accent)}
+kbd{font-family:var(--font-mono);font-size:11px;border:1px solid var(--line-2);border-bottom-width:2px;border-radius:4px;padding:0 5px;color:var(--fg-2)}
+
+/* ───────────────────────── Shell ───────────────────────── */
+.shell{display:grid;grid-template-columns:var(--nav-w) 1fr;grid-template-rows:var(--top-h) 1fr;height:100vh;position:relative;z-index:1}
+nav.side{grid-row:1/3;background:var(--bg-1);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:auto}
+.brand{height:var(--top-h);display:flex;align-items:center;gap:10px;padding:0 var(--pad);border-bottom:1px solid var(--line)}
+.brand .mark{width:22px;height:22px;flex:none}
+/* Nothing shows until the Console knows who is here; signed out, the first request goes to sign-in. */
+html.booting body{visibility:hidden}
+.brand b{font-weight:600;letter-spacing:-.01em}
+.brand small{color:var(--fg-3);font-family:var(--font-mono);font-size:10.5px;margin-left:auto}
+.project{margin:var(--pad);padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-2);display:flex;align-items:center;gap:10px}
+.project .pj{display:flex;flex-direction:column;line-height:1.2}
+.project .pj span{font-size:11px;color:var(--fg-2)}
+.project .pj b{font-weight:500}
+.project .chev{margin-left:auto;color:var(--fg-3)}
+.navsec{padding:0 var(--sp)}
+.navsec h6{margin:14px 12px 4px;font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3)}
+.navsec a{display:flex;align-items:center;gap:10px;height:32px;padding:0 12px;border-radius:var(--radius);color:var(--fg-1)}
+.navsec a:hover{background:var(--bg-2);color:var(--fg)}
+.navsec a.active{background:var(--bg-3);color:var(--fg);box-shadow:inset 2px 0 0 var(--accent)}
+.navsec a .ico{width:16px;height:16px;flex:none;opacity:.8}
+.navsec a .cnt{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--fg-3)}
+.navsec a .dot{margin-left:auto}
+nav.side .foot{margin-top:auto;padding:var(--pad);border-top:1px solid var(--line);font-size:12px;color:var(--fg-2);display:flex;align-items:center;gap:8px}
+nav.side .foot .avatar{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--info))}
+
+header.top{display:flex;align-items:center;gap:14px;padding:0 var(--pad) 0 calc(var(--pad) + 4px);border-bottom:1px solid var(--line);background:var(--bg-1)}
+.crumbs{display:flex;align-items:center;gap:8px;color:var(--fg-2)}
+.crumbs b{color:var(--fg);font-weight:500}
+.crumbs .sep{color:var(--fg-3)}
+.search{margin-left:auto;display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);color:var(--fg-3);width:260px}
+.search span{flex:1;font-size:12.5px}
+.iconbtn{width:30px;height:30px;border:1px solid var(--line);border-radius:var(--radius);display:grid;place-items:center;color:var(--fg-2);background:var(--bg)}
+.iconbtn:hover{color:var(--fg);border-color:var(--line-2)}
+main{overflow:auto;padding:calc(var(--pad)*1.5) calc(var(--pad)*1.75) calc(var(--pad)*3)}
+.page{display:none;max-width:1240px;margin:0 auto;animation:rise .28s ease-out both}
+.page.show{display:block}
+@keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ───────────────────────── Primitives ───────────────────────── */
+.ph{display:flex;align-items:flex-end;gap:16px;margin-bottom:calc(var(--pad)*1.25)}
+.ph h1{margin:0;font-size:22px;font-weight:500;letter-spacing:-.015em}
+.ph p{margin:4px 0 0;color:var(--fg-2)}
+.ph .actions{margin-left:auto;display:flex;gap:8px}
+.btn{height:32px;padding:0 12px;border:1px solid var(--line-2);border-radius:var(--radius);background:var(--bg-1);color:var(--fg);display:inline-flex;align-items:center;gap:8px;font-weight:500;transition:border-color .12s,background .12s}
+.btn:hover{border-color:var(--fg-3)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,var(--line-2))}
+.btn.danger:hover{background:color-mix(in srgb,var(--bad) 10%,transparent)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--fg-2)}
+.btn.ghost:hover{color:var(--fg);background:var(--bg-2)}
+.card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow)}
+.card .hd{display:flex;align-items:center;gap:10px;padding:12px var(--pad);border-bottom:1px solid var(--line)}
+.card .hd h3{margin:0;font-size:13px;font-weight:600;letter-spacing:.01em}
+.card .hd .r{margin-left:auto;display:flex;gap:8px;align-items:center;color:var(--fg-2);font-size:12px}
+.card .bd{padding:var(--pad)}
+.grid{display:grid;gap:var(--pad)}
+.g6{grid-template-columns:repeat(6,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)} .g4{grid-template-columns:repeat(4,1fr)}
+.g-2-1{grid-template-columns:2fr 1fr}
+@media (max-width:1100px){.g6{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(2,1fr)}.g-2-1,.g3,.g2{grid-template-columns:1fr}}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--fg-3);display:inline-block;flex:none}
+.dot.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+.dot.warn{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 18%,transparent)}
+.dot.bad{background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 18%,transparent)}
+.dot.pulse{animation:pulse 1.8s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--ok) 6%,transparent)}}
+.tag{display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 7px;border-radius:4px;font-size:11px;font-family:var(--font-mono);border:1px solid var(--line-2);color:var(--fg-1);background:var(--bg-2)}
+.tag.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 35%,var(--line))}
+.tag.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,var(--line))}
+.tag.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}
+.tag.acc{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;font-size:12.5px}
+.kv dt{color:var(--fg-2);margin:0} .kv dd{margin:0}
+
+/* Stat tiles */
+.stat{padding:14px var(--pad);display:flex;flex-direction:column;gap:6px;min-height:92px;position:relative;overflow:hidden}
+.stat .lbl{font-size:11.5px;color:var(--fg-2);letter-spacing:.02em}
+.stat .val{font-family:var(--font-mono);font-size:22px;font-weight:500;letter-spacing:-.02em;line-height:1.1}
+.stat .val small{font-size:12px;color:var(--fg-2);font-weight:400;margin-left:4px}
+.stat .sub{font-size:11.5px;color:var(--fg-2);display:flex;align-items:center;gap:6px}
+.stat::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--st,transparent)}
+.stat.ok{--st:var(--ok)} .stat.warn{--st:var(--warn)} .stat.bad{--st:var(--bad)}
+
+/* Tables */
+table{width:100%;border-collapse:collapse;font-size:12.75px}
+th{font-weight:500;text-align:left;color:var(--fg-2);font-size:11.5px;letter-spacing:.03em;padding:0 var(--pad);height:34px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:0 var(--pad);height:var(--row);border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+tbody tr{transition:background .1s} tbody tr:hover{background:var(--bg-2)} tbody tr.click{cursor:pointer}
+td .nm{font-weight:500} td .sub{color:var(--fg-3);font-size:11.5px;margin-left:8px}
+.role{font-family:var(--font-mono);font-size:11px;color:var(--fg-2)}
+.role b{color:var(--fg);font-weight:500}
+.role .arr{margin:0 6px;color:var(--fg-3)}
+
+/* Bars */
+.bar{height:6px;border-radius:3px;background:var(--bg-3);overflow:hidden;display:flex}
+.bar i{display:block;height:100%}
+.bar .priv{background:var(--fg-3)} .bar .res{background:var(--accent)} .bar .be{background:color-mix(in srgb,var(--accent) 40%,transparent)} .bar .free{background:transparent}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--fg-2);margin-top:8px}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+/* Conditions */
+.conds{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.conds li{display:grid;grid-template-columns:18px 1fr auto;grid-template-areas:"c t v" "c m v";column-gap:10px;row-gap:1px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);font-size:12.75px}
+.conds .chk{grid-area:c} .conds .t{grid-area:t} .conds .m{grid-area:m;font-size:11.5px} .conds .v{grid-area:v;text-align:right}
+.conds li:last-child{border:0}
+.conds .chk{width:14px;height:14px;border-radius:50%;display:grid;place-items:center;font-size:10px}
+.conds .chk.ok{background:color-mix(in srgb,var(--ok) 20%,transparent);color:var(--ok)}
+.conds .chk.warn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.conds .chk.bad{background:color-mix(in srgb,var(--bad) 20%,transparent);color:var(--bad)}
+.conds .t{font-weight:500} .conds .m{color:var(--fg-2)} .conds .v{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-2)}
+
+/* Topology ribbon */
+.topo{display:grid;grid-template-columns:1fr 96px 1fr 96px 1fr;align-items:center;gap:0;padding:6px 0}
+.node{border:1px solid var(--line-2);border-radius:var(--radius-lg);padding:12px 14px;background:var(--bg-2);position:relative}
+.node.primary{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
+.node .role-lbl{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-3);display:flex;align-items:center;gap:6px}
+.node.primary .role-lbl{color:var(--accent)}
+.node h4{margin:4px 0 6px;font-size:14px;font-weight:600}
+.node ul{margin:0;padding:0;list-style:none;font-size:11.5px;color:var(--fg-2);display:flex;flex-direction:column;gap:2px}
+.node ul .num{color:var(--fg-1)}
+.link{height:22px;position:relative}
+.link::before{content:"";position:absolute;left:4px;right:4px;top:50%;height:1.5px;background:repeating-linear-gradient(90deg,var(--line-2) 0 5px,transparent 5px 10px)}
+.link.flow::before{background:repeating-linear-gradient(90deg,var(--accent) 0 5px,transparent 5px 10px);animation:dash 1s linear infinite}
+@keyframes dash{to{background-position:10px 0}}
+.link .lbl{position:absolute;left:50%;top:-14px;transform:translateX(-50%);font-family:var(--font-mono);font-size:10px;color:var(--fg-3);white-space:nowrap}
+
+/* Contract sentence */
+.contract{font-size:15.5px;line-height:1.7;letter-spacing:-.005em}
+.contract .f{font-family:var(--font-mono);font-size:.86em;padding:1px 6px;border-radius:4px;background:var(--bg-3);border:1px solid var(--line-2);color:var(--fg)}
+.contract .f.acc{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line-2))}
+.contract .f.ok{color:var(--ok)} .contract .f.warn{color:var(--warn)}
+
+/* Field (the one field) */
+.field{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--line-2);border-radius:var(--radius-lg);background:var(--bg);font-family:var(--font-mono);font-size:13px}
+.field .k{color:var(--fg-2)} .field .v{color:var(--accent);font-weight:500}
+.field .swt{margin-left:auto;display:flex;gap:6px}
+.field .swt button{height:26px;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--radius);font-family:var(--font-mono);font-size:12px;color:var(--fg-1)}
+.field .swt button.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+
+/* Tabs */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 var(--pad)}
+.tabs button{height:36px;padding:0 12px;color:var(--fg-2);border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:500}
+.tabs button.on{color:var(--fg);border-color:var(--accent)}
+.tabs button:hover{color:var(--fg)}
+
+/* Spark */
+.spark{width:100%;height:56px;display:block}
+.spark path{fill:none;stroke:var(--accent);stroke-width:1.5}
+.spark .area{fill:color-mix(in srgb,var(--accent) 12%,transparent);stroke:none}
+.spark .thr{stroke:var(--warn);stroke-dasharray:3 3;stroke-width:1}
+
+/* Activity */
+.act{list-style:none;margin:0;padding:0}
+.act li{display:grid;grid-template-columns:76px 10px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px;align-items:baseline}
+.act li:last-child{border:0}
+.act .t{font-family:var(--font-mono);font-size:11px;color:var(--fg-3)}
+.act .who{color:var(--fg-2)}
+
+/* Forms */
+.form{display:grid;gap:14px;max-width:640px}
+.frow{display:grid;grid-template-columns:180px 1fr;gap:14px;align-items:start}
+.frow label{padding-top:7px;font-size:12.5px;color:var(--fg-1);font-weight:500}
+.frow small{display:block;color:var(--fg-3);font-weight:400;margin-top:2px;line-height:1.35}
+.in{height:32px;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--radius);background:var(--bg);color:var(--fg);font:inherit;width:100%}
+.in:focus{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);border-color:var(--accent)}
+.in.mono{font-family:var(--font-mono)}
+.inline{display:flex;gap:8px;align-items:center}
+.inline .in{width:120px}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:var(--radius);overflow:hidden}
+.seg button{height:30px;padding:0 12px;color:var(--fg-2);border-right:1px solid var(--line-2)}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--bg-3);color:var(--fg)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{height:26px;padding:0 10px;border:1px solid var(--line-2);border-radius:20px;display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-1)}
+.chip.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.note{padding:10px 12px;border-radius:var(--radius);background:var(--bg-2);border:1px solid var(--line);font-size:12.5px;color:var(--fg-1);display:flex;gap:10px}
+.note.warn{border-color:color-mix(in srgb,var(--warn) 35%,var(--line));background:color-mix(in srgb,var(--warn) 6%,var(--bg-2))}
+.note.bad{border-color:color-mix(in srgb,var(--bad) 35%,var(--line));background:color-mix(in srgb,var(--bad) 6%,var(--bg-2))}
+
+/* Theme picker */
+.themes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.tcard{border:1px solid var(--line-2);border-radius:var(--radius-lg);overflow:hidden;cursor:pointer;background:var(--bg-2)}
+.tcard.on{outline:2px solid var(--accent);outline-offset:1px}
+.tcard .prev{height:84px;display:grid;grid-template-columns:28% 1fr;gap:0}
+.tcard .prev i{display:block}
+.tcard .nm{padding:8px 10px;font-size:12px;display:flex;justify-content:space-between}
+.tcard .nm span{color:var(--fg-3);font-family:var(--font-mono);font-size:10.5px}
+.swatches{display:flex;gap:8px}
+.sw{width:26px;height:26px;border-radius:50%;border:2px solid transparent;cursor:pointer}
+.sw.on{border-color:var(--fg)}
+
+/* Modal */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;place-items:center;z-index:50;backdrop-filter:blur(2px)}
+.modal.show{display:grid}
+.dlg{width:600px;max-width:92vw;background:var(--bg-1);border:1px solid var(--line-2);border-radius:12px;box-shadow:0 30px 80px rgba(0,0,0,.45);animation:rise .18s ease-out}
+.dlg .hd{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.dlg .hd h3{margin:0;font-size:15px;font-weight:600}
+.dlg .bd{padding:18px 20px;display:grid;gap:14px}
+.dlg .ft{padding:14px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px;align-items:center}
+.dlg .ft .cf{margin-right:auto;font-size:12px;color:var(--fg-2);display:flex;align-items:center;gap:8px}
+.dlg .ft .cf input{width:180px}
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-size:12.75px}
+.steps li{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:center}
+.steps .n{width:20px;height:20px;border-radius:50%;border:1px solid var(--line-2);display:grid;place-items:center;font-family:var(--font-mono);font-size:10.5px;color:var(--fg-2)}
+.steps .g{font-family:var(--font-mono);font-size:11px}
+.steps .n.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,var(--line-2))} .steps .n.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--line-2))}
+
+/* Empty state */
+.empty{padding:40px;text-align:center;color:var(--fg-2)}
+.empty .mono{color:var(--fg-3)}
+
+/* Mobile first below 900px: the sidebar is a drawer, one column everywhere, tables scroll. */
+.menubtn{display:none}
+.scrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:39}
+#topmsg{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45vw;font-size:12.5px}
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr;grid-template-rows:var(--top-h) 1fr}
+  nav.side{position:fixed;inset:0 auto 0 0;width:min(84vw,300px);z-index:40;transform:translateX(-100%);transition:transform .2s ease;box-shadow:0 0 40px rgba(0,0,0,.5)}
+  nav.side.open{transform:none}
+  .scrim.show{display:block}
+  .menubtn{display:grid}
+  header.top{padding:0 12px;gap:8px}
+  .search{display:none}
+  main{padding:14px 12px 40px}
+  .ph{flex-direction:column;align-items:stretch;gap:8px}
+  .ph .actions{margin-left:0}
+  .g6,.g4,.g3,.g2,.g-2-1{grid-template-columns:1fr}
+  .card{overflow-x:auto}
+  table{min-width:520px}
+  .field{flex-wrap:wrap}
+  .field .swt{margin-left:0;width:100%}
+  .frow{grid-template-columns:1fr}
+  .dlg{width:96vw}
+  .conds li{grid-template-columns:18px 1fr;grid-template-areas:"c t" "c m" "c v"}
+  .conds .v{text-align:left}
+}
+.invite{font-family:var(--font-mono);font-size:11.5px;word-break:break-all;white-space:pre-wrap;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius);padding:10px 12px;line-height:1.5}
+.err{color:var(--bad);font-size:12.5px}
+.lines{white-space:pre-line}
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="side">
+    <div class="brand"><img class="mark" src="/icon.svg" alt=""><b>WeCoLab</b><small id="brand-domain"></small></div>
+    <div class="project"><span class="dot ok pulse" id="fabric-dot"></span><div class="pj"><span>Fabric</span><b id="fabric-name">…</b></div></div>
+    <div class="navsec">
+      <h6>Fabric</h6>
+      <a href="#overview" data-route="overview" class="active">Overview</a>
+      <a href="#apps" data-route="apps">Apps<span class="cnt" id="cnt-apps"></span></a>
+      <a href="#sites" data-route="sites">Sites<span class="cnt" id="cnt-sites"></span></a>
+      <a href="#resources" data-route="resources" data-admin>Resources</a>
+      <h6>Network</h6>
+      <a href="#network" data-route="network">Mesh</a>
+      <a href="#domains" data-route="domains">Domains</a>
+      <a href="#storage" data-route="storage">Storage</a>
+      <h6>Operate</h6>
+      <a href="#deploy" data-route="deploy">Deploy an app</a>
+      <a href="#add" data-route="add">Add a site</a>
+      <a href="#members" data-route="members" data-admin>Members</a>
+      <a href="#settings" data-route="settings" data-admin>Settings</a>
+    </div>
+    <div class="foot"><span class="avatar"></span><span id="foot-me">…</span><span class="dim" style="margin-left:auto" id="refreshed"></span></div>
+  </nav>
+  <div class="scrim" id="scrim" data-action="closeMenu"></div>
+  <header class="top">
+    <button class="iconbtn menubtn" aria-label="Menu" data-action="menu">☰</button>
+    <div class="crumbs" id="crumbs"><b>Overview</b></div>
+    <div style="margin-left:auto" class="muted" id="topmsg"></div>
+    <div class="muted" id="me" style="margin-left:14px;white-space:nowrap"></div>
+    <button class="iconbtn" title="Toggle theme" data-action="cycleTheme">◐</button>
+    <button class="btn primary sm" data-action="go" data-to="deploy">+ Deploy</button>
+  </header>
+  <main>
+    <section class="page show" id="p-overview">
+      <div class="ph"><div><h1>Overview</h1><p id="ov-sub"></p></div></div>
+      <div class="grid g4" style="margin-bottom:var(--pad)" id="ov-stats"></div>
+      <div class="grid g-2-1" style="align-items:start">
+        <div class="card"><div class="hd"><h3>Apps</h3></div><table><thead><tr><th style="width:36px"></th><th>App</th><th>Primary</th><th>Hostname</th><th>Status</th></tr></thead><tbody id="ov-apps"></tbody></table></div>
+        <div class="card"><div class="hd"><h3>Sites</h3></div><table><thead><tr><th style="width:36px"></th><th>Site</th><th>Owner</th><th>State</th></tr></thead><tbody id="ov-sites"></tbody></table></div>
+      </div>
+    </section>
+    <section class="page" id="p-apps"><div class="ph"><div><h1>Apps</h1><p>Each app's checks, as its sites report them now. To move an app, click the site you want as its primary.</p></div></div><div id="apps-list" class="grid"></div></section>
+    <section class="page" id="p-sites"><div class="ph"><div><h1>Sites</h1><p>Each site is one cluster at one place; its boxes talk over Nebula. Join commands are shown once.</p></div></div><div id="sites-list" class="grid g2"></div>
+      <div class="card" style="margin-top:16px"><div class="hd"><h3>Offers</h3><div class="r muted">capacity a site shares, and who holds it</div></div>
+        <table><thead><tr><th>Offer</th><th>Site</th><th>Boxes</th><th>Per holder</th><th>Held by</th><th></th></tr></thead><tbody id="offers-list"></tbody></table>
+        <div class="bd" style="display:grid;gap:10px">
+          <div class="frow"><label>New offer<small>Boxes are node names at the site; empty means any box. Sizes are per holder.</small></label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap"><select class="in" id="of-site"></select><input class="in mono" id="of-name" placeholder="name" style="width:120px"><input class="in mono" id="of-boxes" placeholder="boxes, comma" style="width:150px"><input class="in mono" id="of-cpu" placeholder="cpu 2" style="width:80px"><input class="in mono" id="of-mem" placeholder="memory 4Gi" style="width:110px"><input class="in mono" id="of-storage" placeholder="storage 20Gi" style="width:120px"><input class="in mono" id="of-to" placeholder="to projects, comma" style="width:170px"><input class="in mono" id="of-pools" placeholder="into pools, comma" style="width:150px"><label class="chip" style="cursor:pointer"><input type="checkbox" id="of-be" style="margin-right:4px">best effort (laptops, idle time)</label><button class="btn primary" data-action="createOffer">Offer</button><span class="err" id="of-err"></span></div></div>
+          <div class="frow"><label>Redeem a key<small>An offer key makes your project a holder of that offer; a pool key makes it draw from that pool.</small></label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap"><input class="in mono" id="rd-code" placeholder="wclo1.… or wclp1.…" style="width:280px"><input class="in mono" id="rd-project" placeholder="project" style="width:130px"><button class="btn" data-action="redeemKey">Redeem</button><span class="err" id="rd-err"></span></div></div>
+        </div></div>
+      <div class="card" style="margin-top:16px"><div class="hd"><h3>Pools</h3><div class="r muted">offers from many sites, shared by many projects: each project in the pool gets the pool's quota at every site offering into it</div></div>
+        <table><thead><tr><th>Pool</th><th>Tier, per project per site</th><th>Sites offering</th><th>Projects drawing</th><th></th></tr></thead><tbody id="pools-list"></tbody></table>
+        <div class="bd" id="pool-new" style="display:grid;gap:10px"><div class="frow"><label>New pool<small>Empty quota fields fall back to each offer's own size.</small></label>
+          <div style="display:flex;gap:6px;flex-wrap:wrap"><input class="in mono" id="pl-name" placeholder="name" style="width:130px"><input class="in mono" id="pl-cpu" placeholder="cpu 1" style="width:80px"><input class="in mono" id="pl-mem" placeholder="memory 2Gi" style="width:110px"><input class="in mono" id="pl-storage" placeholder="storage 10Gi" style="width:120px"><input class="in mono" id="pl-projects" placeholder="projects, comma" style="width:170px"><button class="btn primary" data-action="createPool">Create pool</button><span class="err" id="pl-err"></span></div></div></div></div>
+    </section>
+    <section class="page" id="p-domains">
+      <div class="ph"><div><h1>Domains</h1><p>Every app gets <span class="mono">&lt;name&gt;.<span id="dm-fabric"></span></span> for free. A project may bring its own domain: two records at its DNS provider, verified here, then any hostname under it works with a certificate.</p></div></div>
+      <div class="grid g-2-1" style="align-items:start">
+        <div class="card"><div class="hd"><h3>Project domains</h3><div class="r"><span id="dm-doors" class="mono muted"></span></div></div><table><thead><tr><th></th><th>Domain</th><th>Project</th><th>Status</th><th></th></tr></thead><tbody id="dm-list"></tbody></table></div>
+        <div class="card"><div class="hd"><h3>Bring a domain</h3></div><div class="bd"><div class="form">
+          <div class="frow"><label>Domain<small>A zone or a subdomain of one, e.g. <span class="mono">apps.example.com</span>. Apps get <span class="mono">&lt;name&gt;.apps.example.com</span>.</small></label><input class="in mono" id="dm-name" placeholder="apps.example.com"></div>
+          <div class="frow"><label>Project</label><input class="in mono" id="dm-project" style="width:160px"></div>
+          <div class="frow"><label></label><div style="display:flex;gap:8px;align-items:center"><button class="btn primary" data-action="addDomain">Add</button><span class="err" id="dm-err"></span></div></div>
+          <div class="note" id="dm-result" style="display:none"></div>
+        </div></div></div>
+      </div>
+    </section>
+    <section class="page" id="p-storage">
+      <div class="ph"><div><h1>Storage</h1><p>A project's vault is the bucket its databases archive to, with Object Lock so nobody can delete a backup. Only databases are replicated and backed up. Volumes are site-local: each site has its own, and files on them do not follow the app when its primary moves.</p></div></div>
+      <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Vaults</h3><div class="r muted" id="st-acct"></div></div><div id="st-vaults" class="bd" style="display:grid;gap:12px"></div></div>
+      <div class="card"><div class="hd"><h3>Volumes</h3></div><table><thead><tr><th>Volume</th><th>App</th><th>Project</th><th>Size</th><th>At each site</th></tr></thead><tbody id="st-volumes"></tbody></table></div>
+    </section>
+    <section class="page" id="p-deploy">
+      <div class="ph"><div><h1>Deploy an app</h1><p>Pick an app from the catalog, or give a container image. The Console writes the app to the Fabric; each chosen site runs its part within a minute or two.</p></div></div>
+      <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Catalog</h3><div class="r"><input class="in" id="ct-q" placeholder="search" style="width:180px"><select class="in" id="ct-cat"><option value="">all categories</option></select><span class="muted" id="ct-count"></span></div></div>
+        <div class="bd"><div id="ct-list" class="grid g3" style="gap:10px"></div><div class="muted" style="margin-top:8px">From the HomelabOS catalog, validated there; translated mechanically into a workload, a replicated database when it has Postgres, sidecars, and a volume per data path. Volume data stays at the site that holds it; database data is replicated and backed up.</div></div></div>
+      <div class="grid g-2-1" style="align-items:start">
+        <div class="card"><div class="bd"><div class="form">
+          <div class="frow" id="dp-catalog-row" style="display:none"><label>Catalog app</label><div><span class="nm" id="dp-catalog-title"></span> <button class="btn sm ghost" data-action="clearCatalog">clear</button><div class="muted lines" id="dp-catalog-notes"></div></div></div>
+          <div class="frow"><label>Name<small>DNS label. Also the default hostname.</small></label><input class="in mono" id="dp-name" placeholder="wiki"></div>
+          <div class="frow"><label>Project<small>Namespace on every site it runs on.</small></label><input class="in mono" id="dp-project"></div>
+          <div class="frow"><label>Image</label><input class="in mono" id="dp-image" placeholder="ghcr.io/org/app:tag"></div>
+          <div class="frow"><label>Port<small>What the container listens on.</small></label><input class="in mono" id="dp-port" value="8080" style="width:120px"></div>
+          <div class="frow"><label>Hostname<small>Leave empty for <span class="mono">&lt;name&gt;.</span><span class="mono" id="dp-domain"></span>.</small></label><input class="in mono" id="dp-host" placeholder=""></div>
+          <div class="frow"><label>Sites<small>Where it runs: sites the project owns or holds an offer at. The first checked is primary unless changed.</small></label><div class="chips" id="dp-sites"></div></div>
+          <div class="frow"><label>Primary</label><div class="seg" id="dp-primary"></div></div>
+          <div class="frow"><label>Data</label><div class="chips"><span class="chip" id="dp-db" data-action="toggle">Postgres, replicated, backed up</span><span class="chip" id="dp-mesh" data-action="toggle">Publish on the mesh</span></div></div>
+          <div id="dp-vault" style="display:none"><div class="frow"><label>Vault<small>Only if the project has no vault yet (Storage → Create vault is simpler): a bucket with Object Lock, its endpoint, and a key restricted to it. Ignored once the project has one.</small></label><div style="display:grid;gap:6px"><input class="in mono" id="dp-vbucket" placeholder="bucket"><input class="in mono" id="dp-vendpoint" placeholder="https://s3.us-west-002.backblazeb2.com"><input class="in mono" id="dp-vkeyid" placeholder="key id"><input class="in mono" id="dp-vkey" type="password" placeholder="application key"></div></div></div>
+          <div class="frow"><label>RPO<small>How much recent data you accept to lose if the primary site dies. Shown against the newest archived WAL; never blocks anything.</small></label><input class="in mono" id="dp-rpo" value="5m" style="width:120px"></div>
+          <div class="frow"><label></label><div style="display:flex;gap:8px;align-items:center"><button class="btn primary" data-action="doDeploy">Deploy</button><span class="err" id="dp-err"></span></div></div>
+        </div></div></div>
+        <div class="card"><div class="hd"><h3>What gets created</h3></div><div class="bd"><ul class="steps">
+          <li><span class="n">1</span><span>Deployment and Service in the project, placed on every chosen site.</span></li>
+          <li><span class="n">2</span><span>With Postgres: a cluster per site, primary at the primary, replica fed from the vault, nightly backups, first one immediately.</span></li>
+          <li><span class="n">3</span><span>A Door route for the hostname with a certificate, following the primary.</span></li>
+          <li><span class="n">4</span><span>The <span class="mono">App</span> with its gates. Ready when every gate is green.</span></li>
+        </ul><div class="note" style="margin-top:12px"><span class="dim">ⓘ</span><span>The app reads its database settings from the database's own secret at its site. Pods run in user namespaces: root inside the container is an unprivileged user on the box.</span></div></div></div>
+      </div>
+    </section>
+    <section class="page" id="p-add">
+      <div class="ph"><div><h1>Add a site</h1><p>A site is one cluster at one place. Create it here, then run one command on its first box. A friend's site joins the same way with their project as owner.</p></div></div>
+      <div class="card" style="margin:16px 0"><div class="hd"><h3>Your SSH keys</h3><div class="r muted">root's authorized keys on every box of the sites your projects own (admins: every box); boxes pick them up within the hour</div></div><div class="bd"><div style="display:grid;gap:8px"><textarea class="in mono" id="me-keys" rows="3" placeholder="ssh-ed25519 AAAA… you@laptop" style="width:100%;font-size:12px"></textarea><div style="display:flex;gap:8px;align-items:center"><button class="btn" data-action="saveMyKeys">Save keys</button><span class="err" id="me-keys-err"></span></div></div></div></div>
+      <div class="grid g-2-1" style="align-items:start">
+        <div class="card"><div class="hd"><h3>New site</h3></div><div class="bd"><div class="form">
+          <div class="frow"><label>Name<small>Lowercase letters, digits and dashes.</small></label><input class="in mono" id="ns-name" placeholder="friend"></div>
+          <div class="frow"><label>Owner<small>The project whose person runs its boxes.</small></label><input class="in mono" id="ns-owner" placeholder="project"></div>
+          <div class="frow"><label>Steward<small>Trusted with the whole fabric: its secrets, the Nebula CA, and taking over as writer. Make at least two sites stewards, so either can be lost.</small></label><input type="checkbox" id="ns-steward" style="justify-self:start"></div>
+          <div class="frow"><label>Public<small>Its first box has a public address: it becomes another entrance (Door, name server, lighthouse).</small></label><input type="checkbox" id="ns-public" style="justify-self:start"></div>
+          <div class="frow"><label></label><div style="display:flex;gap:8px;align-items:center"><button class="btn primary" data-action="createSite">Create site</button><span class="err" id="ns-err"></span></div></div>
+        </div></div></div>
+        <div class="card"><div class="hd"><h3>Then, on the box</h3></div><div class="bd"><ul class="steps">
+          <li><span class="n">1</span><span>Create the site here. Its join command is shown once and works once, for a day.</span></li>
+          <li><span class="n">2</span><span>Run it as root on the site's first box: Ubuntu 24.04 or Debian 13, amd64 or arm64. Nothing needs to be opened on its router.</span></li>
+          <li><span class="n">3</span><span>About five minutes: Nebula, k3s, its copy of the Fabric, then everything else from it.</span></li>
+          <li><span class="n">4</span><span>The site turns Ready in Sites when its Warden answers. More boxes join it from its card there.</span></li>
+        </ul></div></div>
+      </div>
+    </section>
+    <section class="page" id="p-resources">
+      <div class="ph"><div><h1>Resources</h1><p>What each site has, what is allocated, and what runs where. From the sites' own reports.</p></div></div>
+      <div id="res-sites" class="grid g2" style="margin-bottom:var(--pad)"></div>
+      <div class="card"><div class="hd"><h3>Placements</h3><div class="r"><span>each app's workload and its health at each site</span></div></div>
+        <table><thead><tr id="res-head"></tr></thead><tbody id="res-placements"></tbody></table></div>
+    </section>
+    <section class="page" id="p-network">
+      <div class="ph"><div><h1>Mesh</h1><p>The people's private network: each person's own devices, and what they may reach. Boxes are not on it (they talk over Nebula), except the Door, which people reach mesh names through.</p></div></div>
+      <div class="grid g2" style="margin-bottom:var(--pad)" data-admin>
+        <div class="card"><div class="hd"><h3>Devices</h3><div class="r"><span id="net-count"></span></div></div><table><thead><tr><th></th><th>Device</th><th>Person</th><th>Address</th><th>Last seen</th></tr></thead><tbody id="net-peers"></tbody></table></div>
+        <div class="card"><div class="hd"><h3>Access rules</h3><div class="r"><span>who reaches what</span></div></div><table><thead><tr><th>From</th><th>To</th><th>Allowed</th></tr></thead><tbody id="net-rules"></tbody></table></div>
+      </div>
+      <div class="card"><div class="hd"><h3>Add a device</h3><div class="r muted">a laptop or phone of yours</div></div><div class="bd"><ul class="steps">
+        <li><span class="n">1</span><span>Install the NetBird app on it (netbird.io/download).</span></li>
+        <li><span class="n">2</span><span>In its settings, choose a self-hosted management server: <span class="mono" id="net-server"></span>.</span></li>
+        <li><span class="n">3</span><span>Connect and sign in with your account here. The device is yours: it leaves the mesh when you are blocked or removed.</span></li>
+      </ul></div></div>
+    </section>
+    <section class="page" id="p-members"><div class="ph"><div><h1>Members</h1><p>The Fabric's record of who may do what. Sign-in is NetBird's: an invite is a link that sets the person's password, which also signs them in to NetBird.</p></div></div>
+      <div class="grid g2">
+        <div class="card"><div class="hd"><h3>Projects</h3><div class="r muted">a namespace on every site, and a mesh group naming its members</div></div>
+          <table><thead><tr><th>Project</th><th>Members</th></tr></thead><tbody id="mb-projects"></tbody></table>
+          <div class="bd"><div style="display:flex;gap:6px"><input class="in mono" id="pj-name" placeholder="name"><button class="btn primary" data-action="createProject">Create project</button><span class="err" id="pj-err"></span></div></div></div>
+        <div class="card"><div class="hd"><h3>Invite a member</h3><div class="r muted">a member sees only their projects; an admin sees and changes everything</div></div>
+          <div class="bd" style="display:grid;gap:8px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap"><input class="in" id="iv-email" placeholder="email" style="width:200px"><input class="in" id="iv-name" placeholder="name" style="width:140px"><select class="in" id="iv-role"><option value="member">member</option><option value="admin">admin</option></select><input class="in mono" id="iv-projects" placeholder="projects, comma" style="width:170px"><button class="btn primary" data-action="inviteMember">Invite</button><span class="err" id="iv-err"></span></div>
+          </div></div>
+      </div>
+      <div class="card" style="margin-top:16px"><div class="hd"><h3>People</h3></div>
+        <table><thead><tr><th>Member</th><th>Role</th><th>Projects</th><th></th></tr></thead><tbody id="mb-list"></tbody></table></div>
+      <div class="card" style="margin-top:16px"><div class="hd"><h3>Pending invites</h3></div>
+        <table><thead><tr><th>Email</th><th>Role</th><th>Expires</th><th></th></tr></thead><tbody id="mb-invites"></tbody></table></div>
+    </section>
+    <section class="page" id="p-settings"><div class="ph"><div><h1>Settings</h1><p>Integrations are stored as secrets on the fabric and never shown back.</p></div></div>
+      <div class="card" style="margin-bottom:var(--pad)"><div class="hd"><h3>Object storage (Backblaze B2)</h3><div class="r"><span id="b2-state" class="muted"></span></div></div><div class="bd"><div class="form">
+        <div class="frow"><label>Account key<small>Capabilities: listBuckets, writeBuckets, listKeys, writeKeys, deleteKeys. The Storage page uses it to create a bucket with Object Lock and a key restricted to it per project. Stored on the fabric; not displayed again.</small></label><div style="display:grid;gap:6px"><input class="in mono" id="b2-keyid" placeholder="key id" autocomplete="off"><input class="in mono" id="b2-key" type="password" placeholder="application key" autocomplete="off"></div></div>
+        <div class="frow"><label></label><div style="display:flex;gap:8px;align-items:center"><button class="btn primary" data-action="saveB2">Save</button><span class="err" id="b2-err"></span></div></div>
+      </div></div></div>
+      <div class="card" style="margin-bottom:var(--pad)"><div class="hd"><h3>Writer</h3></div><div class="bd" style="display:grid;gap:10px"><p style="margin:0" id="wr-state" class="muted"></p><div><button class="btn" id="wr-take" style="display:none" data-action="takeover">Take over as writer here</button><span class="err"></span></div></div></div>
+      <div class="card"><div class="hd"><h3>Appearance</h3></div><div class="bd" style="display:flex;gap:18px;align-items:center">
+        <div class="seg"><button data-action="theme" data-v="graphite">Graphite</button><button data-action="theme" data-v="paper">Paper</button><button data-action="theme" data-v="dusk">Dusk</button></div>
+        <div class="swatches"><span class="sw" style="background:#2dd4bf" data-action="accent" data-v="teal"></span><span class="sw" style="background:#4f8ef7" data-action="accent" data-v="blue"></span><span class="sw" style="background:#f5b544" data-action="accent" data-v="amber"></span><span class="sw" style="background:#f472a6" data-action="accent" data-v="rose"></span></div>
+      </div></div>
+    </section>
+  </main>
+</div>
+<div class="modal" id="m-invite"><div class="dlg"><div class="hd"><h3 id="inv-title"></h3></div><div class="bd"><p style="margin:0" class="muted" id="inv-lead"></p><div class="invite" id="inv-cmd"></div><p style="margin:0" class="muted" id="inv-note"></p></div><div class="ft"><button class="btn" data-action="close">Close</button><button class="btn primary" data-action="copy">Copy</button></div></div></div>
+<div class="modal" id="m-failover"><div class="dlg"><div class="hd"><span class="dot bad"></span><h3>Move <span class="mono" id="fo-app"></span> to <span class="mono" id="fo-to"></span></h3></div><div class="bd">
+  <div class="note" id="fo-note"></div>
+  <div><div class="muted" style="font-size:11.5px;margin-bottom:6px">What a planned move needs, as the sites report it now (checked again when you move)</div><ul class="steps" id="fo-gates"></ul></div>
+  <label style="font-size:12.5px;display:flex;gap:8px;align-items:center"><input type="checkbox" id="fo-force"> Force: move now, even if a check is red or the primary is healthy (writes not yet archived may be lost; every other site's database is rebuilt from the vault)</label>
+</div><div class="ft"><span class="err" id="fo-err" style="margin-right:auto"></span><button class="btn" data-action="close">Cancel</button><button class="btn danger" data-action="doFailover">Change primary</button></div></div></div>
+<script>
+const $=s=>document.querySelector(s);
+let STATE={sites:[],apps:[],offers:[],pools:[]}, ME={admin:false,projects:[]}, MEMBERS=[];
+// The page's only way to write HTML. html`` escapes every value it interpolates, quotes included; a value
+// goes in as markup only when it is itself an html`` result. Names come from sites and people, who may
+// not be trusted with the admin's session.
+class Safe{constructor(s){this.s=s}}
+const esc=s=>String(s).replace(/[&<>"'`]/g,c=>'&#'+c.charCodeAt(0)+';');
+const show=v=>v instanceof Safe?v.s:Array.isArray(v)?v.map(show).join(''):v==null||v===false?'':esc(v);
+const html=(parts,...vals)=>new Safe(parts.reduce((a,p,i)=>a+show(vals[i-1])+p));
+const put=(sel,h)=>{ $(sel).innerHTML=show(h); };
+const each=(l,f,empty)=>l&&l.length?l.map(f):empty;
+const u=encodeURIComponent, list=v=>v.split(',').map(x=>x.trim()).filter(Boolean), chosen=sel=>[...document.querySelectorAll(sel)].map(c=>c.dataset.site);
+const when=t=>t?new Date(t).toLocaleString():'';
+const dot=ok=>html`<span class="dot ${ok===true?'ok':ok===false?'bad':''}"></span>`;
+const tag=(s,t)=>html`<span class="tag ${s}">${s?'● ':''}${t}</span>`;
+const dim=t=>html`<span class="dim">${t}</span>`;
+const cnd=c=>html`<li><span class="chk ${c.status==='True'?'ok':'bad'}">${c.status==='True'?'✓':'!'}</span><span class="t">${c.type}</span><span class="m">${c.message||''}</span><span class="v">${c.reason||''}</span></li>`;
+function say(msg,bad){ $('#topmsg').textContent=msg; $('#topmsg').classList.toggle('err',!!bad); }
+// api is the page's only way to the Console: a refused request throws with the Console's own words.
+// Every error carries the request's id (ref …), which the Console's log and the commit it made carry too.
+async function api(method,path,body){
+  let r;
+  try { r=await fetch(path,body===undefined?{method}:{method,headers:{'content-type':'application/json'},body:JSON.stringify(body)}); }
+  catch(e){ throw new Error('No answer from the Console ('+e.message+'). It may have done it anyway: refresh to see before trying again.'); }
+  if(r.status===401){ location.href='/oauth/login'; return new Promise(()=>{}); }
+  const t=await r.text(), ref=r.headers.get('X-Request-Id');
+  if(!r.ok) throw new Error((t.trim()||r.status+' '+r.statusText)+(ref?' (ref '+ref+')':''));
+  return t?JSON.parse(t):{};
+}
+// One click handler for the page: data-action names what an element does and its data-* attributes carry
+// the values, so no value is ever spliced into code. A failure shows beside the button (a sibling .err)
+// or at the top.
+document.addEventListener('click',async e=>{
+  const t=e.target.closest('[data-action]'); if(!t)return;
+  const out=t.parentElement.querySelector(':scope > .err'); if(out)out.textContent='';
+  try{ await ACT[t.dataset.action](t.dataset,t); }catch(x){ out?out.textContent=x.message:say(x.message,true); }
+});
+const ACT={go:d=>go(d.to), menu:()=>toggleMenu(), closeMenu:()=>toggleMenu(false), cycleTheme, theme:d=>setTheme(d.v), accent:d=>setAccent(d.v),
+  close:closeModals, copy:()=>{ navigator.clipboard.writeText($('#inv-cmd').textContent); say('copied'); },
+  saveMyKeys, createProject, inviteMember, removeMember,
+  projects:d=>{ const v=prompt('Projects for this member, comma separated',d.cur); if(v!==null)return setMember(d.id,{Projects:list(v)}); },
+  role:d=>setMember(d.id,{Role:d.v}), block:d=>setMember(d.id,{Blocked:d.v==='true'}),
+  showLink:d=>{ const m=MEMBERS.find(x=>x.Name===d.id); if(m)secret('Invite for '+m.Email,'Send this link to them. It sets their password once and expires '+when(m.InviteExpires)+'.',m.Invite); },
+  createSite, addBox, removeBox, setSteward, createOffer, withdrawOffer, offerKey, redeemKey, createPool, deletePool, poolKey,
+  setMesh, deleteApp, openFailover, doFailover, addDomain, removeDomain, createVault, takeover, saveB2,
+  useCatalog:d=>useCatalog(d.slug), clearCatalog, doDeploy,
+  toggle:(d,t)=>{ t.classList.toggle('on'); dpVault(); }, dpSite:(d,t)=>{ t.classList.toggle('on'); dpPrimary(); },
+  dpPick:(d,t)=>[...t.parentNode.children].forEach(b=>b.classList.toggle('on',b===t)),
+};
+// secret shows what works once (a join command, a key, an invite link, a password) until the dialog
+// closes; closing takes it out of the page.
+function secret(title,lead,text,note){ $('#inv-title').textContent=title; $('#inv-lead').textContent=lead; $('#inv-cmd').textContent=text; $('#inv-note').textContent=note||''; openModal('invite'); }
+const once=j=>'It works once and expires '+when(j.expires)+'. It is not shown again: copy it now.';
+async function whoami(){ ME=await api('GET','/api/me'); if(document.activeElement!==$('#me-keys'))$('#me-keys').value=(ME.sshKeys||[]).join('\n'); $('#foot-me').textContent=ME.auth?(ME.name||ME.email):'owner';
+  put('#me',ME.auth&&html`${ME.email} <span class="dim">· ${ME.role}</span> · <a href="/oauth/logout">sign out</a>`); document.querySelectorAll('[data-admin]').forEach(a=>a.style.display=ME.admin?'':'none');
+  for(const i of ['#dp-project','#dm-project','#rd-project']) if(!$(i).value)$(i).value=(ME.projects||[])[0]||''; }
+async function load(){
+  try{ if(!ME.email)await whoami(); STATE=await api('GET','/api/state'); render(); if(page()==='deploy')renderDeploy(); $('#refreshed').textContent='live'; }
+  catch(e){ say('cannot reach the fabric: '+e.message,true); $('#refreshed').textContent=''; }
+  document.documentElement.classList.remove('booting');
+}
+function ownsSite(s){ return ME.admin||(ME.projects||[]).includes(s.Owner); }
+async function saveMyKeys(){ await api('POST','/api/me/keys',{SSHKeys:$('#me-keys').value.split('\n').map(x=>x.trim()).filter(Boolean)}); say('keys saved; every box of your projects\' sites has them within the hour'); await whoami(); }
+async function loadMembers(){ const d=await api('GET','/api/members'); MEMBERS=d.members||[];
+  put('#mb-projects',each(d.projects,p=>html`<tr><td class="nm">${p.Name}</td><td class="num">${Number(p.Members)}</td></tr>`,html`<tr><td colspan=2 class="muted">no projects yet</td></tr>`));
+  put('#mb-list',each(MEMBERS.filter(m=>m.Phase!=='Invited'),m=>html`<tr><td><span class="nm">${m.FullName||m.Email}</span><span class="sub">${m.Email}</span></td><td>${tag(m.Role==='owner'||m.Role==='admin'?'acc':'',m.Role)}${m.Blocked&&html` ${tag('','blocked')}`}</td><td class="mono">${(m.Projects||[]).join(', ')||dim('none')}</td><td style="white-space:nowrap">${m.Role!=='owner'&&html`<button class="btn sm" data-action="projects" data-id="${m.Name}" data-cur="${(m.Projects||[]).join(', ')}">Projects</button> <span class="dim" title="SSH keys on the profile">${Number(m.Keys)} key${m.Keys===1?'':'s'}</span> <button class="btn sm ghost" data-action="role" data-id="${m.Name}" data-v="${m.Role==='admin'?'member':'admin'}">${m.Role==='admin'?'Make member':'Make admin'}</button> <button class="btn sm ghost" data-action="block" data-id="${m.Name}" data-v="${!m.Blocked}">${m.Blocked?'Unblock':'Block'}</button> <button class="btn sm ghost" style="color:var(--bad)" data-action="removeMember" data-id="${m.Name}" data-email="${m.Email}">Remove</button>`}</td></tr>`,html`<tr><td colspan=4 class="muted">nobody yet</td></tr>`));
+  put('#mb-invites',each(MEMBERS.filter(m=>m.Phase==='Invited'),m=>html`<tr><td>${m.Email}<span class="sub">${(m.Projects||[]).join(', ')}</span></td><td>${m.Role}</td><td class="muted">${m.InviteExpires?when(m.InviteExpires):'minting…'}</td><td style="white-space:nowrap">${m.Invite&&html`<button class="btn sm" data-action="showLink" data-id="${m.Name}">Show link</button>`} <button class="btn sm ghost" data-action="removeMember" data-id="${m.Name}" data-email="${m.Email}">Cancel</button></td></tr>`,html`<tr><td colspan=4 class="muted">none</td></tr>`)); }
+async function inviteMember(){ await api('POST','/api/members/invite',{Email:$('#iv-email').value.trim(),Name:$('#iv-name').value.trim(),Role:$('#iv-role').value,Projects:list($('#iv-projects').value)}); $('#iv-email').value=''; say('member created; the invite link appears under Pending invites in a few seconds'); setTimeout(()=>loadMembers().catch(e=>say(e.message,true)),4000); await loadMembers(); }
+async function setMember(id,body){ await api('POST',`/api/members/${u(id)}`,body); await loadMembers(); }
+async function removeMember(d){ if(!confirm('Remove '+d.email+'? Their devices leave the mesh with them.'))return; await api('DELETE',`/api/members/${u(d.id)}`); await loadMembers(); }
+async function createProject(){ await api('POST','/api/projects',{Name:$('#pj-name').value.trim()}); $('#pj-name').value=''; await loadMembers(); }
+function render(){
+  const {sites,apps,domain}=STATE;
+  $('#brand-domain').textContent=domain||''; $('#fabric-name').textContent=sites.map(s=>s.Name).join(' + ')||'no sites yet'; $('#net-server').textContent='https://mesh.'+(domain||'');
+  $('#cnt-apps').textContent=apps.length; $('#cnt-sites').textContent=sites.length;
+  const ready=apps.filter(a=>a.Ready==='True').length, sready=sites.filter(s=>s.Ready).length, stewards=sites.filter(s=>s.Steward).length;
+  $('#fabric-dot').className='dot pulse '+(sready===sites.length&&ready===apps.length?'ok':'warn');
+  put('#ov-sub',html`${sites.length} sites · ${apps.length} apps · zone <span class="mono">${domain||''}</span>`);
+  put('#ov-stats',[['Sites ready',html`${sready}<small>/ ${sites.length}</small>`,sready===sites.length?'ok':'warn'],['Apps protected',html`${ready}<small>/ ${apps.length}</small>`,ready===apps.length?'ok':'warn'],
+    ['Moving',apps.filter(a=>a.Handover).length,''],['Stewards',stewards,stewards>1?'ok':'warn']].map(([l,v,s])=>html`<div class="card stat ${s}"><span class="lbl">${l}</span><span class="val">${v}</span></div>`));
+  put('#ov-apps',each(apps,a=>html`<tr class="click" data-action="go" data-to="apps"><td>${dot(a.Ready==='True')}</td><td><span class="nm">${a.Name}</span><span class="sub">${a.Namespace}</span></td><td class="role"><b>${a.Active||a.Primary}</b></td><td class="mono">${a.Hostname||'—'}</td><td>${tag(a.Ready==='True'?'ok':'warn',a.Ready==='True'?'Protected':a.Reason||'Not ready')}</td></tr>`,html`<tr><td colspan=5 class="muted">no apps</td></tr>`));
+  put('#ov-sites',each(sites,s=>html`<tr class="click" data-action="go" data-to="sites"><td>${dot(s.Ready)}</td><td class="nm">${s.Name}</td><td class="muted">${s.Owner}</td><td>${tag(s.Ready?'ok':'warn',s.Ready?'Ready':'not answering')}${s.Writer&&html` ${tag('','writer')}`}</td></tr>`,html`<tr><td colspan=4 class="muted">no sites yet</td></tr>`));
+  put('#apps-list',each(apps,a=>{ const at=a.Active||a.Primary, link=h=>html`<a class="mono" href="https://${h}" target="_blank" rel="noopener">https://${h}</a>`;
+    return html`<div class="card"><div class="hd">${dot(a.Ready==='True')}<h3>${a.Name}</h3><span class="tag">${a.Namespace}</span>${a.Database&&html`<span class="tag">postgres</span>`}<div class="r">${a.Deleted&&tag('warn','deleting')}${a.Handover&&tag('warn','moving from '+a.Handover.from+' to '+a.Primary)}</div></div>
+    <div class="bd" style="display:grid;gap:12px">
+      <div class="kv"><dt>Public</dt><dd>${a.Hostname?link(a.Hostname):dim('none')}</dd><dt>On the mesh</dt><dd>${a.Mesh?html`${link(a.MeshName)} <span class="dim">for people on the mesh, follows the primary</span>`:dim('not published')} <button class="btn sm ghost" data-action="setMesh" data-ns="${a.Namespace}" data-name="${a.Name}" data-v="${!a.Mesh}">${a.Mesh?'Unpublish':'Publish on the mesh'}</button></dd><dt>Delete</dt><dd><button class="btn sm ghost" style="color:var(--bad)" data-action="deleteApp" data-ns="${a.Namespace}" data-name="${a.Name}">Delete app</button></dd></div>
+      <div class="field"><span class="k">primary:</span><span class="v">${at}</span><span class="k" style="margin-left:14px">sites:</span><span>${(a.Sites||[]).join(', ')}</span><span class="k" style="margin-left:14px">rpo:</span><span>${a.RPO||'—'}</span>
+        <div class="swt">${(a.Sites||[]).map(s=>s===at?html`<button class="on">${s}</button>`:html`<button data-action="openFailover" data-ns="${a.Namespace}" data-name="${a.Name}" data-to="${s}">${s}</button>`)}</div></div>
+      <ul class="conds">${(a.Conditions||[]).filter(c=>c.type!=='Ready').map(cnd)}</ul>
+    </div></div>`},html`<div class="empty">No apps yet. <a href="#deploy">Deploy one</a>.</div>`));
+  put('#sites-list',each(sites,s=>html`<div class="card"><div class="hd">${dot(s.Ready)}<h3>${s.Name}</h3><div class="r"><span class="tag">${s.Owner}</span>${s.Steward&&tag('acc','steward')}${s.Writer&&tag('acc','writer')}${s.Public&&tag('','public')}</div></div>
+    <div class="bd" style="display:grid;gap:12px">
+      <div class="kv"><dt>State</dt><dd>${s.Ready?'Ready':'not answering'} <span class="mono muted">${s.Version||''}</span></dd>${s.Nebula&&html`<dt>Nebula</dt><dd class="mono">${s.Nebula}</dd>`}${s.Public&&html`<dt>Public address</dt><dd class="mono">${s.Public}</dd>`}</div>
+      <table><tbody>${each(s.Boxes,b=>html`<tr><td style="width:24px">${dot(b.Ready)}</td><td class="nm">${b.Name}</td><td class="mono">${b.IP}</td><td class="muted">${b.Role}${b.Laptop&&' · laptop'}</td><td style="text-align:right">${ownsSite(s)&&b.Role!=='manager'&&html`<button class="btn sm ghost" style="color:var(--bad)" data-action="removeBox" data-site="${s.Name}" data-box="${b.Name}">Remove</button>`}</td></tr>`,html`<tr><td class="muted">no boxes yet: run its join command</td></tr>`)}</tbody></table>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${ownsSite(s)&&html`<button class="btn sm" data-action="addBox" data-site="${s.Name}">Add a box</button><button class="btn sm" data-action="addBox" data-site="${s.Name}" data-laptop="1">Add a Mac</button>`}${ME.admin&&!s.Writer&&html`<button class="btn sm ghost" data-action="setSteward" data-site="${s.Name}" data-v="${!s.Steward}">${s.Steward?'Stop being a steward':'Make a steward'}</button>`}</div>
+    </div></div>`,html`<div class="empty">No sites yet.</div>`));
+  renderOffers(); renderPools();
+}
+function renderOffers(){ const sel=$('#of-site'), cur=sel.value; put('#of-site',STATE.sites.filter(ownsSite).map(s=>html`<option>${s.Name}</option>`)); sel.value=cur; if(sel.selectedIndex<0)sel.selectedIndex=0;
+  put('#offers-list',each(STATE.offers,o=>html`<tr><td class="nm">${o.Name}</td><td>${o.Site}</td><td class="mono">${(o.Boxes||[]).join(', ')||dim('any')}</td><td class="mono">${o.CPU} cpu · ${o.Memory}${o.Storage&&' · '+o.Storage}${o.BestEffort&&html` ${tag('','best effort')}`}</td><td>${[...(o.To||[]),...(o.Pools||[]).map(p=>'pool '+p)].join(', ')||dim('nobody yet')}${o.Keys>0&&html` <span class="dim">· ${Number(o.Keys)} key(s) out</span>`}</td><td style="white-space:nowrap">${ownsSite({Owner:(STATE.sites.find(s=>s.Name===o.Site)||{}).Owner})&&html`<button class="btn sm" data-action="offerKey" data-name="${o.Name}">Mint key</button> <button class="btn sm ghost" style="color:var(--bad)" data-action="withdrawOffer" data-name="${o.Name}">Withdraw</button>`}</td></tr>`,html`<tr><td colspan=6 class="muted">nothing shared yet; every site is a private homelab until its manager offers</td></tr>`)); }
+async function createOffer(){ await api('POST','/api/offers',{Name:$('#of-name').value.trim(),Site:$('#of-site').value,Boxes:list($('#of-boxes').value),CPU:$('#of-cpu').value.trim(),Memory:$('#of-mem').value.trim(),Storage:$('#of-storage').value.trim(),To:list($('#of-to').value),Pools:list($('#of-pools').value),BestEffort:$('#of-be').checked}); $('#of-name').value=''; await load(); }
+async function withdrawOffer(d){ if(!confirm('Withdraw offer '+d.name+'? Holders lose placement at that site.'))return; await api('DELETE',`/api/offers/${u(d.name)}`); await load(); }
+async function offerKey(d){ const j=await api('POST',`/api/offers/${u(d.name)}/key`); secret('Key for offer '+d.name+' at '+j.site,'Give it to the project that should hold this offer. '+once(j),j.code); await load(); }
+async function redeemKey(){ const j=await api('POST','/api/offers/redeem',{Code:$('#rd-code').value.trim(),Project:$('#rd-project').value.trim()}); $('#rd-code').value=''; say(j.pool?'project '+j.project+' draws from pool '+j.pool:'project '+j.project+' holds offer '+j.offer); await load(); }
+function allowedSites(project){ const {sites,offers,pools}=STATE; const draws=n=>(pools||[]).some(p=>p.Name===n&&(p.Projects||[]).includes(project)); return (sites||[]).filter(s=>s.Owner===project||(offers||[]).some(o=>o.Site===s.Name&&((o.To||[]).includes(project)||(o.Pools||[]).some(draws)))); }
+function renderPools(){ $('#pool-new').style.display=ME.admin?'':'none';
+  put('#pools-list',each(STATE.pools,p=>html`<tr><td class="nm">${p.Name}</td><td class="mono">${[p.CPU&&p.CPU+' cpu',p.Memory,p.Storage].filter(Boolean).join(' · ')||dim('each offer\'s size')}</td><td>${(p.Sites||[]).join(', ')||dim('none yet')}</td><td class="mono">${(p.Projects||[]).join(', ')||dim('none yet')}${p.Keys>0&&html` <span class="dim">· ${Number(p.Keys)} key(s) out</span>`}</td><td style="white-space:nowrap">${ME.admin&&html`<button class="btn sm" data-action="poolKey" data-name="${p.Name}">Mint key</button> <button class="btn sm ghost" style="color:var(--bad)" data-action="deletePool" data-name="${p.Name}">Delete</button>`}</td></tr>`,html`<tr><td colspan=5 class="muted">no pools yet</td></tr>`)); }
+async function createPool(){ await api('POST','/api/pools',{Name:$('#pl-name').value.trim(),CPU:$('#pl-cpu').value.trim(),Memory:$('#pl-mem').value.trim(),Storage:$('#pl-storage').value.trim(),Projects:list($('#pl-projects').value)}); $('#pl-name').value=''; await load(); }
+async function deletePool(d){ if(!confirm('Delete pool '+d.name+'? Projects drawing from it lose placement at its sites.'))return; await api('DELETE',`/api/pools/${u(d.name)}`); await load(); }
+async function poolKey(d){ const j=await api('POST',`/api/pools/${u(d.name)}/key`); secret('Key for pool '+d.name,'Give it to a project that should draw from this pool. '+once(j),j.code); await load(); }
+async function createSite(){ const name=$('#ns-name').value.trim(); const j=await api('POST','/api/sites',{Name:name,Owner:$('#ns-owner').value.trim(),Steward:$('#ns-steward').checked,Public:$('#ns-public').checked}); $('#ns-name').value=''; secret('Join command for site '+name+', its first box','Run it as root on the box. '+once(j),j.command); await load(); }
+async function addBox(d){ const laptop=d.laptop==='1'; const j=await api('POST',`/api/sites/${u(d.site)}/boxes`,{Laptop:laptop});
+  if(laptop)secret('Invite for a Mac at '+d.site,'Paste it into WeCoLab for Mac. '+once(j),j.invite); else secret('Join command for a box at '+d.site,'Run it as root on the box. '+once(j),j.command); }
+async function removeBox(d){ if(!confirm('Remove '+d.box+' from '+d.site+'? Its certificates are blocked within the hour. Its Kubernetes node is not deleted: drain and delete it at the site (kubectl drain, kubectl delete node). Its disk keeps its data.'))return; await api('DELETE',`/api/sites/${u(d.site)}/boxes/${u(d.box)}`); await load(); }
+async function setSteward(d){ const v=d.v==='true'; if(!confirm(v?'Make '+d.site+' a steward? It is trusted with every secret of the fabric and can take over as writer.':'Stop '+d.site+' being a steward? The fabric\'s secrets are re-encrypted without it.'))return; await api('POST',`/api/sites/${u(d.site)}/steward`,{Steward:v}); await load(); }
+async function setMesh(d){ await api('POST',`/api/apps/${u(d.ns)}/${u(d.name)}/mesh`,{Mesh:d.v==='true'}); await load(); }
+async function deleteApp(d){ if(!confirm('Delete '+d.name+' and everything created for it, on every site? The vault keeps its backups.'))return; await api('DELETE',`/api/apps/${u(d.ns)}/${u(d.name)}`); await load(); }
+let FO=null;
+function openFailover(d){ const a=STATE.apps.find(x=>x.Namespace===d.ns&&x.Name===d.name); if(!a)return; FO={ns:d.ns,name:d.name,to:d.to}; const at=a.Active||a.Primary; $('#fo-app').textContent=a.Name; $('#fo-to').textContent=d.to; $('#fo-err').textContent=''; $('#fo-force').checked=false;
+  const ph=(a.Conditions||[]).find(c=>c.type==='PrimaryHealthy'), planned=ph&&ph.status==='True'&&a.Database;
+  put('#fo-note',planned?html`<span class="dim">ⓘ</span><span><b>Planned switchover.</b> ${at} is healthy: it stops taking writes and hands a token to ${d.to}, which starts with it. No database data is lost. Files on the app's volumes stay at ${at}. The app is stopped for a minute or two.</span>`:a.Database?html`<span>!</span><span><b>Failover.</b> ${at} is not healthy, so a planned move is refused. Tick Force to make ${d.to} primary now: writes ${at} had not archived are lost, and every other site's database is rebuilt from the vault.</span>`:html`<span>ⓘ</span><span><b>No database.</b> ${d.to} becomes primary now; there is nothing to hand over. Files on the app's volumes stay at each site.</span>`);
+  put('#fo-gates',(a.Database?a.Conditions||[]:[]).filter(c=>(a.Handover?['StandbyStaged']:['StandbyStaged','PrimaryHealthy','WithinRPO']).includes(c.type)).map(c=>html`<li><span class="n ${c.status==='True'?'ok':'warn'}">${c.status==='True'?'✓':'!'}</span><span>${c.type}: ${c.message||''}</span><span class="g ${c.status==='True'?'ok':'warn'}">${c.status==='True'?'ok':'blocks'}</span></li>`));
+  openModal('failover'); }
+async function doFailover(){ await api('POST',`/api/apps/${u(FO.ns)}/${u(FO.name)}/primary`,{To:FO.to,Force:$('#fo-force').checked}); closeModals(); await load(); }
+const titles={overview:'Overview',apps:'Apps',sites:'Sites',resources:'Resources',network:'Mesh',domains:'Domains',deploy:'Deploy an app',add:'Add a site',settings:'Settings',members:'Members',storage:'Storage'};
+async function loadDomains(){ const d=await api('GET','/api/domains'); $('#dm-fabric').textContent=d.fabric||''; $('#dm-doors').textContent='doors: '+(d.doors||[]).join(', ');
+  put('#dm-list',each(d.domains,x=>html`<tr><td>${dot(x.Verified)}</td><td><span class="nm">${x.Domain}</span><span class="sub mono lines">${(x.Records||[]).join('\n')}</span></td><td class="mono">${x.Project}</td><td>${tag(x.Verified?'ok':'',x.Phase||'Pending')}<div class="dim" style="font-size:11px">${x.Reason||''}${x.LastChecked&&' · checked '+x.LastChecked}</div></td><td><button class="btn sm ghost" data-action="removeDomain" data-name="${x.Name}" data-domain="${x.Domain}">Remove</button></td></tr>`,html`<tr><td colspan=5 class="muted">no project domains yet</td></tr>`)); }
+async function addDomain(){ $('#dm-result').style.display='none'; const j=await api('POST','/api/domains',{Domain:$('#dm-name').value.trim(),Project:$('#dm-project').value.trim()});
+  put('#dm-result',html`<span class="dim">ⓘ</span><span>Create these two records at your DNS provider, DNS only (not proxied). Warden checks every two minutes.<br><span class="mono lines">${(j.records||[]).join('\n')}</span></span>`); $('#dm-result').style.display='flex'; $('#dm-name').value=''; await loadDomains(); }
+async function removeDomain(d){ if(!confirm('Remove '+d.domain+'? Apps using it keep running until redeployed; its DNS records are left in place.'))return; await api('DELETE',`/api/domains/${u(d.name)}`); await loadDomains(); }
+let CATALOG=null, DP_CATALOG='', DP_FOR=null;
+async function loadCatalog(){ if(CATALOG)return; CATALOG=[]; try{ CATALOG=(await api('GET','/catalog.json')).entries||[]; }catch(e){ CATALOG=null; throw e; }
+  put('#ct-cat',[html`<option value="">all categories</option>`,[...new Set(CATALOG.map(e=>e.category))].sort().map(c=>html`<option value="${c}">${c.replace(/-/g,' ')}</option>`)]); renderCatalog(); }
+function renderCatalog(){ const f=$('#ct-q').value.toLowerCase(), cat=$('#ct-cat').value; const l=(CATALOG||[]).filter(e=>(!cat||e.category===cat)&&(!f||(e.title+' '+e.description+' '+e.slug).toLowerCase().includes(f))); $('#ct-count').textContent=l.length+' apps';
+  put('#ct-list',[l.slice(0,60).map(e=>html`<div class="card" style="padding:10px"><div style="display:flex;gap:6px;align-items:baseline"><span class="nm">${e.title}</span><span class="dim mono" style="font-size:11px">${e.version}</span></div><div class="muted" style="font-size:12px;margin:4px 0 6px">${(e.description||'').slice(0,110)}</div><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">${tag('',e.category.replace(/-/g,' '))}${e.database&&tag('acc','postgres')}${e.volumes.length>0&&tag('','volume')}${e.sidecars.length>0&&tag('',e.sidecars.length+' sidecar')}${e.unsupported.length?tag('bad','needs the host'):e.validated==='eligible'?tag('ok','validated'):tag('',e.validated.replace(/_/g,' '))}<span style="margin-left:auto">${!e.unsupported.length&&html`<button class="btn sm" data-action="useCatalog" data-slug="${e.slug}">Use</button>`}</span></div></div>`),l.length>60&&html`<div class="muted">refine the search to see more</div>`]); }
+function useCatalog(slug){ const e=CATALOG.find(x=>x.slug===slug); if(!e)return; DP_CATALOG=slug; $('#dp-catalog-row').style.display=''; $('#dp-catalog-title').textContent=e.title+' · '+e.image; const notes=[]; if(e.database)notes.push('Postgres: replicated and backed up (vault needed once per project)'); if(e.volumes.length)notes.push('volumes: '+e.volumes.map(v=>v.name).join(', ')+' (5Gi each, site-local)'); if(e.sidecars.length)notes.push('sidecars: '+e.sidecars.map(x=>x.name).join(', ')); if(e.secrets.includes('admin_password'))notes.push('an admin password is generated and shown once'); notes.push(...e.attention); $('#dp-catalog-notes').textContent=notes.join('\n'); $('#dp-name').value=slug; $('#dp-image').value=e.image; $('#dp-port').value=e.port; $('#dp-db').classList.toggle('on',!!e.database); dpVault(); $('#dp-image').disabled=$('#dp-port').disabled=true; window.scrollTo({top:$('#dp-name').getBoundingClientRect().top+window.scrollY-80,behavior:'smooth'}); }
+function clearCatalog(){ DP_CATALOG=''; $('#dp-catalog-row').style.display='none'; $('#dp-image').disabled=$('#dp-port').disabled=false; $('#dp-image').value=''; }
+function ago(t){ if(!t)return dim('never'); const m=Math.round((Date.now()-new Date(t))/60000); return m<60?m+' min ago':m<1440?Math.round(m/60)+' h ago':Math.round(m/1440)+' d ago'; }
+async function loadStorage(){ const d=await api('GET','/api/storage');
+  $('#st-acct').textContent=d.accountKey?'B2 account key in Settings: vaults are created for you':'no B2 account key in Settings: enter a bucket and key by hand when deploying';
+  const vs=[...(d.vaults||[]).map(v=>html`<div><div style="display:flex;gap:8px;align-items:baseline"><span class="nm">${v.Project}</span><span class="mono muted">${v.Bucket} · ${v.Endpoint}</span></div>
+    <table style="margin-top:6px"><thead><tr><th>App</th><th>Database</th><th>Last backup</th><th>Last WAL</th><th>Object Lock</th></tr></thead><tbody>${each(v.Apps,a=>html`<tr><td class="nm">${a.App}</td><td class="mono">${a.Database}</td><td>${a.Err?html`<span class="err">${a.Err}</span>`:ago(a.LatestBackup)}</td><td>${ago(a.LatestWAL)}</td><td>${a.ObjectLock?tag('ok',a.ObjectLock):tag('bad','none')}</td></tr>`,html`<tr><td colspan=5 class="muted">no database apps in this project</td></tr>`)}</tbody></table></div>`),
+    ...(d.without||[]).map(p=>html`<div style="display:flex;gap:10px;align-items:center"><span class="nm">${p}</span><span class="muted">no vault yet</span>${d.accountKey&&html`<button class="btn sm" data-action="createVault" data-project="${p}">Create vault</button>`}</div>`)];
+  put('#st-vaults',vs.length?vs:html`<div class="muted">no projects</div>`);
+  put('#st-volumes',each(d.volumes,v=>html`<tr><td class="mono">${v.Name}</td><td class="nm">${v.App}</td><td class="mono">${v.Project}</td><td class="mono">${v.Size}</td><td>${each(v.Sites,x=>html`<span style="margin-right:12px">${dot(x.Phase==='Bound')} ${x.Site} <span class="dim">${x.Phase||(x.Applied?'applied':'not applied')}${x.Capacity&&' · '+x.Capacity}</span></span>`,dim('not placed yet'))}</td></tr>`,html`<tr><td colspan=5 class="muted">no volumes</td></tr>`)); }
+async function createVault(d){ if(!confirm('Create a B2 bucket with Object Lock (30 days, compliance) and a restricted key for project '+d.project+'?'))return; const j=await api('POST','/api/storage/vault',{Project:d.project}); say('vault '+j.bucket+' created: '+j.note); await loadStorage(); }
+function dpVault(){ $('#dp-vault').style.display=$('#dp-db').classList.contains('on')?'block':'none'; }
+// renderDeploy runs again whenever the state arrives; the sites someone picked stay picked.
+function renderDeploy(){ loadCatalog().catch(e=>say(e.message,true)); $('#dp-domain').textContent=STATE.domain||''; const p=$('#dp-project').value.trim(); const keep=DP_FOR===p&&$('#dp-sites').children.length?new Set(chosen('#dp-sites .chip.on')):null; DP_FOR=p;
+  put('#dp-sites',allowedSites(p).map((s,i)=>html`<span class="chip ${(keep?keep.has(s.Name):i<2)?'on':''}" data-site="${s.Name}" data-action="dpSite">${s.Name}</span>`)); dpPrimary(); }
+function dpPrimary(){ const on=chosen('#dp-sites .chip.on'), cur=$('#dp-primary .on')?.dataset.site, pick=on.includes(cur)?cur:on[0]; put('#dp-primary',on.map(s=>html`<button class="${s===pick?'on':''}" data-site="${s}" data-action="dpPick">${s}</button>`)); }
+async function doDeploy(){ const sites=chosen('#dp-sites .chip.on'); const body={Catalog:DP_CATALOG,Name:$('#dp-name').value.trim(),Project:$('#dp-project').value.trim(),Image:$('#dp-image').value.trim(),Port:parseInt($('#dp-port').value)||8080,Hostname:$('#dp-host').value.trim(),Sites:sites,Primary:$('#dp-primary .on')?.dataset.site||sites[0],Database:$('#dp-db').classList.contains('on'),Mesh:$('#dp-mesh').classList.contains('on'),RPO:$('#dp-rpo').value.trim(),Vault:{KeyID:$('#dp-vkeyid').value.trim(),Key:$('#dp-vkey').value,Bucket:$('#dp-vbucket').value.trim(),Endpoint:$('#dp-vendpoint').value.trim()}};
+  const j=await api('POST','/api/deploy',body); $('#dp-vkey').value=''; clearCatalog(); await load(); go('apps'); say('deployed '+body.Name);
+  if(j.admin)secret('Initial admin for '+body.Name,'Shown once: it is stored in the app\'s secret on the fabric.','user: '+j.admin.user+'\npassword: '+j.admin.password); }
+async function loadNetwork(){ if(!ME.admin)return; const d=await api('GET','/api/network');
+  if(!d.configured){ put('#net-peers',html`<tr><td colspan=5 class="muted">the Console has no mesh token</td></tr>`); return; }
+  const ds=(d.devices||[]).sort((a,b)=>(a.Owner+a.Name).localeCompare(b.Owner+b.Name)); $('#net-count').textContent=ds.filter(p=>p.Connected).length+' of '+ds.length+' online';
+  put('#net-peers',each(ds,p=>html`<tr><td>${dot(p.Connected)}</td><td><span class="nm">${p.Name}</span><span class="sub">${p.OS}</span></td><td>${p.Owner||tag('warn','nobody: joined with a setup key')}</td><td class="mono">${p.IP}</td><td class="muted">${p.Connected?'now':ago(p.LastSeen)}</td></tr>`,html`<tr><td colspan=5 class="muted">no devices yet</td></tr>`));
+  put('#net-rules',each(d.rules,r=>html`<tr><td class="mono">${r.From}</td><td class="mono">${r.To}</td><td>${r.Proto}${r.Ports&&' '+r.Ports}${!r.Enabled&&html` <span class="tag warn">disabled</span>`}</td></tr>`,html`<tr><td colspan=3 class="muted">no rules</td></tr>`)); }
+function q(v){ if(v==null) return 0; v=String(v); if(v.endsWith('m')) return parseFloat(v)/1000; if(v.endsWith('Ki')) return parseFloat(v)*1024; if(v.endsWith('Mi')) return parseFloat(v)*1048576; if(v.endsWith('Gi')) return parseFloat(v)*1073741824; if(v.endsWith('Ti')) return parseFloat(v)*1099511627776; return parseFloat(v)||0; }
+const gi=b=>(b/1073741824).toFixed(1)+' GiB', cores=c=>c.toFixed(2)+' vCPU';
+async function loadResources(){ const d=await api('GET','/api/resources'); const sites=d.sites||[], pl=d.placements||[], names=sites.map(s=>s.Name);
+  const bar=(label,x,y,f)=>html`<div><div class="legend" style="margin:0 0 6px"><span>${label}</span><span style="margin-left:auto" class="num">${f(x)} of ${f(y)}</span></div><div class="bar"><i class="res" style="width:${y?Math.min(100,x/y*100):0}%"></i></div></div>`;
+  put('#res-sites',sites.map(s=>{ const a=s.Allocatable||{}, m=s.Allocated||{};
+    return html`<div class="card"><div class="hd">${dot(s.Ready)}<h3>${s.Name}</h3><div class="r"><span class="mono">${s.Version||''}</span><span class="tag">${Number(s.NodesReady)}/${Number(s.Nodes)} boxes</span></div></div><div class="bd" style="display:grid;gap:12px">
+      ${bar('CPU',q(m.cpu),q(a.cpu),cores)}${bar('Memory',q(m.memory),q(a.memory),gi)}${bar('Ephemeral storage',q(m['ephemeral-storage']),q(a['ephemeral-storage']),gi)}
+      <div class="muted" style="font-size:11.5px">Allocated means requested by running pods, the only reservation Kubernetes honours. Pods: ${q(m.pods)} of ${q(a.pods)}.</div>
+    </div></div>`}));
+  put('#res-head',html`<th>Workload</th><th>Project</th><th>Kind</th>${names.map(n=>html`<th>${n}</th>`)}`);
+  put('#res-placements',each(pl.sort((a,b)=>(a.Namespace+a.Name).localeCompare(b.Namespace+b.Name)),p=>html`<tr><td class="nm">${p.Name}</td><td class="muted">${p.Namespace}</td><td class="muted">${p.Kind}</td>${names.map(n=>{ const h=(p.Sites||{})[n]; return html`<td>${h?tag(h==='Healthy'?'ok':'warn',h):dim('—')}</td>`; })}</tr>`,html`<tr><td colspan="${3+names.length}" class="muted">nothing placed</td></tr>`)); }
+async function loadSettings(){ const d=await api('GET','/api/settings'); const st=d.storage||{}; $('#b2-state').textContent=st.configured?'configured · '+(st.updated||''):'not configured';
+  put('#wr-state',html`<span class="mono">${d.writer}</span> takes the fabric's changes (epoch ${Number(d.epoch)}). This Console is at <span class="mono">${d.site}</span>.`); $('#wr-take').style.display=d.isSteward&&!d.isWriter?'':'none'; }
+async function takeover(){ if(!confirm('Take over as writer here? Only when the writer is really gone or you are moving it on purpose: the old writer\'s later commits are set aside as a branch.'))return; await api('POST','/api/settings/takeover'); await loadSettings(); }
+async function saveB2(){ await api('POST','/api/settings/storage',{KeyID:$('#b2-keyid').value,Key:$('#b2-key').value}); $('#b2-key').value=''; $('#b2-keyid').value=''; say('storage key stored on the fabric'); await loadSettings(); }
+function go(r){ location.hash=r; }
+function page(){ return (location.hash||'#overview').slice(1); }
+function toggleMenu(force){ const open=force===undefined?!document.querySelector('nav.side').classList.contains('open'):force; document.querySelector('nav.side').classList.toggle('open',open); $('#scrim').classList.toggle('show',open); }
+document.querySelectorAll('.navsec a').forEach(a=>a.addEventListener('click',()=>toggleMenu(false)));
+$('#ct-q').addEventListener('input',renderCatalog); $('#ct-cat').addEventListener('change',renderCatalog); $('#dp-project').addEventListener('change',renderDeploy);
+const loaders={resources:loadResources,settings:loadSettings,network:loadNetwork,deploy:renderDeploy,domains:loadDomains,members:loadMembers,storage:loadStorage};
+function route(){ const r=page(), pg=document.getElementById('p-'+r); if(!pg)return; Promise.resolve().then(()=>loaders[r]?.()).catch(e=>say(e.message,true));
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('show')); pg.classList.add('show'); document.querySelectorAll('.navsec a').forEach(a=>a.classList.toggle('active',a.dataset.route===r)); put('#crumbs',html`<b>${titles[r]||r}</b>`); }
+addEventListener('hashchange',route);
+const H=document.documentElement,LS=localStorage;
+function setTheme(t){H.dataset.theme=t;LS.wtheme=t;} function setAccent(a){H.dataset.accent=a;LS.waccent=a;}
+function cycleTheme(){const o=['graphite','paper','dusk'];setTheme(o[(o.indexOf(H.dataset.theme)+1)%o.length]);}
+setTheme(LS.wtheme||(matchMedia('(prefers-color-scheme: light)').matches?'paper':'graphite')); setAccent(LS.waccent||'teal');
+function openModal(id){document.getElementById('m-'+id).classList.add('show');}
+function closeModals(){ for(const i of ['#inv-title','#inv-lead','#inv-cmd','#inv-note'])$(i).textContent=''; document.querySelectorAll('.modal').forEach(m=>m.classList.remove('show')); }
+document.querySelectorAll('.modal').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)closeModals();}));
+load().then(route); setInterval(load,10000);
+</script>
+</body></html>

@@ -1,0 +1,11 @@
+/bin/
+/dist/
+.DS_Store
+__pycache__/
+*.test
+/console
+/warden
+mac/.build/
+mac/dist/
+dist/
+hack/dev/cache/

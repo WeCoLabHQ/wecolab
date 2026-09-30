@@ -1,0 +1,31 @@
+# NetBird's combined server, the mesh for people's devices, at the first public site. Listens on the
+# box's loopback; the Door routes mesh.<zone> to it. STUN is on UDP 3478. Its data stays on the box and
+# is backed up to the vault; its configuration, with its secrets, comes from the Fabric.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: netbird, namespace: wecolab-system }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: netbird } }
+  template:
+    metadata: { labels: { app: netbird } }
+    spec:
+      automountServiceAccountToken: false # it never talks to Kubernetes
+      hostNetwork: true
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: netbird
+          image: netbirdio/netbird-server:0.79.0
+          env: [{ name: NB_SETUP_PAT_ENABLED, value: "true" }]
+          # Root, which owns its data on the box, but without a capability: its ports (8081, 3478) need
+          # none.
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: config, mountPath: /etc/netbird, readOnly: true }
+            - { name: data, mountPath: /var/lib/netbird }
+          resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 512Mi } }
+      volumes:
+        - { name: config, secret: { secretName: netbird, items: [{ key: config.yaml, path: config.yaml }] } }
+        - { name: data, hostPath: { path: /var/lib/wecolab/netbird, type: DirectoryOrCreate } }

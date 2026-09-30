@@ -1,0 +1,210 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: apps.wecolab.io
+spec:
+  group: wecolab.io
+  names:
+    kind: App
+    listKind: AppList
+    plural: apps
+    singular: app
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.primary
+      name: Primary
+      type: string
+    - jsonPath: .status.active
+      name: Active
+      type: string
+    - jsonPath: .spec.sites
+      name: Sites
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: App is an application placed at one or more sites.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AppSpec is what a project asks for: a workload (its folder in the Fabric) at some sites, one of
+              them primary, with an optional PostgreSQL database replicated through the project's vault.
+            properties:
+              archive:
+                additionalProperties:
+                  type: integer
+                description: |-
+                  Archive is each site's archive generation: its database archives to <db>-<site>, or
+                  <db>-<site>-g<n> from generation 2. A new generation rebuilds that site's database from the
+                  vault; Object Lock never empties the old one.
+                type: object
+              database:
+                description: Database is the CloudNativePG Cluster in the app's folder,
+                  if any.
+                type: string
+              deleted:
+                description: |-
+                  Deleted is a person's decision to delete the app: every site removes its part, data included, and
+                  the writer then removes the App from the Fabric. An App that is merely missing from Git never
+                  deletes data (R4); this is the only way a commit does.
+                type: boolean
+              handover:
+                description: Handover is a planned primary change in progress (docs/plans/2026-09-29-hardening.md,
+                  R1).
+                properties:
+                  from:
+                    type: string
+                  id:
+                    type: string
+                  token:
+                    description: Token is the demotion token From's database minted
+                      for this handover; empty until then.
+                    type: string
+                required:
+                - from
+                - id
+                type: object
+              hostname:
+                description: Hostname is the app's public name, served by the Door.
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                type: string
+              mesh:
+                description: Mesh also serves the app at <name>-<project>.mesh.<zone>,
+                  to people on the NetBird mesh only.
+                type: boolean
+              primary:
+                description: |-
+                  Primary is the site that holds the writable database and receives traffic. Where it changes with
+                  a Handover the move is planned (the old primary hands over a token); without one it is forced
+                  (every other site's database is rebuilt from the vault under a new archive generation).
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              rpo:
+                description: RPO is the most data the owner accepts to lose; reported
+                  against the vault's newest WAL.
+                type: string
+              sites:
+                description: 'Sites run the app: the primary, and standbys wherever
+                  it has a database.'
+                items:
+                  maxLength: 63
+                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                  type: string
+                maxItems: 16
+                minItems: 1
+                type: array
+              workload:
+                description: Workload is the Deployment, and the same-named Service
+                  and Secret, in the app's folder.
+                type: string
+            required:
+            - primary
+            - sites
+            - workload
+            type: object
+            x-kubernetes-validations:
+            - message: primary must be one of sites
+              rule: self.primary in self.sites
+            - message: handover.from must be one of sites
+              rule: '!has(self.handover) || self.handover.from in self.sites'
+          status:
+            description: AppStatus is a site's own view, kept by that site's Warden
+              before it acts.
+            properties:
+              active:
+                description: Active is the site this site has applied as primary.
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              demoting:
+                description: Demoting is kept at a planned move's old primary from
+                  the moment it first sees the handover.
+                properties:
+                  handover:
+                    type: string
+                  stale:
+                    type: string
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

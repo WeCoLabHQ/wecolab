@@ -1,0 +1,152 @@
+# The Door and Names at a public site: Traefik terminating TLS for every public name, CoreDNS answering
+# the fabric's zone, and the entrance Warden writing both from the Fabric and the sites' status. The pod
+# is on the box's network (it binds 53, 80 and 443 there), so each container holds only what it uses.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: wecolab-door, namespace: wecolab-system }
+automountServiceAccountToken: false
+---
+# The entrance Warden reads Sites, Apps and the fabric's settings; nothing else, and it writes nothing.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: wecolab-door }
+rules:
+  - { apiGroups: [wecolab.io], resources: [sites, apps], verbs: [get, list, watch] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: wecolab-door }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: wecolab-door }
+subjects: [{ kind: ServiceAccount, name: wecolab-door, namespace: wecolab-system }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: wecolab-door, namespace: wecolab-system }
+rules:
+  - { apiGroups: [""], resources: [configmaps], resourceNames: [fabric], verbs: [get, list, watch] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: wecolab-door, namespace: wecolab-system }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: wecolab-door }
+subjects: [{ kind: ServiceAccount, name: wecolab-door, namespace: wecolab-system }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: door, namespace: wecolab-system }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: door } }
+  template:
+    metadata: { labels: { app: door } }
+    spec:
+      serviceAccountName: wecolab-door
+      automountServiceAccountToken: false # the token is mounted in the Warden alone, below
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: { type: RuntimeDefault } }
+      initContainers:
+        # Names' Corefile, bound by name to the default route's interface (where a cloud NATs the public
+        # address 1:1 it is on no interface); an empty zone until the Warden writes one; and random
+        # credentials for Traefik's DNS-challenge requests (0640: this pod's group only).
+        - name: init
+          image: ghcr.io/wecolabhq/warden:{{ .Version }}
+          imagePullPolicy: IfNotPresent
+          args: [entrance-init, "--zone=${ZONE}", --zones=/zones, --auth-dir=/door-auth]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, readOnlyRootFilesystem: true }
+          volumeMounts:
+            - { name: zones, mountPath: /zones }
+            - { name: auth, mountPath: /door-auth }
+      containers:
+        - name: door
+          image: traefik:v3.7.13
+          args:
+            - --entrypoints.web.address=:80
+            - --entrypoints.websecure.address=:443
+            - --entrypoints.web.http.redirections.entrypoint.to=websecure
+            - --entrypoints.web.http.redirections.entrypoint.scheme=https
+            - --entrypoints.web.transport.respondingTimeouts.readTimeout=10s
+            - --entrypoints.web.transport.respondingTimeouts.writeTimeout=10s
+            - --entrypoints.web.transport.respondingTimeouts.idleTimeout=60s
+            # Requests and responses on 443 may last hours (NetBird's gRPC streams, apps' uploads and
+            # event streams) and Go applies these per HTTP/2 stream, so only idle connections time out.
+            # The ceiling: without a read timeout Traefik also waits forever for a TLS hello, so one
+            # host opening silent connections holds memory until the limit below; a per-source
+            # connection limit on 443 in the host's firewall is what bounds that.
+            - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
+            - --entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0
+            - --entrypoints.websecure.transport.respondingTimeouts.idleTimeout=180s
+            - --providers.file.directory=/dynamic
+            - --providers.file.watch=true
+            - --certificatesresolvers.public.acme.email=${EMAIL}
+            - --certificatesresolvers.public.acme.storage=/acme/public.json
+            - --certificatesresolvers.public.acme.tlschallenge=true
+            - --certificatesresolvers.mesh.acme.email=${EMAIL}
+            - --certificatesresolvers.mesh.acme.storage=/acme/mesh.json
+            - --certificatesresolvers.mesh.acme.dnschallenge.provider=httpreq
+            - --log.level=INFO
+            # Only refused and failed requests, as JSON: never a query string (invite tokens, sign-in
+            # codes) or a header but the Console's request id. Apps' routes log nothing (entrance.go).
+            - --accesslog=true
+            - --accesslog.format=json
+            - --accesslog.bufferingsize=100
+            - --accesslog.filters.statuscodes=400-599
+            - --accesslog.fields.queryparameters.defaultmode=drop
+            - --accesslog.fields.headers.defaultmode=drop
+            - --accesslog.fields.headers.names.X-Request-Id=keep
+          env:
+            - { name: HTTPREQ_ENDPOINT, value: "http://127.0.0.1:8095" }
+            # lego sends basic auth only when both are set; each *_FILE names a file of the init's.
+            - { name: HTTPREQ_USERNAME_FILE, value: /door-auth/user }
+            - { name: HTTPREQ_PASSWORD_FILE, value: /door-auth/password }
+            - { name: HTTPREQ_PROPAGATION_TIMEOUT, value: "300" }
+            - { name: HTTPREQ_POLLING_INTERVAL, value: "5" }
+          # Root, with one capability: Traefik's image gives its binary no file capability, and a
+          # non-root process keeps none across exec (containerd sets no ambient capabilities), so it
+          # could not bind 80 and 443. It writes only /acme and /tmp.
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL], add: [NET_BIND_SERVICE] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: dynamic, mountPath: /dynamic, readOnly: true }
+            - { name: acme, mountPath: /acme }
+            - { name: auth, mountPath: /door-auth, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
+        - name: names
+          image: coredns/coredns:1.14.7
+          args: [-conf, /zones/Corefile]
+          # CoreDNS's image runs as nonroot and its binary has the file capability to bind 53.
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL], add: [NET_BIND_SERVICE] }, readOnlyRootFilesystem: true }
+          volumeMounts:
+            - { name: zones, mountPath: /zones, readOnly: true }
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
+        - name: warden
+          image: ghcr.io/wecolabhq/warden:{{ .Version }}
+          imagePullPolicy: IfNotPresent
+          args: [entrance, "--site=${SITE}", --routes=/dynamic, --zone-file=/zones/db.zone, "--people-net=${PEOPLE_NET}", "--tls=${TLS}", --acme-addr=127.0.0.1:8095, --auth-dir=/door-auth]
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, readOnlyRootFilesystem: true }
+          volumeMounts:
+            - { name: dynamic, mountPath: /dynamic }
+            - { name: zones, mountPath: /zones }
+            - { name: auth, mountPath: /door-auth, readOnly: true }
+            - { name: token, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true }
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
+      volumes:
+        - { name: dynamic, emptyDir: {} }
+        - { name: zones, emptyDir: {} }
+        - { name: auth, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
+        - { name: tmp, emptyDir: {} }
+        - { name: acme, hostPath: { path: /var/lib/wecolab/acme, type: DirectoryOrCreate } }
+        # What automounting would give, for the Warden only.
+        - name: token
+          projected:
+            sources:
+              - serviceAccountToken: { path: token, expirationSeconds: 3607 }
+              - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
+              - downwardAPI: { items: [{ path: namespace, fieldRef: { fieldPath: metadata.namespace } }] }

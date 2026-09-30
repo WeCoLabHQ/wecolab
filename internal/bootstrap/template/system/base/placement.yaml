@@ -1,0 +1,31 @@
+# Project pods go where the scheduler puts them, and only best-effort pods go to laptops and idle
+# time. The best-effort quota limits who may use that class (internal/warden/projects.go); this
+# refuses the ways around it: a pod of another class that tolerates the wecolab.io/* taints, or one
+# that names its node. A toleration without a key tolerates every taint, so it counts too. The
+# scheduler binds through pods/binding, which this does not match.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: wecolab-placement }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [""], apiVersions: [v1], operations: [CREATE, UPDATE], resources: [pods] }
+  validations:
+    - expression: request.operation != 'CREATE' || !has(object.spec.nodeName) || object.spec.nodeName == ''
+      message: tenant pods are placed by the scheduler
+    - expression: >-
+        !has(object.spec.tolerations) ||
+        !object.spec.tolerations.exists(t, !has(t.key) || t.key == '' || t.key.startsWith('wecolab.io/')) ||
+        (has(object.spec.priorityClassName) && object.spec.priorityClassName == 'wecolab-best-effort')
+      message: only best-effort pods may tolerate laptops and idle time
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: wecolab-placement }
+spec:
+  policyName: wecolab-placement
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions: [{ key: wecolab.io/tenant, operator: Exists }]

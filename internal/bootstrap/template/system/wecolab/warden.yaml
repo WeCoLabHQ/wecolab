@@ -1,0 +1,44 @@
+# Warden at every site (docs/architecture.md, "Warden"). On the manager's host network so the other
+# sites reach its status and certificate service on the manager's Nebula address.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: wecolab-warden, namespace: wecolab-system }
+---
+# Warden is this site's controller: it binds people (owners to cluster-admin), creates Flux
+# Kustomizations, keeps projects' boundaries and removes an app's data when it leaves.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: wecolab-warden }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin }
+subjects: [{ kind: ServiceAccount, name: wecolab-warden, namespace: wecolab-system }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: wecolab-warden, namespace: wecolab-system }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: wecolab-warden } }
+  template:
+    metadata: { labels: { app: wecolab-warden } }
+    spec:
+      serviceAccountName: wecolab-warden
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: warden
+          image: ghcr.io/wecolabhq/warden:{{ .Version }}
+          imagePullPolicy: IfNotPresent
+          args: [site, "--site=${SITE}", "--status-addr=$(HOST_IP):8093"]
+          env:
+            - { name: HOST_IP, valueFrom: { fieldRef: { fieldPath: status.hostIP } } }
+            - { name: WECOLAB_GIT_URL, value: "http://forgejo.wecolab-system.svc:3000" }
+            - name: WECOLAB_GIT_TOKEN
+              valueFrom: { secretKeyRef: { name: git, key: token } }
+            - name: NETBIRD_URL
+              valueFrom: { secretKeyRef: { name: netbird, key: url, optional: true } }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, readOnlyRootFilesystem: true }
+          readinessProbe: { httpGet: { path: /healthz, port: 8093 } }
+          resources: { requests: { cpu: 20m, memory: 48Mi }, limits: { memory: 256Mi } }
