@@ -111,7 +111,7 @@ Deploy form instead, once per project.
 
 ## 4. Add a second site
 
-A site belongs to a project, its owner. For a friend's site, first create their project and invite them
+A site belongs to a project, its owner. For a collaborator's site, first create their project and invite them
 into it on **Members** (step 6). Then open **Add a site** (sidebar, under Operate) and give:
 
 - its **name**;
@@ -133,8 +133,8 @@ and then everything else from the Fabric. The site appears as Ready in **Sites**
 A fabric keeps working through the loss of any one site only when at least two sites are stewards: make
 your second site one.
 
-A project places apps only at sites it owns or holds an offer at. If the new site belongs to your
-friend's project, your apps can use it once the friend offers capacity to your project: in **Sites**,
+A project places apps only at sites it owns or holds an offer at. If the new site belongs to a
+collaborator's project, your apps can use it once they offer capacity to your project: in **Sites**,
 under Offers, with enough storage (a database takes 20Gi, each volume 5Gi).
 
 ## 5. Add boxes to a site

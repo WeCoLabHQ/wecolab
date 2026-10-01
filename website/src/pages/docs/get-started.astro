@@ -1,0 +1,97 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import { docs, docHref } from "../../lib/docs";
+import { url } from "../../lib/paths";
+import "../../styles/docs.css";
+const doc = (slug: string) => docHref(docs.find((item) => item.slug === slug)!);
+---
+
+<Layout
+  title="Get started | WeCoLab"
+  description="Prepare a public Linux site and delegated DNS zone before installing WeCoLab."
+>
+  <div class="docs-guide container" data-pagefind-body>
+    <div class="docs-breadcrumb">
+      <a href={url("docs/")}>Docs</a>
+      <span aria-hidden="true">/</span>
+      <span>Get started</span>
+    </div>
+    <header class="docs-guide-header">
+      <p class="eyebrow">01 / before the first site</p>
+      <h1 data-pagefind-meta="title">Start with a public Linux box.</h1>
+      <p>
+        WeCoLab starts at a site with a public address and a DNS zone delegated
+        to it. The installation guide carries the actual commands and the full
+        sequence; this page helps you check which path applies.
+      </p>
+    </header>
+    <div class="docs-guide-grid">
+      <section class="docs-guide-step">
+        <span>01 / prepare</span>
+        <h2>Public site and delegated zone</h2>
+        <p>
+          Use a fresh Ubuntu 24.04 or Debian 13 box, amd64 or arm64, with a
+          public address. You need control of a DNS zone to delegate, along with
+          the ports and capacity listed in the installation guide.
+        </p>
+        <a class="text-link" href={`${doc("install")}#what-you-need`}>
+          Read the prerequisites ↗
+        </a>
+        <a class="text-link" href={`${doc("install")}#1-delegate-the-zone`}>
+          Delegate the zone ↗
+        </a>
+      </section>
+      <section class="docs-guide-step">
+        <span>02 / install</span>
+        <h2>Bring up the first site</h2>
+        <p>
+          Follow the original installation guide on the public Linux box. It
+          explains what the script asks for, where to find the recovery card,
+          and how to sign in to the Console.
+        </p>
+        <a class="text-link" href={doc("install")}>
+          Follow the installation guide ↗
+        </a>
+      </section>
+      <section class="docs-guide-step">
+        <span>03 / extend</span>
+        <h2>Join other sites</h2>
+        <p>
+          Add further boxes with one-time invites from the Console. A home site
+          needs outbound internet, while a trusted Linux site can take on
+          steward duties. The guide explains when to designate stewards and how
+          to add a second public site.
+        </p>
+        <a class="text-link" href={`${doc("install")}#4-add-a-second-site`}>
+          Add a second site ↗
+        </a>
+        <a class="text-link" href={doc("operations")}>
+          Read operations ↗
+        </a>
+      </section>
+      <section class="docs-guide-step">
+        <span>04 / optional paths</span>
+        <h2>Storage and a Mac node</h2>
+        <p>
+          A vault is needed before a project's first app with a database;
+          Backblaze B2 is the tested provider, and other S3-compatible Object
+          Lock stores require manual bucket setup. On Apple Silicon, the Mac
+          node is built from source and joins through a Debian VM, not as the
+          first site.
+        </p>
+        <a class="text-link" href={`${doc("install")}#3-sign-in`}>
+          Set up storage ↗
+        </a>
+        <a class="text-link" href={doc("mac")}>
+          Build the Mac node ↗
+        </a>
+      </section>
+    </div>
+    <div class="docs-guide-end">
+      <p>Not sure what a fabric, steward, site or vault means?</p>
+      <a class="button button-secondary" href={doc("glossary")}>
+        Open the glossary ↗
+      </a>
+    </div>
+  </div>
+</Layout>

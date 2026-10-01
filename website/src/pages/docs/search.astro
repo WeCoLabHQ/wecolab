@@ -1,0 +1,72 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import { url } from "../../lib/paths";
+import "../../styles/docs.css";
+const bundlePath = url("pagefind/");
+---
+
+<Layout
+  title="Search documentation | WeCoLab"
+  description="Search the full text of the WeCoLab source documentation."
+>
+  <link slot="head" rel="stylesheet" href={url("pagefind/pagefind-ui.css")} />
+  <script is:inline src={url("pagefind/pagefind-ui.js")} defer></script>
+  <div class="docs-search container">
+    <div class="docs-breadcrumb">
+      <a href={url("docs/")}>Docs</a>
+      <span aria-hidden="true">/</span>
+      <span>Search</span>
+    </div>
+    <header>
+      <p class="eyebrow">Documentation / find a detail</p>
+      <h1>Search the source docs.</h1>
+      <p>
+        Search installation steps, architecture, operations, the Mac node, and
+        the historical hardening plan. Results link to the relevant
+        source-backed pages.
+      </p>
+    </header>
+    <div
+      id="docs-search-ui"
+      role="search"
+      aria-label="Search documentation"
+    ></div>
+    <p class="docs-search-hint">
+      Start typing to search. Press <kbd>/</kbd> to focus the search field.
+    </p>
+    <noscript>
+      <p class="note">
+        Search needs JavaScript.{" "}
+        <a href={url("docs/")}>Browse the documentation index</a> instead.
+      </p>
+    </noscript>
+  </div>
+  <script is:inline define:vars={{ bundlePath }}>
+    document.addEventListener("DOMContentLoaded", () => {
+      const search = new window.PagefindUI({
+        element: "#docs-search-ui",
+        bundlePath: new URL(bundlePath, window.location.href).href,
+        showSubResults: true,
+        showImages: false,
+        focusOnSlash: true,
+        translations: {
+          placeholder: "Search documentation",
+          zero_results:
+            "No documents found for [SEARCH_TERM]. Try another term.",
+        },
+      });
+      const query = new URLSearchParams(window.location.search).get("q");
+      if (query) search.triggerSearch(query);
+      document
+        .querySelector("#docs-search-ui")
+        ?.addEventListener("input", (event) => {
+          if (!(event.target instanceof HTMLInputElement)) return;
+          const next = new URL(window.location.href);
+          if (event.target.value)
+            next.searchParams.set("q", event.target.value);
+          else next.searchParams.delete("q");
+          history.replaceState(null, "", next);
+        });
+    });
+  </script>
+</Layout>

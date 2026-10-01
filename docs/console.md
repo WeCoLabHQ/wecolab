@@ -284,6 +284,10 @@ Below, **Volumes** lists every volume of your projects' apps, its size, and what
 vault**. It makes a B2 bucket with Object Lock (compliance mode, 30 days) and a key that reaches only
 that bucket, and keeps them, encrypted, in the Fabric.
 
+**Rotate key.** Makes a new key for the vault's bucket, puts it in the Fabric for the project and its
+apps, then deletes the old key at B2; archiving catches up within a minute or two. Needs the account key
+in Settings; a bucket you brought yourself is rotated at its provider.
+
 **Bring your own bucket.** Without the account key, or with another S3-compatible store, create the
 bucket yourself with a default Object Lock retention (compliance, 30 days) and a key for it. Enter the
 bucket, the endpoint (an `https` URL at a public address), the key id and the key under Vault in the Deploy
@@ -337,11 +341,14 @@ with its Nebula address, its role (manager or node) and whether it is a laptop.
 - **Add a Mac** shows an invite to paste into WeCoLab for Mac ([mac/README.md](../mac/README.md)). A Mac
   cannot join on a Linux box's invite, nor a Linux box on a Mac's.
 - **Remove**, on a box, takes it out of the Fabric and puts its certificates on the fabric's blocklist;
-  every box drops them at its next sync, within the hour. The Console does not delete its Kubernetes node
-  yet: drain and delete it at the site (`kubectl drain`, `kubectl delete node`). Its disk keeps its data.
-  A site's manager cannot be removed this way.
+  every box drops them at its next sync, within the hour. The site's Warden then deletes the box's
+  Kubernetes node. Its disk keeps its data. A site's manager cannot be removed this way.
 - **Make a steward** and **Stop being a steward** (admins) re-encrypt the fabric's secrets for the new set
   of stewards. Neither shows for the writer, and the last steward cannot stop.
+- **Remove site** (admins) takes a whole site out of the fabric: its boxes' certificates are blocked, it
+  leaves every app it held a standby for, its offers go, and the vault keys its apps carried are rotated.
+  It is refused for the writer, a steward, the site running NetBird, and a site that is still an app's
+  primary ([operations.md](operations.md#sites-and-boxes), "When a collaborator leaves").
 
 Join commands and invites are shown once, work once, and last a day.
 

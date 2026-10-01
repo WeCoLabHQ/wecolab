@@ -1,0 +1,409 @@
+<figure class="fabric-diagram" aria-labelledby="diagram-caption">
+  <div class="diagram-top">
+    <span class="eyebrow">A small cloud, between collaborators</span>
+    <span class="diagram-number">FIG. 01</span>
+  </div>
+  <div class="diagram-field">
+    <svg
+      class="connections"
+      viewBox="0 0 510 410"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M138 158v42q0 18 18 18h205q18 0 18 18v6"
+        stroke="#809d8e"
+        stroke-width="1.4"
+      />
+      <path
+        d="M379 243v-43q0-17-17-17H154q-16 0-16-16v-9"
+        stroke="#809d8e"
+        stroke-width="1.4"
+      />
+      <path
+        d="M265 335v-97q0-20-20-20"
+        stroke="#809d8e"
+        stroke-width="1.3"
+        stroke-dasharray="4 6"
+      />
+      <path
+        d="m196 213 6 5-6 5m113-45-6 5 6 5"
+        stroke="#087e73"
+        stroke-width="1.5"
+      />
+      <circle cx="138" cy="166" r="3" fill="#087e73" />
+      <circle cx="379" cy="242" r="3" fill="#087e73" />
+    </svg>
+    <div class="site-node your-lab">
+      <div class="node-heading">
+        <span class="node-symbol" aria-hidden="true">
+          A
+        </span>
+        <span>Your homelab</span>
+        <span class="node-led" aria-hidden="true"></span>
+      </div>
+      <div class="node-body">
+        <svg class="device" viewBox="0 0 70 80" fill="none" aria-hidden="true">
+          <rect
+            x="16"
+            y="7"
+            width="39"
+            height="62"
+            rx="3"
+            fill="#e9eee4"
+            stroke="#849b8c"
+          />
+          <path d="M22 20h27M22 26h27M22 32h27" stroke="#849b8c" />
+          <circle cx="44" cy="56" r="2" fill="#087e73" />
+          <path d="M22 73v-4m26 4v-4" stroke="#849b8c" />
+          <path d="M9 12v61h38" stroke="#c6d1c4" />
+        </svg>
+        <div>
+          <span class="node-kicker">You offer</span>
+          <strong>
+            4 CPU <span>/</span> 8 GB
+          </strong>
+          <span class="node-detail">A slice of your server</span>
+        </div>
+      </div>
+      <div class="node-footer">
+        <span class="tiny-square"></span> Your project + a collaborator's project
+      </div>
+    </div>
+    <div class="connection-label">
+      Private, encrypted mesh <span aria-hidden="true">↔</span>
+    </div>
+    <div class="site-node collab-lab">
+      <div class="node-heading">
+        <span class="node-symbol" aria-hidden="true">
+          B
+        </span>
+        <span>A collaborator's lab</span>
+        <span class="node-led" aria-hidden="true"></span>
+      </div>
+      <div class="node-body">
+        <svg class="device" viewBox="0 0 70 80" fill="none" aria-hidden="true">
+          <rect
+            x="8"
+            y="15"
+            width="53"
+            height="16"
+            rx="3"
+            fill="#e9eee4"
+            stroke="#849b8c"
+          />
+          <rect
+            x="8"
+            y="35"
+            width="53"
+            height="16"
+            rx="3"
+            fill="#e9eee4"
+            stroke="#849b8c"
+          />
+          <rect
+            x="8"
+            y="55"
+            width="53"
+            height="7"
+            rx="2"
+            fill="#e9eee4"
+            stroke="#849b8c"
+          />
+          <circle cx="52" cy="23" r="2" fill="#087e73" />
+          <circle cx="52" cy="43" r="2" fill="#087e73" />
+          <path d="M15 23h22m-22 20h22" stroke="#849b8c" />
+        </svg>
+        <div>
+          <span class="node-kicker">They offer</span>
+          <strong>
+            2 CPU <span>/</span> 4 GB
+          </strong>
+          <span class="node-detail">Room for your next app</span>
+        </div>
+      </div>
+      <div class="node-footer">
+        <span class="tiny-square"></span> Their hardware. Their boundaries.
+      </div>
+    </div>
+    <div class="laptop-node">
+      <svg
+        viewBox="0 0 44 35"
+        fill="none"
+        width="40"
+        height="35"
+        aria-hidden="true"
+      >
+        <rect
+          x="8"
+          y="3"
+          width="28"
+          height="22"
+          rx="2"
+          stroke="#5b7e6d"
+          stroke-width="1.5"
+          fill="#f5f5f0"
+        />
+        <path
+          d="m8 25-5 5h38l-5-5M18 30h8"
+          stroke="#5b7e6d"
+          stroke-width="1.5"
+        />
+        <path d="m18 14 3 3 6-6" stroke="#087e73" stroke-width="1.4" />
+      </svg>
+      <div>
+        <strong>And your Mac, when it's idle.</strong>
+        <span>Best-effort work · part of your site</span>
+      </div>
+    </div>
+    <span class="diagram-cross cross-a" aria-hidden="true">
+      +
+    </span>
+    <span class="diagram-cross cross-b" aria-hidden="true">
+      +
+    </span>
+  </div>
+  <figcaption id="diagram-caption">
+    <span>Separate labs. Shared possibilities.</span>
+    <span>Illustrative allocations</span>
+  </figcaption>
+</figure>
+<style>
+  .fabric-diagram {
+    width: 100%;
+    position: relative;
+    border: 1px solid #ccd5c7;
+    border-radius: 7px;
+    background: #edf0e6;
+    box-shadow: 0 12px 40px -32px #435b48;
+    overflow: hidden;
+  }
+  .diagram-top {
+    display: flex;
+    justify-content: space-between;
+    padding: 18px 21px;
+    border-bottom: 1px solid #d4dccd;
+    align-items: center;
+    gap: 10px;
+  }
+  .diagram-top .eyebrow {
+    font-size: 9px;
+    letter-spacing: 0.045em;
+  }
+  .diagram-number {
+    font: 9px var(--mono);
+    color: #667e70;
+    white-space: nowrap;
+  }
+  .diagram-field {
+    height: 410px;
+    position: relative;
+    background-image: radial-gradient(#bbcab4 0.7px, transparent 0.7px);
+    background-size: 16px 16px;
+  }
+  .connections {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .site-node {
+    width: 246px;
+    position: absolute;
+    background: #fafbf6;
+    border: 1px solid #acbeb0;
+    border-radius: 5px;
+    box-shadow: 4px 5px 0 #dce4d7;
+  }
+  .your-lab {
+    left: 22px;
+    top: 27px;
+  }
+  .collab-lab {
+    right: 21px;
+    top: 207px;
+  }
+  .node-heading {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 11px 13px;
+    border-bottom: 1px solid #dce3d5;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .node-symbol {
+    font: 9px var(--mono);
+    width: 19px;
+    height: 19px;
+    border: 1px solid #b0c4b5;
+    display: grid;
+    place-items: center;
+    border-radius: 3px;
+  }
+  .node-led {
+    width: 5px;
+    height: 5px;
+    background: #148376;
+    border-radius: 50%;
+    margin-left: auto;
+    box-shadow: 0 0 0 3px #deeee0;
+  }
+  .node-body {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+  }
+  .device {
+    width: 60px;
+    height: 74px;
+    flex-shrink: 0;
+  }
+  .node-body strong {
+    display: block;
+    font: 14px var(--mono);
+    letter-spacing: -0.04em;
+    margin: 3px 0;
+  }
+  .node-body strong span {
+    color: #b7c5b6;
+    padding-inline: 3px;
+  }
+  .node-kicker {
+    font-size: 10px;
+    color: #536c5c;
+  }
+  .node-detail {
+    font-size: 10px;
+    color: #617663;
+    display: block;
+  }
+  .node-footer {
+    font: 8px var(--mono);
+    color: #536c5c;
+    padding: 8px 12px;
+    border-top: 1px solid #e2e8da;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tiny-square {
+    width: 4px;
+    height: 4px;
+    background: #168775;
+  }
+  .connection-label {
+    position: absolute;
+    right: 24px;
+    top: 164px;
+    font: 9px var(--mono);
+    background: #edf0e6;
+    padding: 4px 7px;
+    color: #527660;
+  }
+  .connection-label span {
+    margin-left: 9px;
+  }
+  .laptop-node {
+    position: absolute;
+    bottom: 12px;
+    left: 19px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 280px;
+  }
+  .laptop-node strong {
+    display: block;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .laptop-node span {
+    display: block;
+    font: 8px var(--mono);
+    color: #637664;
+    margin-top: 2px;
+  }
+  figcaption {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 15px 20px;
+    border-top: 1px solid #d4dccd;
+    font-size: 10px;
+    color: #536c5c;
+  }
+  figcaption span:last-child {
+    font: 8px var(--mono);
+    align-self: center;
+  }
+  .diagram-cross {
+    position: absolute;
+    color: #879d87;
+    font: 16px var(--mono);
+  }
+  .cross-a {
+    right: 25px;
+    top: 37px;
+  }
+  .cross-b {
+    left: 26px;
+    top: 237px;
+  }
+  @media (max-width: 1100px) and (min-width: 801px) {
+    .site-node {
+      width: 213px;
+    }
+    .node-body strong {
+      font-size: 12px;
+    }
+    .node-footer {
+      font-size: 7px;
+    }
+    .laptop-node strong {
+      font-size: 9px;
+    }
+    figcaption {
+      font-size: 9px;
+    }
+  }
+  @media (max-width: 450px) {
+    .site-node {
+      width: 224px;
+    }
+    .your-lab {
+      left: 15px;
+      top: 24px;
+    }
+    .collab-lab {
+      right: 15px;
+      top: 205px;
+    }
+    .diagram-top {
+      padding: 15px;
+    }
+    .diagram-field {
+      height: 418px;
+    }
+    .laptop-node {
+      left: 12px;
+      bottom: 12px;
+    }
+    .connection-label {
+      right: 16px;
+      top: 166px;
+      font-size: 8px;
+    }
+    figcaption {
+      padding: 13px 15px;
+      font-size: 9px;
+    }
+    figcaption span:last-child {
+      font-size: 7px;
+    }
+    .connections {
+      opacity: 0.65;
+    }
+  }
+</style>

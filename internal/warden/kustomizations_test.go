@@ -2,11 +2,16 @@ package warden
 
 import (
 	"context"
+	"slices"
 	"testing"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"wecolab.io/wecolab/api/v1alpha1"
@@ -63,5 +68,44 @@ func TestNameRoots(t *testing.T) {
 		if err != nil || sa != PlatformSA || p != "./"+n {
 			t.Errorf("%s: %v, serviceAccountName %q, path %q", n, err, sa, p)
 		}
+	}
+}
+
+// A site deletes the node of a box its Fabric no longer lists once it has been unready for nodeGrace:
+// never a listed box's, nor a joining box's (ready), nor anything while the Site names no manager.
+func TestForgetNodes(t *testing.T) {
+	now := time.Now()
+	node := func(name string, ready corev1.ConditionStatus, since time.Duration) *corev1.Node {
+		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: ready, LastTransitionTime: metav1.NewTime(now.Add(-since))}}}}
+	}
+	site := &v1alpha1.Site{ObjectMeta: metav1.ObjectMeta{Name: "a"}, Spec: v1alpha1.SiteSpec{Boxes: []v1alpha1.Box{{Name: "a-m", Role: "manager"}, {Name: "a-down", Role: "node"}}}}
+	s := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(s)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		node("a-m", corev1.ConditionTrue, time.Hour),
+		node("a-down", corev1.ConditionUnknown, time.Hour),      // listed, only down
+		node("a-left", corev1.ConditionUnknown, time.Hour),      // removed, off the mesh
+		node("a-leaving", corev1.ConditionUnknown, time.Minute), // removed a minute ago
+		node("a-joining", corev1.ConditionTrue, time.Minute),    // not in this copy yet
+	).Build()
+	r := &SiteReconciler{Client: c, Site: "a"}
+	names := func() (out []string) {
+		l := &corev1.NodeList{}
+		_ = c.List(context.Background(), l)
+		for _, n := range l.Items {
+			out = append(out, n.Name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	if err := r.forgetNodes(context.Background(), &v1alpha1.Site{ObjectMeta: metav1.ObjectMeta{Name: "a"}}, now); err != nil || len(names()) != 5 {
+		t.Fatalf("a Site without its manager deletes nothing: %v %v", names(), err)
+	}
+	if err := r.forgetNodes(context.Background(), site, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); !slices.Equal(got, []string{"a-down", "a-joining", "a-leaving", "a-m"}) {
+		t.Fatalf("nodes left: %v", got)
 	}
 }

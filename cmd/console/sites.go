@@ -534,6 +534,22 @@ func secretsKustomization(snap *fabric.Snapshot, add string) (fabric.FileChange,
 	return fabric.FileChange{Path: kustomizationPath, Content: out}, err
 }
 
+// secretsKustomizationWithout is secrets/kustomization.yaml without one secret's file.
+func secretsKustomizationWithout(snap *fabric.Snapshot, drop string) (fabric.FileChange, error) {
+	f, err := secretsKustomization(snap, drop)
+	if err != nil {
+		return f, err
+	}
+	var k map[string]any
+	if err := yaml.Unmarshal(f.Content, &k); err != nil {
+		return f, err
+	}
+	res, _ := k["resources"].([]any)
+	k["resources"] = slices.DeleteFunc(res, func(x any) bool { return x == drop })
+	f.Content, err = yaml.Marshal(k)
+	return f, err
+}
+
 // siteKey is this site's age identity, to open what the Fabric encrypted for it.
 func (s *server) siteKey(ctx context.Context) (string, error) {
 	sec := &corev1.Secret{}
@@ -808,6 +824,143 @@ func (s *server) removeBox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "blocklisted": n})
+}
+
+// removeSite takes a site out of the fabric in one commit (decision 25): the site, its age key and its
+// secret, its place in every app it held a standby for, the offers it made, and every certificate of its
+// boxes onto the blocklist. From that commit the writer stops pushing to it and every box drops it within
+// the hour. Then the vault key of every project whose database apps it held is rotated, since each of
+// those apps' Secrets carried a copy. Refused for the writer, a steward (Stop being a steward first: that
+// re-encrypts the fabric's secrets without it), the site running NetBird, and a site that is an app's
+// primary or the origin of a move.
+func (s *server) removeSite(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(w, r) {
+		return
+	}
+	name, ctx := r.PathValue("site"), r.Context()
+	apps, err := s.appsInGit(ctx)
+	if err != nil {
+		answer(w, err, 502)
+		return
+	}
+	offers, err := readDir[v1alpha1.Offer](ctx, s.git, "fabric/offers")
+	if err != nil {
+		answer(w, err, 502)
+		return
+	}
+	sitePath, siteSecret, siteKey := "fabric/sites/"+name+".yaml", secretPath(warden.SiteSecret(name)), "keys/"+name+".age.pub"
+	paths := []string{sitePath, siteSecret, siteKey, kustomizationPath, settingsPath}
+	held := map[string]types.NamespacedName{} // the apps and offers it had, by path
+	for i := range apps {
+		if slices.Contains(apps[i].Spec.Sites, name) {
+			p, _ := s.pathOf(&apps[i])
+			held[p] = types.NamespacedName{Namespace: apps[i].Namespace, Name: apps[i].Name}
+		}
+	}
+	for i := range offers {
+		if offers[i].Spec.Site == name {
+			p, _ := s.pathOf(&offers[i])
+			held[p] = types.NamespacedName{Name: offers[i].Name}
+		}
+	}
+	paths = append(paths, slices.Sorted(maps.Keys(held))...)
+	var blocked, standbys, withdrawn int
+	var rekey map[string]bool
+	err = s.edit(ctx, fmt.Sprintf("site %s removed: its boxes' certificates blocklisted, its standbys and offers gone", name), paths, func(snap *fabric.Snapshot) ([]fabric.FileChange, error) {
+		standbys, withdrawn, rekey = 0, 0, map[string]bool{}
+		site := &v1alpha1.Site{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		b, ok := snap.Get(sitePath)
+		if exists, err := decode(b, ok, site); err != nil || !exists {
+			return nil, cmpErr(err, fail(404, "no such site"))
+		}
+		cm, set, err := settingsOf(snap)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case set.Writer == name:
+			return nil, fail(409, "%s is the writer: take over at another steward first", name)
+		case site.Spec.Steward:
+			return nil, fail(409, "%s is a steward: Stop being a steward first, which re-encrypts the fabric's secrets without it", name)
+		case set.People == name:
+			return nil, fail(409, "%s runs NetBird, the people mesh, which cannot move yet", name)
+		}
+		changes := []fabric.FileChange{}
+		for _, p := range slices.Sorted(maps.Keys(held)) {
+			b, ok := snap.Get(p)
+			if held[p].Namespace == "" { // an offer it made
+				o := &v1alpha1.Offer{ObjectMeta: metav1.ObjectMeta{Name: held[p].Name}}
+				if exists, err := decode(b, ok, o); err != nil || !exists || o.Spec.Site != name {
+					if err != nil {
+						return nil, err
+					}
+					continue
+				}
+				f, err := s.fileOf(o, true)
+				if err != nil {
+					return nil, err
+				}
+				changes, withdrawn = append(changes, f), withdrawn+1
+				continue
+			}
+			a := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: held[p].Namespace, Name: held[p].Name}}
+			if exists, err := decode(b, ok, a); err != nil || !exists || !slices.Contains(a.Spec.Sites, name) {
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+			if a.Spec.Primary == name || a.Spec.Handover != nil && a.Spec.Handover.From == name {
+				return nil, fail(409, "%s/%s is served from %s: move its primary first", a.Namespace, a.Name, name)
+			}
+			a.Spec.Sites = slices.DeleteFunc(slices.Clone(a.Spec.Sites), func(x string) bool { return x == name })
+			delete(a.Spec.Archive, name)
+			if a.Spec.Database != "" && !a.Spec.Deleted {
+				rekey[a.Namespace] = true
+			}
+			f, err := s.fileOf(a, false)
+			if err != nil {
+				return nil, err
+			}
+			changes, standbys = append(changes, f), standbys+1
+		}
+		revoked := []warden.Revoked{}
+		for _, box := range site.Spec.Boxes {
+			for _, c := range box.Certs {
+				revoked = append(revoked, warden.Revoked{Fingerprint: c.Fingerprint, Until: c.NotAfter.Time})
+			}
+		}
+		cm.Data["blocklist"], blocked = blocklistWith(cm.Data["blocklist"], revoked)
+		fs, err := settingsFile(cm)
+		if err != nil {
+			return nil, err
+		}
+		gone, err := s.fileOf(site, true)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, fs, gone)
+		for _, p := range []string{siteKey, siteSecret} {
+			if _, ok := snap.Get(p); ok {
+				changes = append(changes, fabric.FileChange{Path: p})
+			}
+		}
+		k, err := secretsKustomizationWithout(snap, path.Base(siteSecret))
+		return append(changes, k), err
+	})
+	if err != nil {
+		answer(w, err, 502)
+		return
+	}
+	rotated, failed := []string{}, map[string]string{}
+	for _, p := range slices.Sorted(maps.Keys(rekey)) {
+		if _, err := s.rotate(r, p); err != nil {
+			failed[p] = err.Error()
+		} else {
+			rotated = append(rotated, p)
+		}
+	}
+	writeJSON(w, map[string]any{"ok": true, "blocklisted": blocked, "standbys": standbys, "offers": withdrawn, "rotated": rotated, "notRotated": failed})
 }
 
 // fingerprintRe is a Nebula certificate fingerprint: the hex of a SHA-256.

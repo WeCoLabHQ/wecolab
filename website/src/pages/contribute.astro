@@ -1,0 +1,408 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { url } from "../lib/paths";
+---
+
+<Layout
+  title="Contribute to WeCoLab"
+  description="Help build a cooperative cloud for people who trust one another with their apps and spare capacity."
+>
+  <div class="container contribute-page">
+    <header class="page-intro contribute-hero">
+      <div>
+        <p class="eyebrow">Come build this with us</p>
+        <h1>Good infrastructure starts with people showing up.</h1>
+      </div>
+      <div class="hero-note">
+        <span class="note-label">A note from the workbench</span>
+        <p>
+          We want the person offering a box, and the person trusting it with an
+          app, to understand what happens next. That takes more than code. It
+          takes patient docs, awkward failure drills, and people willing to ask
+          the obvious question nobody else has asked yet.
+        </p>
+        <a class="text-link" href="https://github.com/WeCoLabHQ/wecolab">
+          Browse the source <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </header>
+
+    <section class="intro" aria-labelledby="where-title">
+      <div class="section-label">01 / Where to begin</div>
+      <div>
+        <h2 id="where-title">You do not need to start with a controller.</h2>
+        <p>
+          The project is a Git-backed fabric across sites, with a Go Warden and
+          Console, a shell installer, and a Swift app for contributing a Mac.
+          There is useful work at every edge where a person meets those pieces.
+        </p>
+      </div>
+    </section>
+
+    <section class="lanes" aria-label="Ways to contribute">
+      <article class="lane">
+        <span class="lane-number">01</span>
+        <div class="lane-copy">
+          <h3>Make the first hour kinder.</h3>
+          <p>
+            Try the <a href={url("docs/install/")}>install path</a> or the local
+            development fabric with fresh eyes. Where does someone have to infer
+            what a site, steward or writer means? Improve onboarding language,
+            error explanations, diagrams, and the steps that lead from an empty
+            box to a first app.
+          </p>
+        </div>
+        <span class="lane-kind">Onboarding / Docs</span>
+      </article>
+      <article class="lane">
+        <span class="lane-number">02</span>
+        <div class="lane-copy">
+          <h3>Understand the idle Mac.</h3>
+          <p>
+            The <a href={url("docs/mac/")}>Mac node</a> runs a Debian VM and
+            joins its owner's site over Nebula. It reserves a baseline of
+            resources, allows more when idle, and makes room again when the
+            person returns. Work on its join and reset experience, resource
+            reporting, or the awkward transitions between active, idle, sleep
+            and disconnect. Idle capacity is not a place for a database.
+          </p>
+        </div>
+        <span class="lane-kind">Swift / Lifecycle</span>
+      </article>
+      <article class="lane">
+        <span class="lane-number">03</span>
+        <div class="lane-copy">
+          <h3>Rehearse the bad day.</h3>
+          <p>
+            Walk through a planned move, a lost site, a stale Git copy, or a
+            database restore. Record what the operator sees, what must be
+            decided by a person, and where the{" "}
+            <a href={url("docs/operations/")}>operations guide</a> needs a
+            clearer path. A forced move can lose writes not yet archived. Some
+            recovery paths described in the docs are still unfinished, so a
+            reproducible drill is especially useful.
+          </p>
+        </div>
+        <span class="lane-kind">Recovery / Operations</span>
+      </article>
+      <article class="lane">
+        <span class="lane-number">04</span>
+        <div class="lane-copy">
+          <h3>Bring an app people actually run.</h3>
+          <p>
+            Try a small service, then write down its ports, data paths, secrets,
+            upgrade steps and limits. App recipes and integrations are better
+            when they come from someone who had to live with the app after
+            deployment. The <a href={url("docs/console/")}>Console guide</a> is
+            a useful starting point.
+          </p>
+        </div>
+        <span class="lane-kind">Apps / Integrations</span>
+      </article>
+      <article class="lane">
+        <span class="lane-number">05</span>
+        <div class="lane-copy">
+          <h3>Work close to the machinery.</h3>
+          <p>
+            The Go code reconciles site and app state from Git, handles roles
+            and moves, and refuses destructive steps without evidence. The Swift
+            code owns the Mac VM and its host-guest boundary. If either is your
+            kind of work, start with a behavior you can explain and reproduce
+            rather than a sweeping rewrite. The{" "}
+            <a href={url("docs/security/")}>security model</a> is worth reading
+            before changing a trust boundary.
+          </p>
+        </div>
+        <span class="lane-kind">Go / Swift</span>
+      </article>
+    </section>
+
+    <section class="start" aria-labelledby="start-title">
+      <div class="section-label">02 / Run it on your machine</div>
+      <div class="start-main">
+        <h2 id="start-title">A whole fabric, on one laptop.</h2>
+        <p>
+          The <a href={url("docs/development/")}>development guide</a> describes
+          the code, tests and a Docker-based fabric: a public site, a home site
+          behind a simulated NAT, a laptop node and an object-storage vault. It
+          needs about 15 GB free in Docker's disk. The same installer runs
+          inside those containers as on real boxes, with documented
+          substitutions for things a laptop cannot provide.
+        </p>
+        <div
+          class="command-block"
+          aria-label="Commands from the development guide"
+        >
+          <div class="command-head">
+            <span>From the repository root</span>
+            <span>docs/development.md</span>
+          </div>
+          <pre><code>make dev-up
+make dev-test
+make dev-down</code></pre>
+        </div>
+        <p class="command-caption">
+          These are the guide's setup, end-to-end check and teardown commands.
+          Read it first for the environment, what the checks cover, and how to
+          reload code at each site while developing.
+        </p>
+      </div>
+    </section>
+
+    <section class="closing" aria-labelledby="next-title">
+      <div>
+        <p class="eyebrow">A good next step</p>
+        <h2 id="next-title">Bring a question. Bring a rough edge.</h2>
+        <p>
+          Read the source, look through the issues, and describe what you tried
+          and what happened. A small, careful contribution that makes the next
+          person's day easier belongs here.
+        </p>
+        <div class="actions">
+          <a class="button" href="https://github.com/WeCoLabHQ/wecolab/issues">
+            Explore issues <span aria-hidden="true">↗</span>
+          </a>
+          <a
+            class="button button-secondary"
+            href="https://github.com/WeCoLabHQ/wecolab"
+          >
+            View repository <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </div>
+      <aside class="license-note">
+        <span class="note-label">Built in the open</span>
+        <p>
+          WeCoLab is released under the{" "}
+          <a href="https://github.com/WeCoLabHQ/wecolab/blob/main/LICENSE">
+            GNU Affero General Public License v3.0
+          </a>
+          . You can study and change the code. If you run a modified version for
+          other people, the license requires you to offer them its source.
+        </p>
+      </aside>
+    </section>
+  </div>
+</Layout>
+
+<style>
+  .contribute-page {
+    padding-bottom: 6rem;
+  }
+  .contribute-hero {
+    padding: clamp(4.5rem, 9vw, 9rem) 0 5rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(270px, 0.7fr);
+    gap: clamp(2rem, 7vw, 8rem);
+    align-items: end;
+    border-bottom: 1px solid var(--ink);
+  }
+  .contribute-hero h1 {
+    max-width: 900px;
+    margin: 1rem 0 0;
+    font-size: clamp(3.4rem, 7.3vw, 7.2rem);
+    line-height: 0.99;
+    letter-spacing: -0.065em;
+    font-weight: 500;
+    text-wrap: balance;
+  }
+  .hero-note {
+    border-top: 3px solid var(--accent);
+    padding-top: 1.25rem;
+  }
+  .note-label,
+  .section-label,
+  .lane-number,
+  .lane-kind,
+  .command-head {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.76rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .note-label {
+    color: var(--accent);
+  }
+  .hero-note p {
+    font-size: 1.12rem;
+    line-height: 1.7;
+    margin: 1.2rem 0;
+  }
+  .intro,
+  .start {
+    display: grid;
+    grid-template-columns: minmax(165px, 25%) minmax(0, 1fr);
+    gap: 2rem;
+    padding: 4.5rem 0;
+  }
+  .section-label {
+    color: var(--accent);
+    padding-top: 0.65rem;
+  }
+  .intro h2,
+  .start h2,
+  .closing h2 {
+    font-size: clamp(2.4rem, 4vw, 4.2rem);
+    font-weight: 500;
+    line-height: 1.08;
+    letter-spacing: -0.05em;
+    margin: 0 0 1.5rem;
+    text-wrap: balance;
+  }
+  .intro p,
+  .start-main > p {
+    max-width: 760px;
+    font-size: 1.08rem;
+    line-height: 1.74;
+  }
+  .contribute-page a:not(.button):not(.button-secondary) {
+    color: var(--accent);
+    text-underline-offset: 0.2em;
+    text-decoration-thickness: 1px;
+  }
+  .lanes {
+    border-top: 1px solid var(--ink);
+  }
+  .lane {
+    display: grid;
+    grid-template-columns: minmax(58px, 12%) minmax(0, 1fr) minmax(125px, 19%);
+    gap: 1.2rem;
+    padding: 2.2rem 0 2.5rem;
+    border-bottom: 1px solid var(--line);
+    align-items: start;
+  }
+  .lane-number {
+    color: var(--accent);
+    padding-top: 0.5rem;
+  }
+  .lane h3 {
+    font-size: clamp(1.6rem, 2.8vw, 2.5rem);
+    line-height: 1.18;
+    font-weight: 500;
+    letter-spacing: -0.04em;
+    margin: 0 0 0.75rem;
+  }
+  .lane p {
+    max-width: 690px;
+    margin: 0;
+    line-height: 1.72;
+  }
+  .lane-kind {
+    justify-self: end;
+    color: var(--muted);
+    padding-top: 0.5rem;
+    text-align: right;
+  }
+  .start {
+    border-bottom: 1px solid var(--ink);
+  }
+  .command-block {
+    max-width: 760px;
+    background: var(--ink);
+    color: #e7ede5;
+    margin: 2.2rem 0 1rem;
+  }
+  .command-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.4rem;
+    color: #a8c9be;
+    border-bottom: 1px solid #48605b;
+  }
+  pre {
+    margin: 0;
+    padding: 1.25rem 1.4rem 1.55rem;
+    overflow-x: auto;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: clamp(0.93rem, 1.3vw, 1.05rem);
+    line-height: 1.95;
+  }
+  pre code {
+    font: inherit;
+  }
+  .start-main .command-caption {
+    font-size: 0.92rem;
+    color: var(--muted);
+  }
+  .closing {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 300px);
+    gap: clamp(2rem, 7vw, 7rem);
+    padding-top: 4.5rem;
+    align-items: end;
+  }
+  .closing h2 {
+    max-width: 720px;
+  }
+  .closing p:not(.eyebrow) {
+    max-width: 650px;
+    line-height: 1.7;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.85rem;
+    margin-top: 2rem;
+  }
+  .license-note {
+    padding: 1.5rem;
+    border: 1px solid var(--line);
+  }
+  .license-note p {
+    margin-bottom: 0;
+    font-size: 0.94rem;
+  }
+  @media (max-width: 800px) {
+    .contribute-hero {
+      grid-template-columns: 1fr;
+      padding-top: 4rem;
+    }
+    .hero-note {
+      max-width: 610px;
+    }
+    .intro,
+    .start {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+      padding: 3.5rem 0;
+    }
+    .section-label {
+      padding-top: 0;
+    }
+    .lane {
+      grid-template-columns: 45px 1fr;
+    }
+    .lane-kind {
+      grid-column: 2;
+      justify-self: start;
+      text-align: left;
+      padding: 0.2rem 0 0;
+    }
+    .closing {
+      grid-template-columns: 1fr;
+    }
+    .license-note {
+      max-width: 500px;
+    }
+  }
+  @media (max-width: 500px) {
+    .contribute-hero h1 {
+      font-size: clamp(3.1rem, 12.5vw, 4.5rem);
+    }
+    .lane {
+      grid-template-columns: 1fr;
+      gap: 0.4rem;
+    }
+    .lane-number,
+    .lane-kind {
+      grid-column: 1;
+    }
+    .lane-kind {
+      padding-top: 0.4rem;
+    }
+    .command-head {
+      flex-wrap: wrap;
+    }
+  }
+</style>

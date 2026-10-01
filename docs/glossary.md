@@ -13,7 +13,8 @@ RPO. For those the last column says *upstream*.
 
 | Term | What it is | Kubernetes / standard equivalent |
 |---|---|---|
-| WeCoLab | A cooperative cloud built from friends' homelabs. An app runs at one site, keeps a standby at a friend's site, and backs up its database to object storage under Object Lock. | A GitOps multi-cluster platform |
+| WeCoLab | A cooperative cloud built from collaborators' homelabs. An app runs at one site, keeps a standby at a collaborator's site, and backs up its database to object storage under Object Lock. | A GitOps multi-cluster platform |
+| Collaborator | Anyone who runs a site or uses the fabric with you: a friend, a colleague, a neighbour, an organisation. Trust comes from roles (a steward, an admin, a project member), never from the relationship, and a collaborator's site can be removed in one step (operations.md, When a collaborator leaves). | None; a tenant or a federation member |
 | fabric (lowercase) | The whole cooperative: every site, person, app and key that belong together. Running `install.sh` without an invite makes a new one. | A fleet of clusters |
 | the Fabric (capitalised) | The Git repository holding the fabric's whole desired state: sites, people, projects, apps, encrypted secrets and the platform's manifests. Every site keeps a full copy in its own Forgejo, and Flux applies that local copy. | A GitOps repository (a Flux GitRepository source), copied to every site by Forgejo push mirrors |
 | Site | One member's homelab: one k3s cluster, owned by one project. Recorded in the Fabric as a Site object that lists its boxes. | A Kubernetes cluster (k3s); the cluster-scoped CRD `sites.wecolab.io` |

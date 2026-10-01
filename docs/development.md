@@ -20,6 +20,7 @@ install.sh             every box: with no argument it creates a fabric (or conve
 cmd/console/join.sh    a copy of install.sh the Console serves and embeds (make join keeps it equal)
 hack/dev/              the development fabric
 mac/                   WeCoLab for Mac; it embeds install.sh
+website/               the public-facing Astro site and searchable source documentation
 ```
 
 ## Build and test
@@ -46,6 +47,33 @@ Contract tests hold the layers together: every `fetch` in the Console's page nam
 k3s and sync functions are run in bash against stubs (`cmd/console/join_test.go`); the Door's configuration
 is generated from hostile names (`internal/warden/entrance_test.go`); the Console's handlers run against an
 in-memory Forgejo that refuses stale hashes like the real one (`cmd/console/fabric_test.go`).
+
+## The website
+
+The Astro site lives in `website/`. It renders the root README, the guides in `docs/` and
+`mac/README.md` directly from this checkout. Pagefind indexes the rendered documentation during the
+production build; there is no second copy of the guides to maintain.
+
+Use Node.js 22.12 or newer (the website CI uses Node.js 24):
+
+```bash
+cd website
+npm ci
+npm run build
+npm run preview
+```
+
+The preview listens on port 4321 on all interfaces, so other devices on the same LAN can view it.
+For local-only access, use `npx astro preview --host 127.0.0.1 --port 4321`. `npm run dev` runs the
+local-only development server; use the production build and preview to exercise documentation search.
+
+`BASE_PATH=/wecolab npm run build` builds for a project subpath. `WECOLAB_REPO_PATH` can point at a
+different source checkout; it defaults to the parent of `website/`. Generated `dist/`, `.astro/` and
+`node_modules/` directories are ignored.
+
+The Website build workflow checks both root and project-subpath builds when the site or its source
+documentation changes. It does not deploy or enable GitHub Pages; public publishing still goes through
+the gate described below.
 
 ## The catalog
 

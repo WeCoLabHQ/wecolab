@@ -11,6 +11,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"wecolab.io/wecolab/api/v1alpha1"
@@ -129,7 +130,46 @@ func (r *SiteReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Re
 			}
 		}
 	}
-	return ctrl.Result{RequeueAfter: r.Resync}, nil
+	return ctrl.Result{RequeueAfter: r.Resync}, r.forgetNodes(ctx, site, time.Now())
+}
+
+// nodeGrace is how long a node of a box the Fabric no longer lists must have been unready before it is
+// deleted.
+const nodeGrace = 10 * time.Minute
+
+// forgetNodes deletes the Kubernetes nodes of boxes this site's copy of the Fabric no longer lists, once
+// they have been unready for nodeGrace: a removed box is blocklisted off the mesh, so it stops answering,
+// and there is nothing left to drain (its pods go with the node). A joining box answers, and a box that
+// is only down is still listed, so neither is touched; nor is anything while the Site names no manager.
+func (r *SiteReconciler) forgetNodes(ctx context.Context, site *v1alpha1.Site, now time.Time) error {
+	if site.Manager() == nil {
+		return nil
+	}
+	nodes := &corev1.NodeList{}
+	if err := r.List(ctx, nodes); err != nil {
+		return err
+	}
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		if _, box := Find([]v1alpha1.Site{*site}, n.Name); box != nil || !unready(n, now) {
+			continue
+		}
+		log.FromContext(ctx).Info("deleting the node of a box the Fabric no longer lists", "node", n.Name)
+		if err := client.IgnoreNotFound(r.Delete(ctx, n)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unready says a node has not been Ready for nodeGrace (a node that never reported counts from its creation).
+func unready(n *corev1.Node, now time.Time) bool {
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status != corev1.ConditionTrue && now.Sub(c.LastTransitionTime.Time) >= nodeGrace
+		}
+	}
+	return now.Sub(n.CreationTimestamp.Time) >= nodeGrace
 }
 
 func (r *SiteReconciler) SetupWithManager(mgr ctrl.Manager) error {

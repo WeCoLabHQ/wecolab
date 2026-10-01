@@ -1,0 +1,144 @@
+---
+import Layout from "./Layout.astro";
+import {
+  docs,
+  groups,
+  docHref,
+  rawHref,
+  githubHref,
+  type Doc,
+  type Heading,
+} from "../lib/docs";
+import { url } from "../lib/paths";
+import "../styles/docs.css";
+
+interface Props {
+  doc: Doc;
+  html: string;
+  headings: Heading[];
+}
+const { doc, html, headings } = Astro.props;
+const position = docs.findIndex((item) => item.slug === doc.slug);
+const previous = docs[position - 1];
+const next = docs[position + 1];
+---
+
+<Layout
+  title={`${doc.title} | WeCoLab documentation`}
+  description={doc.summary}
+>
+  <div class="docs-shell container">
+    <aside class="docs-nav" aria-label="Documentation navigation">
+      <details class="docs-mobile-nav">
+        <summary>Browse documentation</summary>
+        <div class="docs-mobile-nav-content">
+          <a href={url("docs/")}>Documentation home</a>
+          {groups.map((group) => (
+            <div class="docs-nav-group">
+              <p>{group}</p>
+              {docs
+                .filter((item) => item.group === group)
+                .map((item) => (
+                  <a
+                    href={docHref(item)}
+                    aria-current={item.slug === doc.slug ? "page" : undefined}
+                  >
+                    {item.title}
+                  </a>
+                ))}
+            </div>
+          ))}
+        </div>
+      </details>
+      <div class="docs-desktop-nav">
+        <a class="docs-nav-home" href={url("docs/")}>
+          Documentation <span aria-hidden="true">↗</span>
+        </a>
+        {groups.map((group) => (
+          <div class="docs-nav-group">
+            <p>{group}</p>
+            {docs
+              .filter((item) => item.group === group)
+              .map((item) => (
+                <a
+                  href={docHref(item)}
+                  aria-current={item.slug === doc.slug ? "page" : undefined}
+                >
+                  {item.title}
+                </a>
+              ))}
+          </div>
+        ))}
+        <a class="docs-nav-search" href={url("docs/search/")}>
+          Search documentation <span aria-hidden="true">⌕</span>
+        </a>
+      </div>
+    </aside>
+    <div class="docs-content">
+      <div class="docs-breadcrumb">
+        <a href={url("docs/")}>Docs</a>
+        <span aria-hidden="true">/</span>
+        <span>{doc.title}</span>
+      </div>
+      <article data-pagefind-body class="docs-article">
+        <header class="docs-article-header">
+          <p class="eyebrow">
+            {doc.group} / {doc.historical ? "Archive" : "Reference"}
+          </p>
+          <h1 data-pagefind-meta="title">{doc.title}</h1>
+          <p>{doc.summary}</p>
+          {doc.historical && (
+            <div class="docs-historical">
+              Historical planning document, dated September 29, 2026. Read it as
+              a record of proposed work, not as a description of the current
+              implementation.
+            </div>
+          )}
+        </header>
+        <div class="prose docs-prose" set:html={html} />
+        <footer class="docs-source">
+          <p>
+            From <code>{doc.source}</code> in the{" "}
+            <a href={githubHref(doc.source)}>WeCoLab source repository</a>.
+            These are development docs, not a service-level agreement. Check the
+            source and your installation before relying on operational details.
+          </p>
+          <a href={rawHref(doc)} download={doc.source.split("/").pop()}>
+            Download original Markdown ↓
+          </a>
+        </footer>
+      </article>
+      <nav class="docs-pagination" aria-label="Adjacent documents">
+        {previous ? (
+          <a href={docHref(previous)}>
+            <span>← Previous</span>
+            <strong>{previous.title}</strong>
+          </a>
+        ) : (
+          <span />
+        )}
+        {next ? (
+          <a href={docHref(next)}>
+            <span>Next →</span>
+            <strong>{next.title}</strong>
+          </a>
+        ) : (
+          <span />
+        )}
+      </nav>
+    </div>
+    <aside class="docs-toc" aria-label="On this page">
+      <p>On this page</p>
+      <ol>
+        {headings.map((heading) => (
+          <li class:list={{ "docs-toc-sub": heading.depth === 3 }}>
+            <a href={`#${heading.id}`}>{heading.title}</a>
+          </li>
+        ))}
+      </ol>
+      <a class="docs-toc-top" href="#main">
+        Back to top ↑
+      </a>
+    </aside>
+  </div>
+</Layout>

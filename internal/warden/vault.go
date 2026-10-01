@@ -94,11 +94,16 @@ func doJSON(req *http.Request, out any) error {
 // reaches only that bucket.
 type Vault struct{ KeyID, Key, Bucket, Endpoint string }
 
-// CreateVault makes a project's vault on B2 with an account key: a private bucket
-// with Object Lock and a 30-day compliance default retention, and a key restricted
-// to it. The account key needs listBuckets, writeBuckets, writeBucketRetentions,
-// listKeys and writeKeys; it is used once and never stored with the project.
-func CreateVault(ctx context.Context, accountKeyID, accountKey, bucket string) (Vault, error) {
+// b2API is Backblaze B2's native API; tests point it elsewhere.
+var b2API = "https://api.backblazeb2.com"
+
+// b2 is a signed-in B2 session of an account key.
+type b2 struct {
+	account, token, api, s3 string
+	ctx                     context.Context
+}
+
+func b2Login(ctx context.Context, keyID, key string) (*b2, error) {
 	var auth struct {
 		AccountID string `json:"accountId"`
 		Token     string `json:"authorizationToken"`
@@ -109,37 +114,90 @@ func CreateVault(ctx context.Context, accountKeyID, accountKey, bucket string) (
 			} `json:"storageApi"`
 		} `json:"apiInfo"`
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.backblazeb2.com/b2api/v3/b2_authorize_account", nil)
-	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(accountKeyID+":"+accountKey)))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, b2API+"/b2api/v3/b2_authorize_account", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(keyID+":"+key)))
 	if err := doJSON(req, &auth); err != nil {
-		return Vault{}, fmt.Errorf("b2 authorize: %w", err)
+		return nil, fmt.Errorf("b2 authorize: %w", err)
 	}
-	api := auth.APIInfo.StorageAPI.APIURL + "/b2api/v3/"
-	call := func(name string, body any, out any) error {
-		b, _ := json.Marshal(body)
-		r, _ := http.NewRequestWithContext(ctx, http.MethodPost, api+name, strings.NewReader(string(b)))
-		r.Header.Set("Authorization", auth.Token)
-		return doJSON(r, out)
+	return &b2{account: auth.AccountID, token: auth.Token, api: auth.APIInfo.StorageAPI.APIURL + "/b2api/v3/", s3: auth.APIInfo.StorageAPI.S3APIURL, ctx: ctx}, nil
+}
+
+func (b *b2) call(name string, body map[string]any, out any) error {
+	if _, ok := body["accountId"]; !ok && name != "b2_delete_key" {
+		body["accountId"] = b.account
 	}
-	var bk struct {
-		ID string `json:"bucketId"`
+	j, _ := json.Marshal(body)
+	r, _ := http.NewRequestWithContext(b.ctx, http.MethodPost, b.api+name, strings.NewReader(string(j)))
+	r.Header.Set("Authorization", b.token)
+	if err := doJSON(r, out); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	if err := call("b2_create_bucket", map[string]any{"accountId": auth.AccountID, "bucketName": bucket, "bucketType": "allPrivate", "fileLockEnabled": true}, &bk); err != nil {
-		return Vault{}, fmt.Errorf("b2 create bucket: %w", err)
-	}
-	if err := call("b2_update_bucket", map[string]any{"accountId": auth.AccountID, "bucketId": bk.ID,
-		"defaultRetention": map[string]any{"mode": "compliance", "period": map[string]any{"duration": 30, "unit": "days"}}}, &struct{}{}); err != nil {
-		return Vault{}, fmt.Errorf("b2 object lock: %w", err)
-	}
+	return nil
+}
+
+// vaultKey makes a key that reaches only the bucket: what a project's databases archive with.
+func (b *b2) vaultKey(bucket, bucketID string) (Vault, error) {
 	var k struct {
 		KeyID string `json:"applicationKeyId"`
 		Key   string `json:"applicationKey"`
 	}
 	caps := []string{"listBuckets", "listFiles", "readFiles", "writeFiles", "deleteFiles", "readBucketRetentions", "readFileRetentions", "writeFileRetentions"}
-	if err := call("b2_create_key", map[string]any{"accountId": auth.AccountID, "capabilities": caps, "keyName": bucket, "bucketId": bk.ID}, &k); err != nil {
-		return Vault{}, fmt.Errorf("b2 create key: %w", err)
+	if err := b.call("b2_create_key", map[string]any{"capabilities": caps, "keyName": bucket, "bucketId": bucketID}, &k); err != nil {
+		return Vault{}, err
 	}
-	return Vault{KeyID: k.KeyID, Key: k.Key, Bucket: bucket, Endpoint: auth.APIInfo.StorageAPI.S3APIURL}, nil
+	return Vault{KeyID: k.KeyID, Key: k.Key, Bucket: bucket, Endpoint: b.s3}, nil
+}
+
+// CreateVault makes a project's vault on B2 with an account key: a private bucket
+// with Object Lock and a 30-day compliance default retention, and a key restricted
+// to it. The account key needs listBuckets, writeBuckets, writeBucketRetentions,
+// listKeys and writeKeys (deleteKeys to rotate); it is used once and never stored with the project.
+func CreateVault(ctx context.Context, accountKeyID, accountKey, bucket string) (Vault, error) {
+	b, err := b2Login(ctx, accountKeyID, accountKey)
+	if err != nil {
+		return Vault{}, err
+	}
+	var bk struct {
+		ID string `json:"bucketId"`
+	}
+	if err := b.call("b2_create_bucket", map[string]any{"bucketName": bucket, "bucketType": "allPrivate", "fileLockEnabled": true}, &bk); err != nil {
+		return Vault{}, err
+	}
+	if err := b.call("b2_update_bucket", map[string]any{"bucketId": bk.ID,
+		"defaultRetention": map[string]any{"mode": "compliance", "period": map[string]any{"duration": 30, "unit": "days"}}}, &struct{}{}); err != nil {
+		return Vault{}, err
+	}
+	return b.vaultKey(bucket, bk.ID)
+}
+
+// NewVaultKey makes another key for a vault the account key's account holds. The old one keeps working
+// until DeleteVaultKey: every site must have the new one first.
+func NewVaultKey(ctx context.Context, accountKeyID, accountKey, bucket string) (Vault, error) {
+	b, err := b2Login(ctx, accountKeyID, accountKey)
+	if err != nil {
+		return Vault{}, err
+	}
+	var list struct {
+		Buckets []struct {
+			ID string `json:"bucketId"`
+		} `json:"buckets"`
+	}
+	if err := b.call("b2_list_buckets", map[string]any{"bucketName": bucket}, &list); err != nil {
+		return Vault{}, err
+	}
+	if len(list.Buckets) != 1 {
+		return Vault{}, fmt.Errorf("the account key's account has no bucket %s: rotate its key where the bucket is", bucket)
+	}
+	return b.vaultKey(bucket, list.Buckets[0].ID)
+}
+
+// DeleteVaultKey deletes a key at B2: whoever still holds a copy can no longer reach the vault.
+func DeleteVaultKey(ctx context.Context, accountKeyID, accountKey, keyID string) error {
+	b, err := b2Login(ctx, accountKeyID, accountKey)
+	if err != nil {
+		return err
+	}
+	return b.call("b2_delete_key", map[string]any{"applicationKeyId": keyID}, &struct{}{})
 }
 
 // VaultName is a bucket name for a project: globally unique, 6 to 63 characters of

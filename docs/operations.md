@@ -94,13 +94,47 @@ address, not by join order, so check which one is `ns2` first (install.md, Optio
 **Remove a box.** Sites → the site → the box → Remove. The box leaves the Fabric, and the same commit puts
 the certificates it joined with on the fabric's blocklist; the writer's revocation loop adds every renewal
 a steward signed for it. Every box drops them at its next sync, within the hour, and no steward renews the
-box again. Its address is never given to another box. A site's manager cannot be removed this way: it
-leaves with its site. *Not built yet: deleting its Kubernetes node.* Drain and delete it at the site
-(`kubectl drain`, `kubectl delete node`).
+box again. Its address is never given to another box. Its site's Warden deletes its Kubernetes node once
+the site's copy of the Fabric no longer lists the box; a node younger than ten minutes is left alone, so a
+box joining right now is never mistaken for one that left. A site's manager cannot be removed this way: it
+leaves with its site.
 
-**Remove a site.** *Not built yet.* Move every app's primary away first. Sites → the site → Remove
-removes its boxes as above, its key from `keys/` and its place from every app; the writer re-encrypts
-what it could read.
+**Remove a site.** Sites → the site → Remove site (admins). It is refused for the writer, for a steward
+(Stop being a steward first: that commit re-encrypts the fabric's secrets without it), for the site that
+runs NetBird, and while the site is any app's primary or part of a move in progress (move those apps
+first). Otherwise one commit:
+
+- removes the site, its age key (`keys/<site>.age.pub`) and its secret (its k3s tokens and mirror
+  password), so nothing encrypted afterwards is readable there;
+- takes the site off every app it held a standby for, and drops the offers it made;
+- puts the certificates of all its boxes on the blocklist.
+
+From there the writer stops pushing the Fabric to it, the Door and Names stop naming it, and every box
+drops its certificates at its next sync, within the hour: the site is off the mesh and receives nothing
+more. Then the Console rotates the vault key of every project whose database apps had a standby there
+(Storage, below), since each of those apps' Secrets carried a copy of it. What the site already holds
+stays there: its copy of the Fabric up to that commit, its databases and volumes, and anything it could
+decrypt. Nothing in WeCoLab can reach into a site that has left.
+
+**Rotate a vault key.** Storage → the vault → Rotate key. The Console makes a new key restricted to the
+bucket with the account key in Settings, writes it into the project's vault and every database app's
+Secret, then deletes the old key at B2. Archiving and restores retry until each site has the new key,
+within a minute or two, so nothing is lost. Vaults entered by hand are rotated by hand, at the storage
+provider.
+
+**When a collaborator leaves.** Everything above, in order, as the fabric's admin:
+
+1. Apps whose primary is at their site: move each to one of yours (Apps). With the site unreachable,
+   Force it; the old primary's copy is not waited for.
+2. If their site is a steward, Stop being a steward. The fabric's Nebula CA, every site's k3s tokens,
+   NetBird's service token and the storage account key were readable there. *Not built yet: rotating
+   the CA and the tokens.* Rotate the storage account key at Backblaze now, and enter the new one in
+   Settings. A fabric whose steward left on bad terms is safest rebuilt.
+3. Remove their site (above). Their boxes are off the mesh within the hour.
+4. Remove each of their people (Members → Remove): Console access, bindings at every site, SSH keys
+   and their devices on the people mesh go.
+5. Their projects' apps on your sites are yours to keep or Delete (Apps); withdraw any offers you made
+   them (Sites → Offers).
 
 **Remove WeCoLab from a box.** Run the install script with `uninstall` on the box:
 
@@ -118,10 +152,10 @@ install (such as `jq`) are listed and left, since other software may use them by
 the Console as well, so its certificate is blocked.
 
 **A box was off too long.** A box whose certificate expired cannot rejoin by itself. Remove it in the
-Console and delete its Kubernetes node at the site (Remove a box, above), run the install script with
-`uninstall` on it (this deletes what k3s held on that box: its volumes and databases), then join it again
-with a new invite. k3s refuses a box that rejoins under the name of a node it still has. A site's manager
-cannot be re-added this way.
+Console and wait for its site's Warden to delete its node (Remove a box, above; k3s refuses a box that
+rejoins under the name of a node it still has), run the install script with `uninstall` on it (this
+deletes what k3s held on that box: its volumes and databases), then join it again with a new invite. A
+site's manager cannot be re-added this way.
 
 ## The writer
 

@@ -1,0 +1,57 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import { docs, groups, docHref } from "../../lib/docs";
+import { url } from "../../lib/paths";
+import "../../styles/docs.css";
+---
+
+<Layout
+  title="Documentation | WeCoLab"
+  description="Read the WeCoLab source documentation for installation, architecture, operations, and development."
+>
+  <div class="docs-landing container">
+    <header class="docs-landing-hero">
+      <p class="eyebrow">Documentation / source-backed</p>
+      <h1>Find your way through the fabric.</h1>
+      <p>
+        These pages render the Markdown in the WeCoLab repository. Start with a
+        public Linux site and a delegated DNS zone, or use the sections below to
+        find a specific system or operation.
+      </p>
+      <div class="docs-landing-actions">
+        <a class="button" href={url("docs/get-started/")}>
+          Get started <span aria-hidden="true">↗</span>
+        </a>
+        <a class="button button-secondary" href={url("docs/search/")}>
+          Search the docs <span aria-hidden="true">⌕</span>
+        </a>
+      </div>
+    </header>
+    <div class="docs-index-groups">
+      {groups.map((group) => (
+        <section aria-label={group}>
+          <h2>{group}</h2>
+          <div class="docs-index-grid">
+            {docs
+              .filter((doc) => doc.group === group)
+              .map((doc) => (
+                <a class="docs-index-card" href={docHref(doc)}>
+                  <span class="docs-index-card-top">
+                    {doc.historical ? "Historical plan" : doc.source}
+                    <span aria-hidden="true">↗</span>
+                  </span>
+                  <strong>{doc.title}</strong>
+                  <span>{doc.summary}</span>
+                </a>
+              ))}
+          </div>
+        </section>
+      ))}
+    </div>
+    <p class="docs-index-footnote">
+      The dated hardening plan is historical planning material. Source
+      documentation records the project and may change; it is not a
+      service-level agreement.
+    </p>
+  </div>
+</Layout>

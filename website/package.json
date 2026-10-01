@@ -1,0 +1,22 @@
+{
+  "name": "wecolab-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev --host 127.0.0.1",
+    "build": "astro build && pagefind --site dist",
+    "preview": "astro preview --host 0.0.0.0 --port 4321"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "5.2.7",
+    "@fontsource/ibm-plex-sans": "5.2.8",
+    "astro": "7.3.5",
+    "markdown-it": "14.1.0",
+    "markdown-it-anchor": "9.2.0",
+    "pagefind": "1.5.2"
+  },
+  "devDependencies": {
+    "prettier": "3.9.9",
+    "prettier-plugin-astro": "1.1.0"
+  }
+}

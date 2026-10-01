@@ -112,7 +112,7 @@ k3s's default pod and service ranges.
 ## 11. Stewards hold the fabric; other sites hold only what runs on them
 
 A site is a steward when the fabric's admins trust it with the fabric: the Nebula CA, the fabric's
-service tokens, every app's secrets, and the right to become the writer. A friend's site that only contributes capacity
+service tokens, every app's secrets, and the right to become the writer. A collaborator's site that only contributes capacity
 is not a steward: it decrypts only the secrets of the apps placed on it.
 
 - **Why:** a person contributing a box should not be able to read every project's secrets. Two stewards
@@ -143,7 +143,7 @@ site's boxes with a port in 30000-32767; a writer claim counts only from a stewa
 everything else is shown, never acted on. Database roles come from the App's spec (decision 2).
 
 - **Why:** the first WeCoLab had one trusted hub, so whatever it published was believed. Here every site is
-  a peer, and a friend's site is trusted with capacity, not with the fabric. Code carried over from the hub
+  a peer, and a collaborator's site is trusted with capacity, not with the fabric. Code carried over from the hub
   believed peers' reports: any site of an app that claimed to be active drew the app's users to its own
   boxes, and a site with no status took `spec.primary` and promoted an empty database.
 
@@ -290,6 +290,18 @@ is a public identity.
   trust; rewriting a whole history before each publish is not.
 - **Revisit:** when outside contributors need the real history to work from, publish it after one
   rewrite and move development to the public repository.
+
+## 25. A site leaves by one commit; what it held is not taken back
+
+Removing a site is one conditional commit: the site, its key and secret, its place in every app and its
+offers go, and its boxes' certificates join the blocklist. The rest follows from Git: the writer stops
+pushing to it, the Door stops naming it, boxes drop its certificates. Each site's Warden deletes the
+nodes of boxes its Site no longer lists. Vault keys its apps carried are rotated.
+
+- **Why:** a collaborator can leave on bad terms. Everything they could reach must stop being reachable, and
+  every step must follow from what Git says rather than from asking a site that is no longer trusted.
+- **Not taken back:** what the site holds already. A steward held the fabric's CA and tokens, so a steward
+  leaves only after Stop being a steward, and rotating the CA is the next thing to build.
 
 ## Not adopted
 

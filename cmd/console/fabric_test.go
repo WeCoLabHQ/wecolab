@@ -700,3 +700,60 @@ func TestLogged(t *testing.T) {
 		t.Fatalf("a query string was logged: %s", out.String())
 	}
 }
+
+// A site leaves in one commit (decision 25): refused for the writer, a steward and an app's primary;
+// otherwise its file, key and secret go, it leaves the apps it held standbys for, its offers go, and its
+// boxes' certificates join the blocklist. The vault keys its apps carried are rotated, or it says why not.
+func TestRemoveSite(t *testing.T) {
+	fp, until := strings.Repeat("cd", 32), time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	a := testSite("a", 0, true, v1alpha1.Box{Name: "a-m", IP: "10.77.0.1", Role: "manager", Key: "k"})
+	b := testSite("b", 1, false, v1alpha1.Box{Name: "b-m", IP: "10.77.1.1", Role: "manager", Key: "k", Certs: []v1alpha1.IssuedCert{{Fingerprint: fp, NotAfter: metav1.NewTime(until)}}})
+	c := testSite("c", 2, true, v1alpha1.Box{Name: "c-m", IP: "10.77.2.1", Role: "manager", Key: "k"})
+	project := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	wiki := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "wiki"}, Spec: v1alpha1.AppSpec{Sites: []string{"a", "b"}, Primary: "a", Workload: "wiki", Database: "wiki-db", Archive: map[string]int{"b": 2}}}
+	docs := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "docs"}, Spec: v1alpha1.AppSpec{Sites: []string{"a", "b"}, Primary: "b", Workload: "docs"}}
+	offer := &v1alpha1.Offer{ObjectMeta: metav1.ObjectMeta{Name: "b-spare"}, Spec: v1alpha1.OfferSpec{Site: "b"}}
+	git := inGit(t, a, b, c, project, wiki, docs, offer)
+	siteSecret := secretPath(warden.SiteSecret("b"))
+	git["keys/b.age.pub"], git[siteSecret] = testAge+"\n", "sealed"
+	git[kustomizationPath] = "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [" + pathpkg.Base(siteSecret) + ", vault-p.sops.yaml]\n"
+	s, f := testServer(t, git, a, b, c)
+	for site, why := range map[string]string{"a": "the writer", "c": "a steward", "b": "docs' primary"} {
+		if w := call(s.removeSite, "DELETE", nil, "site", site); w.Code != 409 {
+			t.Fatalf("%s is %s: %d %s", site, why, w.Code, w.Body)
+		}
+	}
+	moved := docs.DeepCopy()
+	moved.Spec.Primary = "a"
+	for p, x := range inGit(t, moved) {
+		if p != settingsPath {
+			f.files[p] = x
+		}
+	}
+	w := call(s.removeSite, "DELETE", nil, "site", "b")
+	var out struct {
+		Blocklisted, Standbys, Offers int
+		NotRotated                    map[string]string
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	if w.Code != 200 || out.Blocklisted != 1 || out.Standbys != 2 || out.Offers != 1 || out.NotRotated["p"] == "" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	for _, p := range []string{"fabric/sites/b.yaml", "keys/b.age.pub", siteSecret, "fabric/offers/b-spare.yaml"} {
+		if _, ok := f.files[p]; ok {
+			t.Errorf("%s is still in Git", p)
+		}
+	}
+	if k := f.get(kustomizationPath); strings.Contains(k, pathpkg.Base(siteSecret)) || !strings.Contains(k, "vault-p.sops.yaml") {
+		t.Errorf("secrets/kustomization.yaml: %s", k)
+	}
+	for _, app := range []*v1alpha1.App{wiki, docs} {
+		got := fromFake(t, s, &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: app.Name}})
+		if !slices.Equal(got.Spec.Sites, []string{"a"}) || got.Spec.Archive["b"] != 0 {
+			t.Errorf("%s still has b: %v %v", app.Name, got.Spec.Sites, got.Spec.Archive)
+		}
+	}
+	if _, set, err := parseSettings([]byte(f.get(settingsPath))); err != nil || len(set.Blocklisted) != 1 || set.Blocklisted[0].Fingerprint != fp {
+		t.Fatalf("blocklist: %+v %v", set, err)
+	}
+}

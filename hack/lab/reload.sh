@@ -31,7 +31,7 @@ scp -q "$out"/* "$LAB_WRITER":/tmp/wcl-reload/
 rm -rf "$out"
 
 # The images, made where the Console's sops binaries are, with the new warden.
-remote "$LAB_WRITER" "sudo V=$V R=$R COMPONENTS='$*' bash -s" <<'SH'
+ssh -o BatchMode=yes "$LAB_WRITER" "sudo V=$V R=$R COMPONENTS='$*' bash -s" <<'SH' # stdin carries the script: no -n
 set -e
 D=/var/lib/wecolab/dist B=/tmp/wcl-reload
 case $(uname -m) in aarch64) a=arm64 ;; *) a=amd64 ;; esac
@@ -41,8 +41,10 @@ for c in $COMPONENTS; do
     extra=""; [ $c = console ] && extra="/var/lib/wecolab/bin/sops-v3.13.3.linux.$a=/usr/local/bin/sops"
     rm -f $D/$c-$V-$a.tar
     $B/warden image --name $R/$c:$V --arch $a --out $D/$c-$V-$a.tar "$B/$c-$a=/$c" $extra
+    [ $D/$c-$V-$a.tar -nt $B/$c-$a ] || { echo "no new image for $c ($a)" >&2; exit 1; }
   done
 done
+echo built
 SH
 
 # Every site: import, pin, and restart what runs the components.

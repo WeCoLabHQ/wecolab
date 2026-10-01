@@ -1,6 +1,6 @@
 # Architecture
 
-WeCoLab joins friends' homelabs into one cooperative cloud. This document is the whole design: the
+WeCoLab joins collaborators' homelabs into one cooperative cloud. This document is the whole design: the
 pieces, where each runs, how they agree without a hub, and what happens when something is lost. The
 choices behind it, and when to revisit them, are in [decisions.md](decisions.md). Every term it uses,
 with its Kubernetes or standard equivalent, is in [glossary.md](glossary.md).
@@ -19,7 +19,7 @@ from what other sites say.
 - **fabric** (lowercase): the whole cooperative, meaning its sites, people, apps and keys. **The Fabric**
   (capitalised): the Git repository that holds the fabric's desired state, with a full copy at every site.
 - **Box**: one Linux machine, or the small Linux VM a Mac runs. Every box runs Nebula and k3s on the host.
-- **Site**: one k3s cluster, owned by one project (usually one friend's). Its first box is the site's
+- **Site**: one k3s cluster, owned by one project (usually one collaborator's). Its first box is the site's
   **manager** (the k3s server); more boxes join it as **nodes** (k3s agents). A Mac is a node whose work
   yields while its person uses it.
 - **Public site**: a site whose manager has a public address. It runs the **Door** (public entrance),
@@ -45,7 +45,7 @@ from what other sites say.
  └──────────────────────────────┬───────────────────────────────────────────────────┘
                                 │ Nebula (host to host, encrypted, NAT traversal via lighthouse/relay)
           ┌─────────────────────┴───────────────────────┐
- ┌──── site vince: steward ─────────┐       ┌──── site friend ───────────────────────┐
+ ┌──── site vince: steward ─────────┐       ┌──── site sam ──────────────────────────┐
  │ host: Nebula   k3s server        │       │ host: Nebula   k3s server              │
  │ k3s: Forgejo (copy)   Flux       │       │ k3s: Forgejo (copy)   Flux   Warden    │
  │      Warden   Console (standby)  │       │      CloudNativePG   apps (standbys)   │

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"wecolab.io/wecolab/api/v1alpha1"
+	"wecolab.io/wecolab/internal/fabric"
 	"wecolab.io/wecolab/internal/validate"
 	"wecolab.io/wecolab/internal/warden"
 )
@@ -172,3 +175,127 @@ func vaultEndpoint(ctx context.Context, raw string) error {
 
 // cgnat is shared address space (RFC 6598), where NetBird puts people's devices.
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// rotateVault gives a project's vault a new key (decision 25): made at B2 with the account key in
+// Settings, written into the project's vault and every database app's Secret, then the old key deleted
+// there, so a copy held anywhere else, such as at a site that left, no longer reaches the backups.
+// Archiving and restores retry until each site has the new key.
+func (s *server) rotateVault(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	if validate.Name(project) != nil {
+		http.Error(w, "project must be a project's name", 400)
+		return
+	}
+	if !s.can(w, r, project) {
+		return
+	}
+	bucket, err := s.rotate(r, project)
+	if err != nil {
+		answer(w, err, 502)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "bucket": bucket})
+}
+
+// rotate is rotateVault's work, for one project; the old key is deleted only once the new one is in the
+// Fabric everywhere it was.
+func (s *server) rotate(r *http.Request, project string) (string, error) {
+	ctx := r.Context()
+	p := secretPath(vaultSecret(project))
+	b, exists, err := s.git.Read(ctx, p)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fail(404, "project %s has no vault", project)
+	}
+	vault, err := s.openSecret(ctx, b, p)
+	if err != nil {
+		return "", err
+	}
+	acct := &corev1.Secret{}
+	if err := s.c.Get(s.elevated(ctx), types.NamespacedName{Namespace: warden.SystemNS, Name: storageSecret}, acct); err != nil {
+		return "", fail(409, "no B2 account key in Settings: rotate the key of %s at its provider", vault["bucket"])
+	}
+	id, key := string(acct.Data["key-id"]), string(acct.Data["key"])
+	v, err := warden.NewVaultKey(ctx, id, key, vault["bucket"])
+	if err != nil {
+		return "", err
+	}
+	old := vault["b2-key-id"]
+	vault["b2-key-id"], vault["b2-key"] = v.KeyID, v.Key
+	if err := s.putSecret(ctx, "project "+project+": its vault's key rotated", vaultSecret(project), vault, true); err != nil {
+		return "", err
+	}
+	through(s.localSecret(r, vaultSecret(project), vault), "vault "+project)
+	if err := s.rekeyApps(ctx, project, v); err != nil {
+		return "", fmt.Errorf("the vault has its new key, but its apps do not yet (the old key still works; rotate again): %w", err)
+	}
+	if err := warden.DeleteVaultKey(ctx, id, key, old); err != nil {
+		return "", fmt.Errorf("the new key is in place, but the old one (%s) could not be deleted at B2 and still works: %w", old, err)
+	}
+	return vault["bucket"], nil
+}
+
+// rekeyApps writes a vault's new key into the Secret of every database app of the project: each carries
+// a copy (deploy), encrypted for the app's sites and the stewards.
+func (s *server) rekeyApps(ctx context.Context, project string, v warden.Vault) error {
+	apps, err := readDir[v1alpha1.App](ctx, s.git, "fabric/apps/"+project)
+	if err != nil {
+		return err
+	}
+	paths, err := s.sitePaths(ctx)
+	if err != nil {
+		return err
+	}
+	files := map[string]v1alpha1.App{}
+	for _, a := range apps {
+		if a.Spec.Database != "" && !a.Spec.Deleted {
+			f := fabric.AppFolder(project, a.Name) + "/secret-" + a.Name + ".sops.yaml" // as fabric.WorkloadFiles names it
+			files[f] = a
+			paths = append(paths, f)
+		}
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	return s.edit(ctx, "project "+project+": its apps take the vault's new key", compact(paths), func(snap *fabric.Snapshot) ([]fabric.FileChange, error) {
+		sites, err := sitesOf(snap, paths)
+		if err != nil {
+			return nil, err
+		}
+		out := []fabric.FileChange{}
+		for _, f := range slices.Sorted(maps.Keys(files)) {
+			b, ok := snap.Get(f)
+			if !ok {
+				continue
+			}
+			data, err := s.openSecret(ctx, b, f)
+			if err != nil {
+				return nil, err
+			}
+			data["b2-key-id"], data["b2-key"] = v.KeyID, v.Key
+			recips, err := s.recipients(ctx, sites, files[f].Spec.Sites, nil)
+			if err != nil {
+				return nil, err
+			}
+			sec := obj("v1", "Secret", files[f].Name, "", nil)
+			sec.Object["type"] = "Opaque"
+			sd := map[string]any{}
+			for k, x := range data {
+				sd[k] = x
+			}
+			sec.Object["stringData"] = sd
+			plain, err := fabric.YAML(sec, sec.GroupVersionKind())
+			if err != nil {
+				return nil, err
+			}
+			enc, err := fabric.Encrypt(plain, path.Base(f), recips)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, fabric.FileChange{Path: f, Content: enc})
+		}
+		return out, nil
+	})
+}
