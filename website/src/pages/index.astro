@@ -5,22 +5,23 @@ import Brand from "../components/Brand.astro";
 import { url } from "../lib/paths";
 ---
 
-<Layout title="WeCoLab · Your hardware. A bigger lab. Together.">
+<Layout title="WeCoLab · Your hardware. Many sites. One cloud.">
   <section class="hero container">
     <div class="hero-copy">
       <div class="hero-label">
         <span class="status-dot" aria-hidden="true"></span>
-        <span class="eyebrow">The cooperative cloud for homelabs</span>
+        <span class="eyebrow">A cooperative, multi-site cloud</span>
       </div>
       <h1>
         Your hardware.
-        <br />A bigger lab.
+        <br />Many sites.
         <br />
-        <span>Together.</span>
+        <span>One cloud.</span>
       </h1>
       <p class="hero-description">
-        Turn the computers you and your collaborators already own into a shared cloud.
-        Offer your spare capacity, run your apps, and keep control of your lab.
+        Run your apps across the machines you and your collaborators already own:
+        homelabs, offices, a small business's server room. Keep a standby at another
+        site, back up to storage nobody can delete, and keep control of every site.
       </p>
       <div class="hero-actions">
         <a class="button" href={url("docs/get-started/")}>
@@ -88,7 +89,7 @@ import { url } from "../lib/paths";
         <h2>
           Share a slice.
           <br />
-          Keep your lab.
+          Keep your site.
         </h2>
         <p>
           Each person's site stays its own Kubernetes cluster. WeCoLab gives you
@@ -104,7 +105,7 @@ import { url } from "../lib/paths";
           <dl>
             <div>
               <dt>From</dt>
-              <dd>your homelab</dd>
+              <dd>your site</dd>
             </div>
             <div>
               <dt>To</dt>
@@ -411,7 +412,7 @@ import { url } from "../lib/paths";
       <div>
         <p>
           WeCoLab has real code, a working model, and plenty still to prove.
-          We're looking for homelabbers who will try it, tell us where it
+          We're looking for homelabbers, small teams and operators who will try it, tell us where it
           breaks, and help make sharing easier.
         </p>
         <div class="build-actions">

@@ -1,9 +1,10 @@
 # Architecture
 
-WeCoLab joins collaborators' homelabs into one cooperative cloud. This document is the whole design: the
-pieces, where each runs, how they agree without a hub, and what happens when something is lost. The
-choices behind it, and when to revisit them, are in [decisions.md](decisions.md). Every term it uses,
-with its Kubernetes or standard equivalent, is in [glossary.md](glossary.md).
+WeCoLab joins the sites collaborators run (homelabs, offices, small businesses' servers) into one cooperative
+cloud. This document is the whole design: the pieces, where each runs, how they agree without a hub, and what
+happens when something is lost. The choices behind it, and when to revisit them, are in
+[decisions.md](decisions.md). Every term it uses, with its Kubernetes or standard equivalent, is in
+[glossary.md](glossary.md).
 
 ## The rule it is built to
 

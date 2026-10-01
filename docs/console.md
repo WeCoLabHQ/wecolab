@@ -327,7 +327,7 @@ writer's Warden keeps it in step with the Members.
 
 ## Sites and boxes
 
-A site is one member's homelab: one k3s cluster, owned by a project. A box is one of its machines, a k3s
+A site is one place's machines (a homelab, an office, a server room): one k3s cluster, owned by a project. A box is one of its machines, a k3s
 node; the site's first box is its manager (the k3s server).
 
 ### The Sites page

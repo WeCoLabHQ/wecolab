@@ -1,8 +1,9 @@
 # WeCoLab
 
-A cooperative cloud for collaborators' homelabs. Run an app at the site you own, keep a live copy at a site
-a collaborator owns, keep an immutable third copy nobody can delete, and when your site dies the
-collaborator's copy becomes the app, without two writers ever existing.
+A cooperative cloud for every place you and your collaborators run machines: homelabs, offices, a small
+business's server room, a rented box. Run an app at a site you own, keep a live copy at another site, keep
+an immutable third copy nobody can delete, and when a site dies the other site's copy becomes the app,
+without two writers ever existing.
 
 WeCoLab starts working with two sites, keeps working when any one site is gone, and gets stronger with
 every site that joins. There is no hub: every site holds the whole desired state and runs its own share.
