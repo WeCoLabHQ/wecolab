@@ -205,7 +205,7 @@ struct MainView: View {
             } header: {
                 Text("When idle")
             } footer: {
-                Text("After this long without keyboard, mouse or trackpad input the node may use up to these; never less than what this Mac contributes. When you are back it hands the extra memory back to macOS, and if it has extra CPUs it runs at background priority. Changes here apply at the next start of the node.")
+                Text("After this long without keyboard, mouse or trackpad input the node may use up to these; never less than what this Mac contributes. When you are back it hands the extra memory back to macOS and its apps move off this Mac. Changes here apply at the next start of the node.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Startup") {

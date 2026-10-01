@@ -249,8 +249,8 @@ import { url } from "../lib/paths";
           </strong>
         </div>
         <div class="capacity-row priority-row">
-          <span>Process priority</span>
-          <span data-priority>Background</span>
+          <span>Best-effort apps</span>
+          <span data-priority>Off this Mac</span>
         </div>
         <div class="capacity-meter cpu-meter" aria-hidden="true">
           <i></i>
@@ -284,8 +284,8 @@ import { url } from "../lib/paths";
         </div>
         <p class="idle-small">
           Example profiles, not live metrics: 2 base CPUs, 6 idle CPUs. The VM
-          keeps 6 CPUs; with extra CPUs configured, the whole VM runs at
-          background priority while you're active.
+          keeps its 6 CPUs; while you're active its memory goes back to macOS
+          and its apps move off, so it sits quiet.
         </p>
         <a href={url("docs/mac/")} class="idle-link">
           Read the Mac guide <span aria-hidden="true">↗</span>
@@ -473,8 +473,8 @@ import { url } from "../lib/paths";
           item.setAttribute("aria-pressed", String(item === button)),
         );
         demo.querySelector("[data-priority]")!.textContent = idle
-          ? "Normal"
-          : "Background";
+          ? "Can run here"
+          : "Off this Mac";
         demo.querySelector("[data-memory]")!.textContent = idle ? "12" : "4";
         demo.querySelector(".laptop-mode")!.textContent = idle
           ? "A little more room to share"

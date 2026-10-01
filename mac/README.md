@@ -100,7 +100,7 @@ a disk without the stamp, or a share with v1's `netbird.json`, is not started un
 
 The VM: the idle profile's CPUs and memory, EFI boot, virtio disk + seed, NAT network with a fixed MAC
 (cloud-init binds the network config to it), a memory balloon, entropy, a virtio console to `console.log`,
-and a virtio-fs share. Every 5 s the balloon and the process priority follow whether you are active (below).
+and a virtio-fs share. Every 5 s the balloon follows whether you are active (below).
 
 Everything is in `~/Library/Application Support/WeCoLab/`: `config.json`, the image, `disk.img`,
 `guest-version`, `seed.iso`, EFI variables, machine identifier, MAC address, `console.log`, `vm.pid`, `share/`.
@@ -133,13 +133,13 @@ Virtualization.framework fixes a VM's CPU count and memory when it is created, a
 take memory back below that size. So the VM is created with the idle profile, and every 5 s:
 
 - **Active:** the balloon's target is the reserved memory, never less, so the guest hands what it has above
-  that back to macOS. If the idle profile has more CPUs than the reservation, the VM's process runs at
-  background priority (`PRIO_DARWIN_BG`: lowest CPU priority, throttled disk I/O). The CPU count cannot
-  change while the VM runs, so that slows the whole VM, reserved CPUs included; without extra CPUs the
-  priority stays normal, because a reservation is not deprioritized.
-- **Idle:** the balloon is released to the whole idle profile and the priority is normal.
+  that back to macOS. The idle taint evicts the best-effort apps, so the guest runs only its own services
+  and its CPUs sit quiet. The VM's process keeps its normal priority: macOS's background state
+  (`PRIO_DARWIN_BG`) would also throttle its network, and the guest's Nebula tunnels did not hold under it,
+  so the site could not reach the node.
+- **Idle:** the balloon is released to the whole idle profile.
 
-With the idle profile equal to the reservation the balloon never moves and the priority never changes.
+With the idle profile equal to the reservation the balloon never moves.
 
 Kubernetes is told through the `mode` file: the site's node agent (a DaemonSet on laptop nodes) keeps the
 `wecolab.io/idle` taint on the node whenever the mode is not `idle`. Of the apps' pods, only best-effort

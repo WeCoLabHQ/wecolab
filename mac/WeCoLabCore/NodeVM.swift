@@ -1,5 +1,4 @@
 import CoreGraphics
-import Darwin
 import Foundation
 import Virtualization
 
@@ -11,7 +10,6 @@ public actor NodeVM {
 
     private var vm: VZVirtualMachine?
     private var config = NodeConfig()  // as started; only memoryGiB follows the app while running
-    private var vmProcess: pid_t?  // the Virtualization process that runs this guest's vCPUs
     public private(set) var mode = ""  // "active" or "idle", once running
 
     public init() {}
@@ -31,14 +29,10 @@ public actor NodeVM {
     public var isRunning: Bool { vm.map { [.starting, .running, .stopping].contains($0.state) } ?? false }
 
     public func start(_ config: NodeConfig) async throws {
-        let before = Self.vmProcesses()
         let vm = VZVirtualMachine(configuration: try Self.configuration(config), queue: queue)
         try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in vm.start { done.resume(with: $0) } }
         self.vm = vm
         self.config = config
-        // ponytail: the new Virtualization process is taken to be ours; another app starting a VM
-        // in the same instant would confuse it. No public API names the process.
-        vmProcess = Self.vmProcesses().subtracting(before).first
         mode = ""
         tick()
     }
@@ -59,8 +53,11 @@ public actor NodeVM {
     public func reserve(memoryGiB: Int) { config.memoryGiB = min(memoryGiB, config.idleMemoryGiB) }
 
     /// The VM is sized to the idle profile. While the person is active the balloon holds the guest to
-    /// the reserved memory and, only if there are CPUs beyond the reservation, the VM process runs at
-    /// background priority; when idle both are released.
+    /// the reserved memory; when idle it is released. CPU needs no such step: while the person is active
+    /// the idle taint evicts every pod but the node's own, so the guest has nothing to run. The VM
+    /// process is never put in the background state (PRIO_DARWIN_BG): that also throttles its network
+    /// and disk (setpriority(2)), which kept the guest's Nebula tunnels from holding, so the site could
+    /// not reach the node.
     /// Applied on every tick, not only on change: a target set before the guest's balloon driver
     /// loads is lost, and the guest must see it again once it can act on it.
     public func tick() {
@@ -69,8 +66,6 @@ public actor NodeVM {
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         let active = idle < Double(config.idleMinutes * 60)
         (vm.memoryBalloonDevices.first as? VZVirtioTraditionalMemoryBalloonDevice)?.targetVirtualMachineMemorySize = Self.balloonTarget(active: active, config: config)
-        // A reservation is not deprioritized; with bonus CPUs the whole process is, as cpuCount is fixed at boot.
-        if let vmProcess { setpriority(PRIO_DARWIN_PROCESS, id_t(vmProcess), active && config.idleCPUs > config.cpus ? PRIO_DARWIN_BG : 0) }
         let next = active ? "active" : "idle"
         if next != mode {
             mode = next
@@ -137,13 +132,4 @@ public actor NodeVM {
         return value
     }
 
-    /// PIDs of the processes Virtualization.framework runs guests in.
-    static func vmProcesses() -> Set<pid_t> {
-        var pids = [pid_t](repeating: 0, count: 8192)
-        let n = Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size)))
-        var path = [UInt8](repeating: 0, count: 4096)
-        return Set(pids.prefix(max(n, 0)).filter { pid in
-            proc_pidpath(pid, &path, UInt32(path.count)) > 0 && String(decoding: path.prefix { $0 != 0 }, as: UTF8.self).hasSuffix("/com.apple.Virtualization.VirtualMachine")
-        })
-    }
 }
