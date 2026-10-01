@@ -340,7 +340,9 @@ box is one of its machines, a k3s node; the site's first box is its manager (the
 
 Each site's card shows its owner and its tags (steward, writer, public), whether it answers and which
 WeCoLab version it runs, its Nebula network, and its public address if it has one. Its boxes follow, each
-with its Nebula address, its role (manager or node) and whether it is a laptop.
+with its Nebula address, its role (manager or node) and whether it is a laptop. Once the site reports a
+box, the box also shows under its name its CPU and memory (its node's allocatable), and a Ready laptop
+whether its person is active or idle.
 
 - **Add a box** (members of the site's project, and admins) shows a join command for another Linux box at
   that site. Run it as root on the box. A box's name is `<site>-<host>`, unique across the fabric.
@@ -364,7 +366,8 @@ A Mac joins as a laptop node: WeCoLab for Mac runs a small Linux VM that joins t
 work runs on it: the apps without a database of projects whose every offer held at that site, directly or
 through a pool, is best effort ([Offers and pools](#offers-and-pools)). An offer that names boxes must name
 the Mac's. The site owner's own apps and every database stay off it. Its pods start only while its person is
-idle, and are evicted a minute after they return.
+idle, and are evicted a minute after they return. Its capacity is best effort, so Resources counts it
+apart from what the site always has.
 
 ### Add a site
 
@@ -386,9 +389,12 @@ them up at their hourly sync. A blocked or removed person's keys leave at the ne
 
 Admins only. For each site: its version, how many boxes are Ready, and bars for CPU, memory and ephemeral
 storage, allocated against allocatable, with the pod count. Allocated is what running pods request, the
-only reservation Kubernetes honours. **Placements** shows every app's workload at each site: Healthy,
-Unhealthy, Stopped (scaled to zero, as a database app is away from its primary), or not there. The numbers
-are each site's own report.
+only reservation Kubernetes honours. The CPU and memory bars count only the site's Ready boxes that are
+not laptops, what the site always has; allocated still counts the pods on laptops too. A laptop's
+capacity is best effort and counted apart: if the site has laptops, a line under the bars gives their CPU
+and memory, and whether they are available now (idle) or not (active, or offline). **Placements** shows
+every app's workload at each site: Healthy, Unhealthy, Stopped (scaled to zero, as a database app is away
+from its primary), or not there. The numbers are each site's own report.
 
 ## Members and projects
 

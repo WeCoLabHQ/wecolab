@@ -539,6 +539,25 @@ func TestStateForThePage(t *testing.T) {
 	}
 }
 
+// Each box a site reports reaches the pages with its name, laptop, idle, ready, cpu and memory, and
+// nothing else of the status: the Resources page counts the laptops apart, as best effort.
+func TestBoxReports(t *testing.T) {
+	got := boxReports([]warden.NodeStatus{
+		{Name: "home-server", Ready: true, Allocatable: map[string]string{"cpu": "24", "memory": "32617516Ki", "pods": "110"}},
+		{Name: "homelab-mac-x", Ready: true, Laptop: true, Idle: true, Allocatable: map[string]string{"cpu": "11", "memory": "46137344Ki"}},
+		{Name: "homelab-mac-y", Laptop: true, Allocatable: map[string]string{"cpu": "3500m", "memory": "8Gi"}}, // active, and not Ready
+	})
+	want := []boxReport{{Name: "home-server", Ready: true, CPU: "24", Memory: "32617516Ki"},
+		{Name: "homelab-mac-x", Laptop: true, Idle: true, Ready: true, CPU: "11", Memory: "46137344Ki"},
+		{Name: "homelab-mac-y", Laptop: true, CPU: "3500m", Memory: "8Gi"}}
+	b, _ := json.Marshal(got[0])
+	var keys map[string]any
+	_ = json.Unmarshal(b, &keys)
+	if !slices.Equal(got, want) || len(keys) != 6 {
+		t.Fatalf("%+v %s", got, b)
+	}
+}
+
 // A domain verified for one project cannot be claimed by another, nor a name under it; an unverified
 // claim blocks nobody.
 func TestDomainClaims(t *testing.T) {

@@ -164,9 +164,25 @@ func (s *server) network(w http.ResponseWriter, r *http.Request) {
 func str(m map[string]any, k string) string { v, _ := m[k].(string); return v }
 
 type box struct {
-	Name, IP, Role string
-	Laptop, Ready  bool
-	Added          time.Time
+	Name, IP, Role      string
+	Laptop, Ready, Idle bool
+	CPU, Memory         string // its node's allocatable as the site reports it, empty until it does
+	Added               time.Time
+}
+
+// boxReport is a box as its site's Warden reports it: only what the Sites and Resources pages show.
+type boxReport struct {
+	Name                string
+	Laptop, Idle, Ready bool
+	CPU, Memory         string // allocatable
+}
+
+func boxReports(nodes []warden.NodeStatus) []boxReport {
+	out := []boxReport{}
+	for _, n := range nodes {
+		out = append(out, boxReport{Name: n.Name, Laptop: n.Laptop, Idle: n.Idle, Ready: n.Ready, CPU: n.Allocatable["cpu"], Memory: n.Allocatable["memory"]})
+	}
+	return out
 }
 
 type site struct {
@@ -258,15 +274,16 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 			st.Public = x.Spec.Public.Address
 		}
 		a := answers[x.Name] // the site's own Warden answered
-		ready := map[string]bool{}
+		rep := map[string]boxReport{}
 		if a != nil {
 			st.Ready, st.Version = true, a.Version
-			for _, n := range a.Nodes {
-				ready[n.Name] = n.Ready
+			for _, n := range boxReports(a.Nodes) {
+				rep[n.Name] = n
 			}
 		}
 		for _, b := range x.Spec.Boxes {
-			st.Boxes = append(st.Boxes, box{Name: b.Name, IP: b.IP, Role: b.Role, Laptop: b.Laptop, Ready: ready[b.Name], Added: b.Added.Time})
+			n := rep[b.Name]
+			st.Boxes = append(st.Boxes, box{Name: b.Name, IP: b.IP, Role: b.Role, Laptop: b.Laptop, Ready: n.Ready, Idle: n.Idle, CPU: n.CPU, Memory: n.Memory, Added: b.Added.Time})
 		}
 		sites = append(sites, st)
 	}
@@ -661,6 +678,7 @@ func (s *server) resources(w http.ResponseWriter, r *http.Request) {
 		Version                            string
 		Nodes, NodesReady                  int64
 		Allocatable, Allocated, Allocating map[string]string
+		Boxes                              []boxReport // the page counts laptops apart: best effort
 	}
 	sites := []site{}
 	type placement struct {
@@ -682,6 +700,7 @@ func (s *server) resources(w http.ResponseWriter, r *http.Request) {
 				st.NodesReady++
 			}
 		}
+		st.Boxes = boxReports(a.Nodes)
 		sites = append(sites, st)
 		for key, wl := range a.Workloads {
 			p := byName[key]
