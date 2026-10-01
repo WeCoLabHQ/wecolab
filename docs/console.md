@@ -64,6 +64,8 @@ Door restarts. The change may have been made anyway: refresh and look before try
 
 ## Overview
 
+![The Overview: counts of ready sites, protected apps, moves and stewards, then every app and site](images/console-overview.png)
+
 Four counts, then a line for every app and every site:
 
 - **Sites ready**: sites whose Warden answered, of all sites.
@@ -77,6 +79,8 @@ comes from each site's own status report, which its Warden publishes over Nebula
 ten seconds.
 
 ## Deploy an app
+
+![Deploy an app: the catalog, each entry with its category, its database, volumes and validation](images/console-deploy.png)
 
 **Deploy an app** (or **+ Deploy** at the top) turns a catalog entry or a container image into an App:
 the Fabric's record of one application, its sites, its primary and its hostname.
@@ -331,6 +335,8 @@ A site is one place's machines (a homelab, an office, a server room): one k3s cl
 box is one of its machines, a k3s node; the site's first box is its manager (the k3s server).
 
 ### The Sites page
+
+![The Sites page: a public writer site and two others, their boxes, and the offers between them](images/console-sites.png)
 
 Each site's card shows its owner and its tags (steward, writer, public), whether it answers and which
 WeCoLab version it runs, its Nebula network, and its public address if it has one. Its boxes follow, each

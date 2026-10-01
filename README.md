@@ -12,6 +12,11 @@ A *fabric* is one such cooperative: its sites, people, apps and keys. *The Fabri
 Git repository holding its desired state. These and every other word WeCoLab uses, with their
 Kubernetes equivalents, are in [docs/glossary.md](docs/glossary.md).
 
+![The Console's overview of a fabric of three sites, all ready, two of them stewards](docs/images/console-overview.png)
+
+The Console, where every change is a commit to the Fabric ([docs/console.md](docs/console.md)). Names and
+addresses in the pictures are examples.
+
 ## What runs where
 
 | Piece | What it is | Where |

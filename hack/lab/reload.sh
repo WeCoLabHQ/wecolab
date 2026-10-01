@@ -23,8 +23,8 @@ case " $* " in *" console "*) [ "$R" = "$mine" ] || {
   echo "names the lab's manifests do not use. Move the lab to the new names first (docs/operations.md, Upgrades)." >&2
   exit 1; } ;; esac
 out=$(mktemp -d)
-for a in amd64 arm64; do
-  for c in "$@"; do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags "-s -w -X main.Version=$V" -o "$out/$c-$a" "./cmd/$c"; done
+for a in amd64 arm64; do # warden always: it makes the images
+  for c in $(printf '%s\n' warden "$@" | sort -u); do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags "-s -w -X main.Version=$V" -o "$out/$c-$a" "./cmd/$c"; done
 done
 remote "$LAB_WRITER" 'rm -rf /tmp/wcl-reload && mkdir -p /tmp/wcl-reload'
 scp -q "$out"/* "$LAB_WRITER":/tmp/wcl-reload/

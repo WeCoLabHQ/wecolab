@@ -168,6 +168,18 @@ import { url } from "../lib/paths";
           </div>
         </li>
       </ol>
+      <figure class="console-shot">
+        <img
+          src={url("images/console-sites.png")}
+          alt="The Console's Sites page: a public writer site and two others, their boxes and the offers between them"
+          width="1440"
+          height="900"
+          loading="lazy"
+        />
+        <figcaption>
+          The Console of a fabric with three sites. Names and addresses are examples.
+        </figcaption>
+      </figure>
     </div>
   </section>
 
@@ -624,6 +636,26 @@ import { url } from "../lib/paths";
     font-style: normal;
     color: var(--ink);
   }
+  .console-shot {
+    grid-column: 1 / -1;
+    margin: 2rem 0 0;
+  }
+
+  .console-shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 24px 60px rgb(0 0 0 / 0.25);
+  }
+
+  .console-shot figcaption {
+    margin-top: 0.9rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
   .how-section {
     background: #e9eee5;
     border-block: 1px solid var(--line);
