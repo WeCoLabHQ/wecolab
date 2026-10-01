@@ -8,11 +8,11 @@ steward, writer, Door, vault, project, offer) are explained in the [glossary](gl
 
 - **A domain** whose DNS you can edit, for example at Cloudflare. The fabric gets a zone under it, such as
   `fab.example.org`, and answers that zone itself.
-- **One box with a public address** for the first site: Ubuntu 24.04 or Debian 13 (Linux 6.3 or newer,
-  for user namespaces), amd64 or arm64, 2 CPUs, 4 GB of memory, 40 GB of disk. A small VPS is enough. Its
-  firewall must let these in: TCP 22, 53, 80 and 443; UDP 53, 3478 and 4242. Nothing else on it may
-  listen on 80, 443, 8081, public 53, or UDP 3478 and 4242, nor run its own k3s, Nebula or NetBird
-  client: the install checks and stops.
+- **One box with a public address** for the first site: Ubuntu 24.04 or 26.04, or Debian 13 (Linux 6.3 or
+  newer, for user namespaces), amd64 or arm64, 2 CPUs, 4 GB of memory, 40 GB of disk. A small VPS is enough.
+  Its firewall must let these in: TCP 22, 53, 80 and 443; UDP 53, 3478 and 4242. Nothing else on it may listen
+  on 80, 443, 8081, public 53, or UDP 3478 and 4242, nor run its own k3s, Nebula or NetBird client: the
+  install checks and stops.
 - **Home boxes** for more sites, same system requirements, with outbound internet. Nothing needs to be
   opened on a home router.
 - **An object storage account** for the vault. Backblaze B2 is the tested one; any S3-compatible store

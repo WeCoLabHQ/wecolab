@@ -112,8 +112,8 @@ k3s's default pod and service ranges.
 ## 11. Stewards hold the fabric; other sites hold only what runs on them
 
 A site is a steward when the fabric's admins trust it with the fabric: the Nebula CA, the fabric's
-service tokens, every app's secrets, and the right to become the writer. A collaborator's site that only contributes capacity
-is not a steward: it decrypts only the secrets of the apps placed on it.
+service tokens, every app's secrets, and the right to become the writer. A collaborator's site that only
+contributes capacity is not a steward: it decrypts only the secrets of the apps placed on it.
 
 - **Why:** a person contributing a box should not be able to read every project's secrets. Two stewards
   are enough to survive losing either.

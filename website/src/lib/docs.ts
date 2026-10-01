@@ -177,6 +177,15 @@ export function renderDoc(doc: Doc): { html: string; headings: Heading[] } {
     }
     return defaultLinkOpen(tokens, idx, options, env, self);
   };
+  // Pictures in docs/images are served by pages/images: a source's relative path to one points there.
+  md.renderer.rules.image = (tokens, idx, options, env, self) => {
+    const src = tokens[idx].attrGet("src") || "";
+    const target = posix.normalize(posix.join(posix.dirname(doc.source), src));
+    if (!/^[a-z][a-z\d+.-]*:/i.test(src) && target.startsWith("docs/images/"))
+      tokens[idx].attrSet("src", url(`images/${posix.basename(target)}`));
+    tokens[idx].attrSet("loading", "lazy");
+    return self.renderToken(tokens, idx, options);
+  };
   const tokens = md.parse(readSource(doc), {});
   const headings: Heading[] = [];
   for (let i = 0; i < tokens.length; i++) {
