@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,8 +46,10 @@ func TestSiteStatus(t *testing.T) {
 		Selector: map[string]string{"app": "wiki"}, Ports: []corev1.ServicePort{{Port: 80, NodePort: 31234}}}}
 	wikiPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "wiki-1", Namespace: "vince", Labels: map[string]string{"app": "wiki"}}, Spec: corev1.PodSpec{NodeName: "box"},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
+	// wiki's own Secret, named after the app (deploy), holds the vault key its database archives with.
+	wikiSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "wiki", Namespace: "vince"}, Data: map[string][]byte{"b2-key-id": []byte("K2"), "b2-key": []byte("the-key-itself")}}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(node("box", false, false), node("mac-in-use", true, false), node("mac-away", true, true),
-		pod, named("wiki"), elsewhere, svc, wikiPod).WithStatusSubresource(&v1alpha1.App{}).Build()
+		pod, named("wiki"), elsewhere, svc, wikiPod, wikiSecret).WithStatusSubresource(&v1alpha1.App{}).Build()
 	st, err := (&SiteAgent{Client: c, Site: "vince"}).Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +69,9 @@ func TestSiteStatus(t *testing.T) {
 	}
 	if e := st.Apps["vince/wiki"].Endpoints; len(e) != 1 || e[0] != "10.77.0.9:31234" {
 		t.Errorf("endpoints: the Nebula address of the box running a ready pod, with the node port: %v", e)
+	}
+	if id := st.Apps["vince/wiki"].VaultKeyID; id != "K2" || strings.Contains(toJSON(st), "the-key-itself") {
+		t.Errorf("the id of the vault key the app's Secret holds, never the key: %q", id)
 	}
 }
 

@@ -144,6 +144,7 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 	// Vault credentials for the project, kept once in the Fabric; each app carries a copy in its own
 	// Secret, because only the app's objects travel to the sites.
 	var vault map[string]string
+	var vaultFile []byte // the vault as read: the app carries its key only if Git still holds it at the commit
 	if in.Database {
 		p := secretPath(vaultSecret(in.Project))
 		b, exists, err := s.git.Read(ctx, p)
@@ -152,6 +153,7 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 			answer(w, err, 502)
 			return
 		case exists:
+			vaultFile = b
 			if vault, err = s.openSecret(ctx, b, p); err != nil {
 				answer(w, err, 500)
 				return
@@ -337,7 +339,7 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		answer(w, err, 502)
 		return
 	}
-	paths := append([]string{appPath}, sitePaths...)
+	paths := append([]string{appPath, secretPath(vaultSecret(in.Project))}, sitePaths...)
 	for _, f := range files {
 		paths = append(paths, f.Path)
 	}
@@ -361,6 +363,9 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		}
 		if b, _ := snap.Get(secretFile); !bytes.Equal(b, oldSecret) {
 			return nil, fabric.ErrConflict // deployed meanwhile: its secrets are not the ones reused here
+		}
+		if b, _ := snap.Get(secretPath(vaultSecret(in.Project))); vaultFile != nil && !bytes.Equal(b, vaultFile) {
+			return nil, fabric.ErrConflict // the vault's key rotated meanwhile: the app would carry the old one
 		}
 		now, err := sitesOf(snap, paths)
 		if err != nil {

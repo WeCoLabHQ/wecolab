@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -365,11 +366,11 @@ func (r *PeopleReconciler) keepToken(ctx context.Context, now time.Time) error {
 	if git == nil {
 		return fmt.Errorf("no copy of the Fabric here to renew the token in")
 	}
-	age := &corev1.Secret{} // what Flux decrypts the Fabric's secrets with here
-	if err := r.Get(ctx, types.NamespacedName{Namespace: FluxNS, Name: "sops-age"}, age); err != nil {
+	key, err := siteAgeKey(ctx, r, r.Site)
+	if err != nil {
 		return err
 	}
-	key, path := string(age.Data[r.Site+".agekey"]), "secrets/"+meshSecretFile
+	path := "secrets/" + meshSecretFile
 	// Open the secret before minting: a Warden that cannot (no sops, not a recipient) would otherwise
 	// mint a token every hour only to delete it again.
 	enc, ok, err := git.Read(ctx, path)
@@ -394,7 +395,10 @@ func (r *PeopleReconciler) keepToken(ctx context.Context, now time.Time) error {
 				ours = fmt.Errorf("no %s in the Fabric", path)
 				return nil, ours
 			}
-			out, err := withToken(enc, key, plain, tok.ID)
+			out, err := reseal(enc, meshSecretFile, key, func(v map[string]string) error {
+				v["token"], v["tokenId"] = plain, tok.ID
+				return nil
+			})
 			ours = err
 			return []fabric.FileChange{{Path: path, Content: out}}, err
 		})
@@ -410,8 +414,18 @@ func (r *PeopleReconciler) keepToken(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-// withToken is the netbird secret's file with another token, encrypted again to whoever could read it.
-func withToken(enc []byte, ageKey, token, id string) ([]byte, error) {
+// siteAgeKey is this site's age identity, what Flux decrypts the Fabric's secrets with here.
+func siteAgeKey(ctx context.Context, c client.Reader, site string) (string, error) {
+	age := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: FluxNS, Name: "sops-age"}, age); err != nil {
+		return "", err
+	}
+	return string(age.Data[site+".agekey"]), nil
+}
+
+// reseal is a sealed Secret's file (name is its file name) with its values changed by change, which sees
+// data and stringData as one map, encrypted again to whoever could read it.
+func reseal(enc []byte, name, ageKey string, change func(map[string]string) error) ([]byte, error) {
 	var meta struct {
 		Sops struct {
 			Age []struct {
@@ -426,7 +440,7 @@ func withToken(enc []byte, ageKey, token, id string) ([]byte, error) {
 	for _, a := range meta.Sops.Age {
 		recipients = append(recipients, a.Recipient)
 	}
-	plain, err := fabric.Decrypt(enc, meshSecretFile, ageKey)
+	plain, err := fabric.Decrypt(enc, name, ageKey)
 	if err != nil {
 		return nil, err
 	}
@@ -434,17 +448,20 @@ func withToken(enc []byte, ageKey, token, id string) ([]byte, error) {
 	if err := yaml.Unmarshal(plain, sec); err != nil {
 		return nil, err
 	}
-	if sec.StringData == nil {
-		sec.StringData = map[string]string{}
+	v := map[string]string{}
+	for k, b := range sec.Data {
+		v[k] = string(b)
 	}
-	delete(sec.Data, "token")
-	delete(sec.Data, "tokenId")
-	sec.StringData["token"], sec.StringData["tokenId"] = token, id
+	maps.Copy(v, sec.StringData)
+	if err := change(v); err != nil {
+		return nil, err
+	}
+	sec.Data, sec.StringData = nil, v
 	out, err := yaml.Marshal(sec)
 	if err != nil {
 		return nil, err
 	}
-	return fabric.Encrypt(out, meshSecretFile, recipients)
+	return fabric.Encrypt(out, name, recipients)
 }
 
 func (r *PeopleReconciler) SetupWithManager(mgr ctrl.Manager) error {

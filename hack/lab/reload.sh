@@ -38,7 +38,7 @@ case $(uname -m) in aarch64) a=arm64 ;; *) a=amd64 ;; esac
 install -m 0755 $B/warden-$a $B/warden
 for c in $COMPONENTS; do
   for a in amd64 arm64; do
-    extra=""; [ $c = console ] && extra="/var/lib/wecolab/bin/sops-v3.13.3.linux.$a=/usr/local/bin/sops"
+    extra="/var/lib/wecolab/bin/sops-v3.13.3.linux.$a=/usr/local/bin/sops" # both carry SOPS, as install.sh builds them
     rm -f $D/$c-$V-$a.tar
     $B/warden image --name $R/$c:$V --arch $a --out $D/$c-$V-$a.tar "$B/$c-$a=/$c" $extra
     [ $D/$c-$V-$a.tar -nt $B/$c-$a ] || { echo "no new image for $c ($a)" >&2; exit 1; }

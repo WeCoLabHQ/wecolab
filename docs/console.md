@@ -288,9 +288,10 @@ Below, **Volumes** lists every volume of your projects' apps, its size, and what
 vault**. It makes a B2 bucket with Object Lock (compliance mode, 30 days) and a key that reaches only
 that bucket, and keeps them, encrypted, in the Fabric.
 
-**Rotate key.** Makes a new key for the vault's bucket, puts it in the Fabric for the project and its
-apps, then deletes the old key at B2; archiving catches up within a minute or two. Needs the account key
-in Settings; a bucket you brought yourself is rotated at its provider.
+**Rotate key.** Makes a new key for the vault's bucket and puts it in the Fabric for the project and its
+apps. The old key stays valid until every site of the project's database apps has the new one; then the
+writer deletes it at B2. Until then the vault shows the old key and the sites not yet reporting the new
+one. Needs the account key in Settings; a bucket you brought yourself is rotated at its provider.
 
 **Bring your own bucket.** Without the account key, or with another S3-compatible store, create the
 bucket yourself with a default Object Lock retention (compliance, 30 days) and a key for it. Enter the

@@ -245,6 +245,10 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 		if app.Spec.Database != "" && Serving(app.Spec) == a.Site {
 			s.Vault = a.vault(&app)
 		}
+		sec := &corev1.Secret{} // the app's own Secret, named after it (deploy): what its database archives with
+		if app.Spec.Database != "" && a.Client.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, sec) == nil {
+			s.VaultKeyID = string(sec.Data["b2-key-id"])
+		}
 		s.Endpoints = a.endpoints(ctx, app.Namespace, app.Spec.Workload, pods.Items, nodeIP)
 		st.Apps[app.Namespace+"/"+app.Name] = s
 	}

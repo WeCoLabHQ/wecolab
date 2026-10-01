@@ -296,7 +296,11 @@ is a public identity.
 Removing a site is one conditional commit: the site, its key and secret, its place in every app and its
 offers go, and its boxes' certificates join the blocklist. The rest follows from Git: the writer stops
 pushing to it, the Door stops naming it, boxes drop its certificates. Each site's Warden deletes the
-nodes of boxes its Site no longer lists. Vault keys its apps carried are rotated.
+nodes of boxes its Site no longer lists. Vault keys its apps carried are rotated: the new key is
+committed with the old one marked retiring, and the writer deletes the old key at B2 once every site of
+the project's database apps reports the new one. The site that left is not among them, so it is not
+waited for; a site that remains and does not answer is, since deleting the key it still archives with
+would stop its archive.
 
 - **Why:** a collaborator can leave on bad terms. Everything they could reach must stop being reachable, and
   every step must follow from what Git says rather than from asking a site that is no longer trusted.

@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/yaml"
 
 	"wecolab.io/wecolab/api/v1alpha1"
@@ -651,6 +652,120 @@ func TestVaultEndpoint(t *testing.T) {
 		if err := vaultEndpoint(context.Background(), raw); (err == nil) != ok {
 			t.Errorf("%s: %v", raw, err)
 		}
+	}
+}
+
+// Rotating a vault's key deletes nothing at B2: the old key joins the vault's retiring keys in the commit
+// that brings the new one, and the writer's Warden deletes it once every site has the new one. A second
+// rotation before then retires both.
+func TestRotateRetiresTheOldKey(t *testing.T) {
+	calls, made := []string{}, 0
+	var meanwhile func() // what lands in Git while a rotation makes its key
+	var b2 *httptest.Server
+	b2 = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		calls = append(calls, name)
+		switch name {
+		case "b2_authorize_account":
+			_ = json.NewEncoder(w).Encode(map[string]any{"accountId": "A", "authorizationToken": "T",
+				"apiInfo": map[string]any{"storageApi": map[string]any{"apiUrl": b2.URL, "s3ApiUrl": "https://s3.example.org"}}})
+		case "b2_list_buckets":
+			_ = json.NewEncoder(w).Encode(map[string]any{"buckets": []any{map[string]any{"bucketId": "B"}}})
+		case "b2_create_key":
+			if meanwhile != nil {
+				meanwhile()
+			}
+			made++
+			_ = json.NewEncoder(w).Encode(map[string]any{"applicationKeyId": fmt.Sprint("k", made), "applicationKey": "secret"})
+		}
+	}))
+	defer b2.Close()
+	warden.B2API = b2.URL
+	defer func() { warden.B2API = "https://api.backblazeb2.com" }()
+	sopsAge := fakeSops(t)
+	wiki := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "wiki"}, Spec: v1alpha1.AppSpec{Sites: []string{"a"}, Primary: "a", Workload: "wiki", Database: "wiki-db"}}
+	git := inGit(t, testSite("a", 1, true), wiki)
+	git["keys/a.age.pub"], git["keys/recovery.age.pub"] = testAge+"\n", testAge+"\n"
+	vault, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": "k0", "b2-key": "old"}, []string{testAge})
+	git[vault.Path] = string(vault.Content)
+	appSecret := fabric.AppFolder("p", "wiki") + "/secret-wiki.sops.yaml"
+	git[appSecret] = "apiVersion: v1\nkind: Secret\nmetadata: {name: wiki}\nstringData: {b2-key-id: k0, b2-key: old, db-password: pw}\n"
+	acct := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: warden.SystemNS, Name: storageSecret}, Data: map[string][]byte{"key-id": []byte("acct"), "key": []byte("secret")}}
+	project := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p", Labels: map[string]string{"wecolab.io/tenant": "p"}}}
+	s, f := testServer(t, git, sopsAge, acct, project, wiki.DeepCopy())
+	for range 2 {
+		if w := call(s.rotateVault, "POST", nil, "project", "p"); w.Code != 200 || !strings.Contains(w.Body.String(), "stays valid") {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+	}
+	sec, app := &corev1.Secret{}, &corev1.Secret{}
+	_ = yaml.Unmarshal([]byte(f.get(vault.Path)), sec)
+	_ = yaml.Unmarshal([]byte(f.get(appSecret)), app)
+	if slices.Contains(calls, "b2_delete_key") || sec.StringData["b2-key-id"] != "k2" || sec.StringData["retiring"] != "k0 k1" || sec.StringData["bucket"] != "wcl-x" ||
+		app.StringData["b2-key-id"] != "k2" || app.StringData["db-password"] != "pw" {
+		t.Fatalf("B2 calls %v; vault %v; app %v", calls, sec.StringData["retiring"], app.StringData["b2-key-id"])
+	}
+	here := &corev1.Secret{} // as Flux applies it from Git
+	if err := s.c.Get(context.Background(), client.ObjectKey{Namespace: warden.SystemNS, Name: vaultSecret("p")}, here); err != nil || here.StringData["retiring"] != "" {
+		t.Fatalf("the Console writes the new key here, and leaves the retiring keys to Flux: %v %v", err, here.StringData)
+	}
+	here.Data, here.StringData = map[string][]byte{"b2-key-id": []byte(sec.StringData["b2-key-id"]), "retiring": []byte(sec.StringData["retiring"])}, nil
+	_ = s.c.Update(context.Background(), here)
+	var page struct {
+		Vaults []struct{ Retiring, Awaiting []string }
+	}
+	_ = json.Unmarshal(call(s.storage, "GET", nil).Body.Bytes(), &page)
+	if len(page.Vaults) != 1 || !slices.Equal(page.Vaults[0].Retiring, []string{"k0", "k1"}) || !slices.Equal(page.Vaults[0].Awaiting, []string{"a"}) {
+		t.Fatalf("Storage shows the retiring keys and the sites not yet reporting the new one: %+v", page)
+	}
+
+	// While the next rotation makes its key, the writer retires k0 and another rotation replaces k2 with
+	// k9: the vault is changed as Git holds it then, so k0 does not come back and k9 is not lost.
+	meanwhile = func() {
+		v, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": "k9", "b2-key": "nine", "retiring": "k1 k2"}, []string{testAge})
+		f.mu.Lock()
+		f.files[v.Path] = string(v.Content)
+		f.mu.Unlock()
+	}
+	if w := call(s.rotateVault, "POST", nil, "project", "p"); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	sec = &corev1.Secret{}
+	_ = yaml.Unmarshal([]byte(f.get(vault.Path)), sec)
+	if sec.StringData["b2-key-id"] != "k3" || sec.StringData["retiring"] != "k1 k2 k9" || sec.StringData["bucket"] != "wcl-x" {
+		t.Fatalf("a rotation builds on the vault as Git holds it: %v", sec.StringData)
+	}
+}
+
+// A database app deployed while its project's vault key is rotated would carry the old key, which the
+// writer deletes once the project's other apps report the new one: the deploy is refused, to be tried again.
+func TestDeployDuringRotation(t *testing.T) {
+	sopsAge := fakeSops(t)
+	git := inGit(t, testSite("a", 1, true))
+	git["keys/a.age.pub"], git["keys/recovery.age.pub"] = testAge+"\n", testAge+"\n"
+	vault := func(id, retiring string) fabric.FileChange {
+		f, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": id, "b2-key": "key-" + id, "retiring": retiring}, []string{testAge})
+		return f
+	}
+	git[vault("k0", "").Path] = string(vault("k0", "").Content)
+	project := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p", Labels: map[string]string{"wecolab.io/tenant": "p"}}}
+	s, f := testServer(t, git, sopsAge, project)
+	s.c = interceptor.NewClient(s.c.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+		if obj.GetName() == "docs-db-vault" { // tried after the deploy read the vault: it is rotated now
+			f.mu.Lock()
+			f.files[vault("k1", "k0").Path] = string(vault("k1", "k0").Content)
+			f.mu.Unlock()
+		}
+		return c.Patch(ctx, obj, p, opts...)
+	}})
+	in := deployRequest{Name: "docs", Project: "p", Image: "nginx", Port: 80, Sites: []string{"a"}, Primary: "a", Database: true, Hostname: "docs.fab.example"}
+	appSecret := fabric.AppFolder("p", "docs") + "/secret-docs.sops.yaml"
+	if w := call(s.deploy, "POST", in); w.Code == 200 || f.get(appSecret) != "" {
+		t.Fatalf("deployed with the old key: %d %s", w.Code, w.Body)
+	}
+	w, sec := call(s.deploy, "POST", in), &corev1.Secret{}
+	if _ = yaml.Unmarshal([]byte(f.get(appSecret)), sec); w.Code != 200 || sec.StringData["b2-key-id"] != "k1" {
+		t.Fatalf("tried again, with the new key: %d %s %v", w.Code, w.Body, sec.StringData["b2-key-id"])
 	}
 }
 

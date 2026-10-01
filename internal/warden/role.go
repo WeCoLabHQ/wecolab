@@ -23,6 +23,9 @@ type AppState struct {
 	Promotion *metav1.Condition `json:"promotion,omitempty"`
 	// Vault is the database's vault as the site holding its history sees it with its own keys.
 	Vault *VaultStatus `json:"vault,omitempty"`
+	// VaultKeyID is the id (b2-key-id) of the vault key this site's copy of the app's Secret holds, never
+	// the key: the writer deletes a vault's retiring keys once every site of its apps reports the new one.
+	VaultKeyID string `json:"vaultKeyId,omitempty"`
 	// Endpoints are Nebula address:port pairs where a ready pod of the app answers at this site.
 	Endpoints []string `json:"endpoints,omitempty"`
 	// Deleting is set while this site still holds something of an app a person deleted.
@@ -68,7 +71,7 @@ func RoleAt(s v1alpha1.AppSpec, self string) Role {
 		r.Source = r.Primary
 	default:
 		r.Source = s.Standby(self) // whom it would follow once demoted
-		if r.Source == "" {          // an app at one site, as one left after a site does: CNPG needs a source
+		if r.Source == "" {        // an app at one site, as one left after a site does: CNPG needs a source
 			r.Source = self
 		}
 	}

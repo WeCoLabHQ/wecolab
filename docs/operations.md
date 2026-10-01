@@ -112,15 +112,22 @@ first). Otherwise one commit:
 From there the writer stops pushing the Fabric to it, the Door and Names stop naming it, and every box
 drops its certificates at its next sync, within the hour: the site is off the mesh and receives nothing
 more. Then the Console rotates the vault key of every project whose database apps had a standby there
-(Storage, below), since each of those apps' Secrets carried a copy of it. What the site already holds
-stays there: its copy of the Fabric up to that commit, its databases and volumes, and anything it could
-decrypt. Nothing in WeCoLab can reach into a site that has left.
+(Rotate a vault key, below), since each of those apps' Secrets carried a copy of it. The site that left is
+no longer one of the apps' sites, so the old key is not kept for it: it is deleted at B2 as soon as the
+sites that remain report the new one. What the site already holds stays there: its copy of the Fabric up
+to that commit, its databases and volumes, and anything it could decrypt. Nothing in WeCoLab can reach
+into a site that has left.
 
 **Rotate a vault key.** Storage → the vault → Rotate key. The Console makes a new key restricted to the
-bucket with the account key in Settings, writes it into the project's vault and every database app's
-Secret, then deletes the old key at B2. Archiving and restores retry until each site has the new key,
-within a minute or two, so nothing is lost. Vaults entered by hand are rotated by hand, at the storage
-provider.
+bucket with the account key in Settings and writes it into the project's vault, marking the old key
+`retiring` in the same commit, then into every database app's Secret. A database app deployed meanwhile
+is refused, to be deployed again with the new key. The old key stays valid at B2 until every site of every
+database app of the project reports the new one in its status; then the writer's Warden deletes it at B2
+and takes it out of the vault. A site that does not answer is waited for, so no site still archiving with
+the old key is cut off; Storage shows which sites are awaited, and the writer's Warden logs them. Rotating
+again before then retires both old keys. Without the account key in Settings, or with one of an account
+that does not hold the bucket, the old keys stay valid and the writer's Warden logs that it could not
+delete them. Vaults entered by hand are rotated by hand, at the storage provider.
 
 **When a collaborator leaves.** Everything above, in order, as the fabric's admin:
 

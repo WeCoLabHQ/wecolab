@@ -61,6 +61,7 @@ decrypted is ever written back to Git.
 |---|---|
 | NetBird's service token | the writer, two months before it expires: the new token is committed, the old one deleted a day after |
 | The object storage account key | enter the new one in Settings; revoke the old one at the provider |
+| A project's vault key | Storage → Rotate key: the new key is committed with the old one marked retiring; the writer deletes the old one at B2 once every site of the project's database apps reports the new one |
 | A box's Nebula key | remove the box in the Console and delete its Kubernetes node, run the install script with `uninstall` on it (what k3s held there, volumes and databases included, goes with it), and join it again with a new invite: the join makes a new key. A site's manager cannot be removed, so its key cannot be rotated yet |
 | The Nebula CA | *Not built yet* (the CA lasts five years): a new CA is to join every box's bundle, boxes are re-signed at their next renewal, the old CA leaves a certificate lifetime later |
 | A site's age key, Forgejo tokens, the Console's session key, NetBird's own keys, the recovery key | *Not built yet.* |

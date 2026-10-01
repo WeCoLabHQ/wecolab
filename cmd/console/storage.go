@@ -41,6 +41,7 @@ func (s *server) storage(w http.ResponseWriter, r *http.Request) {
 	type vault struct {
 		Project, Bucket, Endpoint string
 		Apps                      []vaultApp
+		Retiring, Awaiting        []string // old key ids still valid at B2, and the sites not yet reporting the new key
 	}
 	nsl := &corev1.NamespaceList{}
 	_ = s.c.List(ctx, nsl, client.HasLabels{"wecolab.io/tenant"})
@@ -77,6 +78,13 @@ func (s *server) storage(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			v.Apps = append(v.Apps, va)
+		}
+		if v.Retiring = strings.Fields(string(sec.Data["retiring"])); len(v.Retiring) > 0 {
+			apps := slices.DeleteFunc(slices.Clone(al.Items), func(a v1alpha1.App) bool { return a.Namespace != n.Name })
+			v.Awaiting = warden.Retirable(string(sec.Data["b2-key-id"]), apps, func(site string) *warden.SiteStatus {
+				st, _ := s.peers.Get(s.elevated(ctx), site)
+				return st
+			})
 		}
 		vaults = append(vaults, v)
 	}
@@ -177,9 +185,10 @@ func vaultEndpoint(ctx context.Context, raw string) error {
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 // rotateVault gives a project's vault a new key (decision 25): made at B2 with the account key in
-// Settings, written into the project's vault and every database app's Secret, then the old key deleted
-// there, so a copy held anywhere else, such as at a site that left, no longer reaches the backups.
-// Archiving and restores retry until each site has the new key.
+// Settings and written into the project's vault and every database app's Secret. The old key is marked
+// retiring in the vault: the writer's Warden deletes it at B2 once every site of the project's database
+// apps reports the new one, so a copy held anywhere else, such as at a site that left, no longer reaches
+// the backups, and no site still archiving with it is cut off.
 func (s *server) rotateVault(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
 	if validate.Name(project) != nil {
@@ -194,11 +203,11 @@ func (s *server) rotateVault(w http.ResponseWriter, r *http.Request) {
 		answer(w, err, 502)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "bucket": bucket})
+	writeJSON(w, map[string]any{"ok": true, "bucket": bucket, "note": "the old key stays valid until every site has the new one; then it is deleted at B2"})
 }
 
-// rotate is rotateVault's work, for one project; the old key is deleted only once the new one is in the
-// Fabric everywhere it was.
+// rotate is rotateVault's work, for one project. The old key joins the vault's retiring keys, in the same
+// commit as the new one.
 func (s *server) rotate(r *http.Request, project string) (string, error) {
 	ctx := r.Context()
 	p := secretPath(vaultSecret(project))
@@ -217,22 +226,36 @@ func (s *server) rotate(r *http.Request, project string) (string, error) {
 	if err := s.c.Get(s.elevated(ctx), types.NamespacedName{Namespace: warden.SystemNS, Name: storageSecret}, acct); err != nil {
 		return "", fail(409, "no B2 account key in Settings: rotate the key of %s at its provider", vault["bucket"])
 	}
-	id, key := string(acct.Data["key-id"]), string(acct.Data["key"])
-	v, err := warden.NewVaultKey(ctx, id, key, vault["bucket"])
+	v, err := warden.NewVaultKey(ctx, string(acct.Data["key-id"]), string(acct.Data["key"]), vault["bucket"])
 	if err != nil {
 		return "", err
 	}
-	old := vault["b2-key-id"]
-	vault["b2-key-id"], vault["b2-key"] = v.KeyID, v.Key
-	if err := s.putSecret(ctx, "project "+project+": its vault's key rotated", vaultSecret(project), vault, true); err != nil {
+	// Changed as Git holds the vault when the edit commits, so another rotation or the writer retiring old
+	// keys meanwhile is built on, not undone.
+	err = s.editSecret(ctx, "project "+project+": its vault's key rotated", vaultSecret(project), func(b []byte, exists bool) (map[string]string, error) {
+		if !exists {
+			return nil, fail(404, "project %s has no vault", project)
+		}
+		now, err := s.openSecret(ctx, b, p)
+		if err != nil {
+			return nil, err
+		}
+		// Space-separated, so a second rotation before the first old key is gone waits for both.
+		if old := now["b2-key-id"]; old != "" && !slices.Contains(strings.Fields(now["retiring"]), old) {
+			now["retiring"] = strings.TrimSpace(now["retiring"] + " " + old)
+		}
+		now["b2-key-id"], now["b2-key"] = v.KeyID, v.Key
+		vault = now
+		return now, nil
+	})
+	if err != nil {
 		return "", err
 	}
-	through(s.localSecret(r, vaultSecret(project), vault), "vault "+project)
+	here := maps.Clone(vault)
+	delete(here, "retiring") // Flux brings it, so it goes here too when the writer takes it out of Git
+	through(s.localSecret(r, vaultSecret(project), here), "vault "+project)
 	if err := s.rekeyApps(ctx, project, v); err != nil {
 		return "", fmt.Errorf("the vault has its new key, but its apps do not yet (the old key still works; rotate again): %w", err)
-	}
-	if err := warden.DeleteVaultKey(ctx, id, key, old); err != nil {
-		return "", fmt.Errorf("the new key is in place, but the old one (%s) could not be deleted at B2 and still works: %w", old, err)
 	}
 	return vault["bucket"], nil
 }

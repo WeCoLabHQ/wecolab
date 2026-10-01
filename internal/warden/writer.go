@@ -58,7 +58,8 @@ const settingsHeader = "# The fabric's settings (docs/architecture.md). Changing
 // a higher epoch steps down, and if its copy went its own way meanwhile, keeps those commits aside as a
 // branch on the new writer and takes the new writer's history; any other site simply takes it. At the
 // writer it also blocklists the certificates of boxes that left the Fabric, asks for standby databases
-// that cannot recover to be rebuilt, and makes the planned moves' steps (Handovers).
+// that cannot recover to be rebuilt, makes the planned moves' steps (Handovers), and deletes vaults' old
+// keys once every site has the new one (retire).
 type Writer struct {
 	Client client.Client
 	Site   string
@@ -69,6 +70,7 @@ type Writer struct {
 	mu      sync.Mutex
 	reseeds map[string]time.Time
 	mirrors map[string]mirrorState // push mirrors this Warden set up, by remote
+	notes   map[string]string      // what each vault's old keys wait for, as last logged
 }
 
 // mirrorState is how this Warden last set up a push mirror: with which password, and when.
@@ -191,7 +193,8 @@ func (w *Writer) fresh(pm fabric.PushMirror, password string, now time.Time) boo
 }
 
 // lead: admit the Console, push to every other copy, revoke, ask for rebuilds, make the handovers'
-// steps. own is what this copy names the writer: empty while it lacks the Fabric's settings.
+// steps, retire vaults' old keys. own is what this copy names the writer: empty while it lacks the
+// Fabric's settings.
 func (w *Writer) lead(ctx context.Context, sites []v1alpha1.Site, own Claim) error {
 	head, err := w.Git.Head(ctx)
 	if err != nil {
@@ -210,7 +213,7 @@ func (w *Writer) lead(ctx context.Context, sites []v1alpha1.Site, own Claim) err
 	// The planned moves' steps first, and whatever else fails: a move waits on neither a site's push
 	// mirror nor the stewards' certificate lists, and while it waits the app has no writable primary.
 	return errors.Join((&Handovers{Client: w.Client, Site: w.Site, Git: w.Git, Peers: w.Peers}).Steps(ctx),
-		w.mirror(ctx, sites, holds), w.revoke(ctx, sites), w.reseed(ctx))
+		w.mirror(ctx, sites, holds), w.revoke(ctx, sites), w.reseed(ctx), w.retire(ctx))
 }
 
 // mirror keeps a push mirror to every other site's copy while this copy holds the Fabric, and none

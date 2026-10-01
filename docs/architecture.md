@@ -32,8 +32,8 @@ from what other sites say.
   still runs apps and holds the secrets of the apps placed on it, nothing more.
 - **The writer**: the steward whose copy of the Fabric accepts commits. Its Console is the one people
   use; it also does the few fabric-wide jobs (the steps of planned moves, the blocklist, people's mesh,
-  domain checks, rebuild requests). The first site is the writer until a person switches it: an admin in
-  the Console, or root on another steward's manager with `install.sh takeover`.
+  domain checks, rebuild requests, retiring old vault keys). The first site is the writer until a person
+  switches it: an admin in the Console, or root on another steward's manager with `install.sh takeover`.
 
 ```text
              people (phones, laptops)                         the internet
@@ -179,9 +179,10 @@ Warden is this repository's controller. The same binary runs at every site:
 - **Status.** Publishes what is true here at `http://<manager's Nebula address>:8093/status`: nodes and
   capacity, each database's CloudNativePG status, workloads, volumes, the role it applied for each app and
   the archive its database was built for, each app's endpoints (the Nebula address and port of every box
-  running a ready pod), what each vault looks like, and the writer and epoch its own copy of the Fabric
-  names. Other sites read a site's status only from its manager's Nebula address, refuse an answer that
-  names another site, and use it only about that site and only as far as the Fabric allows.
+  running a ready pod), what each vault looks like, the id of the vault key each database app's Secret
+  holds here, and the writer and epoch its own copy of the Fabric names. Other sites read a site's status
+  only from its manager's Nebula address, refuse an answer that names another site, and use it only about
+  that site and only as far as the Fabric allows.
 - **The writer's part.** At every site, Warden keeps its copy's branch protection and push mirrors as the
   writer's election says (see "The writer").
 
@@ -193,9 +194,10 @@ credentials anywhere.
 **Writer duties**, at the writer only: makes the planned moves' steps and records a new database once its
 primary has backed it up (see "An app's primary, from Git"); blocklists every certificate issued for a
 box that has left the Fabric; keeps NetBird's users and groups in step with Members and renews NetBird's
-service token two months before it expires; checks custom domains; and commits a new archive generation
-when a standby database reports it cannot recover (at most once per half hour per database, never for the
-primary or a planned move's origin).
+service token two months before it expires; checks custom domains; commits a new archive generation when
+a standby database reports it cannot recover (at most once per half hour per database, never for the
+primary or a planned move's origin); and deletes a vault's retiring keys at B2 once every site of the
+project's database apps reports the vault's current key.
 
 **Node-agent mode**, on laptop nodes: keeps the `wecolab.io/idle` taints on the node while its person uses
 it. It may change only that taint, and only on its own node.

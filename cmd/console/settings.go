@@ -26,7 +26,7 @@ import (
 )
 
 // storageSecret holds the object storage account key (Settings): projects' vaults are made from it.
-const storageSecret = "storage"
+const storageSecret = warden.StorageSecret
 
 // settingsPath is the fabric's settings in Git: the ConfigMap every site applies.
 const settingsPath = warden.SettingsPath
@@ -112,14 +112,26 @@ func (s *server) setStorage(w http.ResponseWriter, r *http.Request) {
 // putSecret commits a Secret of wecolab-system, encrypted to the stewards and the recovery key, and
 // lists it in secrets/kustomization.yaml; replace false refuses one Git has already.
 func (s *server) putSecret(ctx context.Context, msg, name string, data map[string]string, replace bool) error {
+	return s.editSecret(ctx, msg, name, func(_ []byte, exists bool) (map[string]string, error) {
+		if exists && !replace {
+			return nil, fail(409, "%s exists already", name)
+		}
+		return data, nil
+	})
+}
+
+// editSecret is putSecret with what the Secret holds decided by data from its file as Git holds it (and
+// whether there is one), read again on every attempt of the edit.
+func (s *server) editSecret(ctx context.Context, msg, name string, data func(enc []byte, exists bool) (map[string]string, error)) error {
 	paths, err := s.sitePaths(ctx)
 	if err != nil {
 		return err
 	}
 	paths = append(paths, secretPath(name), kustomizationPath)
 	return s.edit(ctx, msg, paths, func(snap *fabric.Snapshot) ([]fabric.FileChange, error) {
-		if _, exists := snap.Get(secretPath(name)); exists && !replace {
-			return nil, fail(409, "%s exists already", name)
+		v, err := data(snap.Get(secretPath(name)))
+		if err != nil {
+			return nil, err
 		}
 		sites, err := sitesOf(snap, paths)
 		if err != nil {
@@ -129,7 +141,7 @@ func (s *server) putSecret(ctx context.Context, msg, name string, data map[strin
 		if err != nil {
 			return nil, err
 		}
-		f, err := secretFile(name, data, recips)
+		f, err := secretFile(name, v, recips)
 		if err != nil {
 			return nil, err
 		}
