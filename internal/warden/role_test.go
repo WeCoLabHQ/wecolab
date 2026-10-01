@@ -342,3 +342,16 @@ func TestNeedsBackup(t *testing.T) {
 		}
 	}
 }
+
+// An app left at one site (a site removed, decision 25) still names a replica source, its own: CNPG
+// refuses an empty one, and the app's whole Kustomization with it, a new vault key included.
+func TestOneSiteApp(t *testing.T) {
+	a := sampleApp()
+	a.Spec.Sites, a.Spec.Primary, a.Spec.Archive = []string{"vince"}, "vince", map[string]int{"vince": 1}
+	if r := RoleAt(a.Spec, "vince"); r.Source != "vince" || r.Primary != "vince" {
+		t.Fatalf("role: %+v", r)
+	}
+	if s := opValue(patchesOf(t, a, "vince", Local{Created: true})["Cluster/docs-db"], "/spec/replica/source"); s != "vince" {
+		t.Fatalf("replica.source %v", s)
+	}
+}

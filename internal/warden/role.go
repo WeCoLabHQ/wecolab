@@ -68,6 +68,9 @@ func RoleAt(s v1alpha1.AppSpec, self string) Role {
 		r.Source = r.Primary
 	default:
 		r.Source = s.Standby(self) // whom it would follow once demoted
+		if r.Source == "" {          // an app at one site, as one left after a site does: CNPG needs a source
+			r.Source = self
+		}
 	}
 	if h != nil && h.Token != "" && self == s.Primary {
 		r.Token = h.Token
