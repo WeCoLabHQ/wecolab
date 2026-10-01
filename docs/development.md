@@ -72,8 +72,9 @@ different source checkout; it defaults to the parent of `website/`. Generated `d
 `node_modules/` directories are ignored.
 
 The Website build workflow checks both root and project-subpath builds when the site or its source
-documentation changes. It does not deploy or enable GitHub Pages; public publishing still goes through
-the gate described below.
+documentation changes. On the public repository, a push to main also deploys it to GitHub Pages, at
+https://wecolabhq.github.io/wecolab/; what reaches that repository still goes through the gate described
+below.
 
 ## The catalog
 

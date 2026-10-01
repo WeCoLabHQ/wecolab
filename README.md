@@ -1,5 +1,7 @@
 # WeCoLab
 
+**Website:** https://wecolabhq.github.io/wecolab/
+
 A cooperative cloud for every place you and your collaborators run machines: homelabs, offices, a small
 business's server room, a rented box. Run an app at a site you own, keep a live copy at another site, keep
 an immutable third copy nobody can delete, and when a site dies the other site's copy becomes the app,
