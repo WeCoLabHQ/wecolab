@@ -71,6 +71,9 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		if in.Name == "" {
 			in.Name = e.Slug
 		}
+		if e.MeshOnly {
+			in.Hostname, in.Mesh = "", true
+		}
 	}
 	switch {
 	case validate.Name(in.Name) != nil || validate.Name(in.Project) != nil:
@@ -87,7 +90,7 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		in.Port = 8080
 	}
 	in.Hostname = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(in.Hostname), "."))
-	if in.Hostname == "" {
+	if in.Hostname == "" && (entry == nil || !entry.MeshOnly) {
 		in.Hostname = in.Name + "." + s.domain
 	}
 	ctx := r.Context()
@@ -118,9 +121,11 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		answer(w, err, 502)
 		return
 	}
-	if err := s.hostnameAllowed(ctx, in.Project, in.Name, in.Hostname, apps); err != nil {
-		answer(w, err, 400)
-		return
+	if in.Hostname != "" {
+		if err := s.hostnameAllowed(ctx, in.Project, in.Name, in.Hostname, apps); err != nil {
+			answer(w, err, 400)
+			return
+		}
 	}
 	if in.Mesh {
 		if err := meshFree(apps, in.Project, in.Name); err != nil {
@@ -280,6 +285,10 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		"hostUsers":         false,
 		"securityContext":   map[string]any{"seccompProfile": map[string]any{"type": "RuntimeDefault"}},
 		"containers":        containers,
+	}
+	if entry != nil && entry.Runtime == "kata" { // its own kernel instead: Kata refuses user namespaces
+		spec["runtimeClassName"] = kataRuntime
+		delete(spec, "hostUsers")
 	}
 	if len(volumes) > 0 {
 		spec["volumes"] = volumes

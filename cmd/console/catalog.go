@@ -45,7 +45,15 @@ type catalogEntry struct {
 	State, Validated                                        string
 	Command, Entrypoint                                     any
 	User                                                    string
+	// WeCoLab's own entries (hack/catalog-own.json) may also say:
+	Runtime   string         // "kata": the pod runs in its own VM (decision 26)
+	MeshOnly  bool           // reached only from the people mesh: no public hostname
+	Shm       string         // a memory-backed /dev/shm of this size
+	Resources map[string]any // the main container's, instead of the defaults
 }
+
+// kataRuntime is Kata's RuntimeClass, as system/wecolab/kata.yaml names it and the userns policy admits it.
+const kataRuntime = "kata-clh"
 
 func loadCatalog() map[string]catalogEntry {
 	b, err := web.ReadFile("web/catalog.json")
@@ -133,6 +141,13 @@ func catalogPod(e catalogEntry, app, db string, vars map[string]string, generate
 	}
 	if e.Entrypoint != nil {
 		main["command"] = toList(e.Entrypoint)
+	}
+	if e.Resources != nil {
+		main["resources"] = e.Resources
+	}
+	if e.Shm != "" {
+		volumes = append(volumes, map[string]any{"name": "shm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": e.Shm}})
+		main["volumeMounts"] = append(main["volumeMounts"].([]any), map[string]any{"name": "shm", "mountPath": "/dev/shm"})
 	}
 	containers = append(containers, main)
 	for _, s := range e.Sidecars {

@@ -1,0 +1,62 @@
+[
+ {
+  "attention": [
+   "Runs in its own VM (Kata Containers), only at a site with an amd64 box that has KVM; elsewhere it waits to be scheduled.",
+   "Reached only from the people mesh, at <name>-<project>.mesh.<zone>: sign in as admin with the password shown once.",
+   "The home folder is a volume at the primary site: it stays there if the app moves."
+  ],
+  "category": "workspaces",
+  "database": null,
+  "description": "A Linux desktop in your browser, in its own VM: Selkies streams an Ubuntu desktop over one WebSocket.",
+  "env": [
+   {
+    "name": "PASSWD",
+    "value": "${secret:admin_password}"
+   },
+   {
+    "name": "SELKIES_BASIC_AUTH_USER",
+    "value": "admin"
+   },
+   {
+    "name": "SELKIES_ENABLE_HTTPS",
+    "value": "false"
+   }
+  ],
+  "image": "ghcr.io/selkies-project/selkies/desktop:2.0.0-ubuntu26.04",
+  "limitations": [
+   "Validated on a 16-core amd64 desktop with KVM, under kata-clh: the desktop, its browser and the home volume."
+  ],
+  "meshOnly": true,
+  "port": 8080,
+  "resources": {
+   "limits": {
+    "cpu": "4",
+    "memory": "6Gi"
+   },
+   "requests": {
+    "cpu": "1",
+    "memory": "2Gi"
+   }
+  },
+  "runtime": "kata",
+  "secrets": [
+   "admin_password"
+  ],
+  "shm": "2Gi",
+  "sidecars": [],
+  "slug": "workspace",
+  "state": "volume",
+  "title": "Workspace",
+  "unsupported": [],
+  "url": "https://github.com/selkies-project/selkies",
+  "validated": "eligible",
+  "version": "2.0.0",
+  "volumes": [
+   {
+    "mountPath": "/home/ubuntu",
+    "name": "data-home",
+    "readOnly": false
+   }
+  ]
+ }
+]

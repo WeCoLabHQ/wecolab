@@ -10,6 +10,10 @@ without two writers ever existing.
 WeCoLab starts working with two sites, keeps working when any one site is gone, and gets stronger with
 every site that joins. There is no hub: every site holds the whole desired state and runs its own share.
 
+It also gives people a desktop in the browser: a **Workspace** is a full Linux desktop that runs in its own
+VM (Kata Containers) on any box with KVM, reached only from your people mesh
+([docs/console.md](docs/console.md#workspaces)).
+
 A *fabric* is one such cooperative: its sites, people, apps and keys. *The Fabric*, capitalised, is the
 Git repository holding its desired state. These and every other word WeCoLab uses, with their
 Kubernetes equivalents, are in [docs/glossary.md](docs/glossary.md).
@@ -33,6 +37,7 @@ addresses in the pictures are examples.
 | **NetBird** | the mesh for people's phones and laptops | the first public site |
 | **CloudNativePG** | each app's PostgreSQL, primary at one site, standbys elsewhere | the operator at every site; databases at the sites of database apps |
 | **The vault** | object storage under Object Lock: WAL archive and backups | outside the fabric (B2, S3, R2, ...) |
+| **Kata Containers** | a VM of its own for each workspace (a desktop in the browser, by Selkies) | boxes with KVM, amd64 |
 
 ## Start
 

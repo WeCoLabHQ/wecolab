@@ -50,6 +50,7 @@ import { url } from "../lib/paths";
       <span>Forgejo</span>
       <span>Flux</span>
       <span>CloudNativePG</span>
+      <span>Kata Containers</span>
     </div>
     <a href={url("docs/architecture/")} aria-label="Explore the architecture">
       <span aria-hidden="true">↗</span>
@@ -298,9 +299,46 @@ import { url } from "../lib/paths";
     </div>
   </section>
 
+  <section class="workspace-section" id="workspaces">
+    <div class="container workspace-grid">
+      <div class="workspace-copy">
+        <span class="eyebrow section-label">04 / Workspaces</span>
+        <h2>
+          A desktop in your browser.
+          <br />
+          <span>In its own VM.</span>
+        </h2>
+        <p>
+          Deploy a Workspace from the catalog and open a full Linux desktop, with
+          a browser, files and a terminal, from any of your devices. It runs on a
+          box with KVM inside a Kata Containers VM, with a kernel of its own, so
+          whatever runs in it stays in it.
+        </p>
+        <ul class="workspace-points">
+          <li><strong>Its own kernel.</strong> Kata Containers, on the boxes that have KVM.</li>
+          <li><strong>Only on your mesh.</strong> No public address, and a password shown once.</li>
+          <li><strong>One connection.</strong> Selkies streams the desktop, sound and clipboard over a WebSocket.</li>
+        </ul>
+        <a href={url("docs/console/#workspaces")} class="text-link">
+          How workspaces work <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+      <figure class="workspace-shot">
+        <img
+          src={url("images/workspace.png")}
+          alt="A Workspace: an Ubuntu desktop with a browser and a terminal, streamed into a browser tab"
+          width="1440"
+          height="900"
+          loading="lazy"
+        />
+        <figcaption>A Workspace, streamed by Selkies from a Kata VM.</figcaption>
+      </figure>
+    </div>
+  </section>
+
   <section class="trust-section container" id="trust">
     <div class="trust-title">
-      <span class="eyebrow section-label">04 / Trust has a boundary</span>
+      <span class="eyebrow section-label">05 / Trust has a boundary</span>
       <h2>
         Collaborators share
         <br />
@@ -343,8 +381,8 @@ import { url } from "../lib/paths";
         <span class="eyebrow">Know who you're trusting</span>
         <p>
           The owner of a host can read data placed on it. Stewards hold the
-          fabric's keys. Containers share a kernel. This is built for trusted
-          peers, not anonymous tenants.
+          fabric's keys. Apps' containers share a kernel; only workspaces get
+          their own. This is built for trusted peers, not anonymous tenants.
         </p>
       </div>
     </div>
@@ -385,7 +423,7 @@ import { url } from "../lib/paths";
         </span>
       </div>
       <div class="fabric-copy">
-        <span class="eyebrow section-label">05 / Made to stay yours</span>
+        <span class="eyebrow section-label">06 / Made to stay yours</span>
         <h2>
           A shared plan.
           <br />
@@ -410,7 +448,7 @@ import { url } from "../lib/paths";
 
   <section class="build-section container">
     <div class="build-top">
-      <span class="eyebrow section-label">06 / Come build with us</span>
+      <span class="eyebrow section-label">07 / Come build with us</span>
       <span class="tag">
         <span class="status-dot" aria-hidden="true"></span> Active development
       </span>
@@ -641,7 +679,56 @@ import { url } from "../lib/paths";
     margin: 2rem 0 0;
   }
 
-  .console-shot img {
+  .workspace-section {
+    background: #e9eee5;
+    border-block: 1px solid var(--line);
+    padding-block: 80px;
+    margin-bottom: 91px;
+  }
+  .workspace-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.25fr;
+    gap: 80px;
+    align-items: center;
+  }
+  .workspace-copy h2 span {
+    color: #758473;
+  }
+  .workspace-copy > p {
+    font-size: 17px;
+    color: var(--muted);
+    margin-top: 24px;
+  }
+  .workspace-points {
+    list-style: none;
+    padding: 0;
+    margin: 24px 0 0;
+    font-size: 15px;
+    color: var(--muted);
+  }
+  .workspace-points li {
+    padding: 11px 0;
+    border-top: 1px solid var(--line);
+  }
+  .workspace-points strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .workspace-copy .text-link {
+    margin-top: 22px;
+    font-size: 13px;
+  }
+  .workspace-shot {
+    margin: 0;
+  }
+  .workspace-shot figcaption {
+    margin-top: 0.9rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .console-shot img,
+  .workspace-shot img {
     display: block;
     width: 100%;
     height: auto;
@@ -1372,7 +1459,8 @@ import { url } from "../lib/paths";
     .trust-details h3 {
       font-size: 20px;
     }
-    .fabric-grid {
+    .fabric-grid,
+    .workspace-grid {
       gap: 45px;
       grid-template-columns: 1fr;
     }

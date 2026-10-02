@@ -139,7 +139,7 @@ The join script creates these Flux Kustomizations, all reading the site's own Fo
 |---|---|---|
 | `crds` | `./crds` | never pruned |
 | `flux`, `cert-manager`, `cnpg`, `barman` | `./system/vendor/<name>` | upstream manifests, vendored at a pinned version; never pruned |
-| `system` | `./system/wecolab` | the platform: namespaces, policies, Warden, Forgejo, the laptop node agent |
+| `system` | `./system/wecolab` | the platform: namespaces, policies, Warden, Forgejo, the laptop node agent, Kata Containers on KVM boxes |
 | `fabric` | `./fabric` | pruned; namespaces and data are never pruned |
 
 Flux's kustomize-controller runs locked down (`--no-cross-namespace-refs`, `--no-remote-bases`,
@@ -425,3 +425,4 @@ Pinned in the install script and the Fabric's `system/`; checked quarterly. As o
 | Traefik | 3.7.13 | the Door |
 | CoreDNS | 1.14.7 | Names; the zone file is written by the entrance Warden |
 | NetBird server | 0.79.0 | unattended first run through `POST /api/setup` |
+| Kata Containers | 4.2.0 | kata-deploy rendered without Helm's hooks (`hack/kata-render.sh`); Cloud Hypervisor only |

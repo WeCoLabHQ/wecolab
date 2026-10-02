@@ -19,6 +19,7 @@ install.sh             every box: with no argument it creates a fabric (or conve
                        with an invite it joins one; also people, takeover and uninstall
 cmd/console/join.sh    a copy of install.sh the Console serves and embeds (make join keeps it equal)
 hack/dev/              the development fabric
+hack/kata-render.sh    renders Kata's kata-deploy chart into system/wecolab/kata.yaml (needs helm)
 mac/                   WeCoLab for Mac; it embeds install.sh
 website/               the public-facing Astro site and searchable source documentation
 ```
@@ -79,8 +80,8 @@ below.
 ## The catalog
 
 `cmd/console/web/catalog.json` is the Console's catalog ([console.md](console.md#the-catalog)), embedded in
-the binary. It is generated from a checkout of HomelabOS by `hack/catalog-import.py`. With jinja2 and
-pyyaml installed:
+the binary. It is generated from a checkout of HomelabOS by `hack/catalog-import.py`, which puts WeCoLab's own
+entries, `hack/catalog-own.json` (the Workspace), first. With jinja2 and pyyaml installed:
 
 ```bash
 python3 hack/catalog-import.py /path/to/HomelabOS > cmd/console/web/catalog.json

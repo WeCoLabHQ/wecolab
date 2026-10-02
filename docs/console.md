@@ -102,9 +102,10 @@ the Fabric's record of one application, its sites, its primary and its hostname.
 
 ### The catalog
 
-The catalog holds 226 apps imported from the HomelabOS catalog on 2026-09-28. Search it or pick a
-category; at most 60 cards show at once. A card shows the app's version, its category and tags:
-**postgres** (it has a database), **volume** (it keeps files on volumes), the number of sidecars, and one of:
+The catalog holds WeCoLab's own [Workspace](#workspaces), first, and 226 apps imported from the HomelabOS
+catalog on 2026-09-28. Search it or pick a category; at most 60 cards show at once. A card shows the app's
+version, its category and tags: **own VM** and **mesh only** (a workspace), **postgres** (it has a
+database), **volume** (it keeps files on volumes), the number of sidecars, and one of:
 
 - **validated**: it passed HomelabOS's own validation on a single amd64 droplet, whose backup check stops
   the app, archives its data and volumes, wipes, restores and reads back. It is not a test on WeCoLab.
@@ -147,7 +148,29 @@ may use at most 512Mi of memory. It has no environment variables and no volumes,
 with Postgres: files it writes live in the container and go when the pod is replaced.
 
 Every app's pods run in user namespaces: root inside a container is an unprivileged user on the box
-([security.md](security.md)).
+([security.md](security.md)). A workspace's run in their own VM instead (below).
+
+### Workspaces
+
+A **Workspace** is a Linux desktop in your browser: [Selkies](https://github.com/selkies-project/selkies)
+streams an Ubuntu desktop (LXQt, Firefox, a terminal) over one WebSocket. It is deployed from the catalog
+like any app, and differs in three ways.
+
+![A Workspace: Firefox and a terminal on an Ubuntu desktop, the terminal showing the VM's own kernel](images/workspace.png)
+
+
+- **Its own VM.** The pod runs under Kata Containers (`runtimeClassName: kata-clh`): its own kernel, in a
+  small VM, so nothing inside shares the box's kernel ([decision 26](decisions.md)). Kata is installed on a
+  site's amd64 boxes that have KVM, which install.sh labels `wecolab.io/kvm=true`. At a site with none, the
+  workspace waits to be scheduled. A Mac's VM has no KVM, so a laptop never runs one.
+- **On the mesh only.** It has no public hostname, and the form hides the field: it answers at
+  `<name>-<project>.mesh.<zone>`, to devices on the people mesh ([Mesh](#mesh)). Selkies then asks for the
+  user `admin` and the password the Console showed once after the first deploy.
+- **Sized for a desktop.** It requests 1 CPU and 2Gi and may use 4 CPUs and 6Gi, plus Kata's 250m and 130Mi
+  for the VM. A 2Gi `/dev/shm` in memory keeps its browser from crashing. Its home, `/home/ubuntu`, is a 5Gi
+  volume at each of its sites, which a move does not carry.
+
+Its sites, primary, moves and deletion are as for any app.
 
 ### What happens next
 
@@ -203,7 +226,8 @@ verified first ([Domains](#domains)).
 ### Publishing on the mesh
 
 **Publish on the mesh**, in the form or on the app's card, also serves the app at
-`<name>-<project>.mesh.<zone>`, to devices on the people mesh (NetBird) only. The public hostname stays.
+`<name>-<project>.mesh.<zone>`, to devices on the people mesh (NetBird) only. The public hostname stays; a
+workspace has none, and is on the mesh only.
 The mesh name must be one DNS label of at most 63 characters that no other app has. **Unpublish** takes it
 away.
 

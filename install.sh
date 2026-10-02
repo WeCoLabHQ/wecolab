@@ -423,6 +423,21 @@ YAML
     for _ in $(seq 60); do kubectl get nodes >/dev/null 2>&1 && break; sleep 2; done
     kubectl wait --for=condition=Ready "node/$name" --timeout=300s >/dev/null
   fi
+  kvm_label
+}
+
+# kvm_label: a box with KVM says so on its node, and Kata Containers goes only there (decision 26). It is
+# the kubelet that labels, as it may its own node; k3s's node-label would apply only at registration, and
+# this runs at every converge too.
+kvm_label() {
+  [ -c /dev/kvm ] || return 0
+  [ -e /opt/kata ] || has kata || mark kata   # where kata-deploy installs; uninstall removes it if it is ours
+  local node; node=$(sed -n 's/^node-name: //p' /etc/rancher/k3s/config.yaml)
+  for _ in $(seq 60); do
+    k3s kubectl --kubeconfig /var/lib/rancher/k3s/agent/kubelet.kubeconfig label node "$node" wecolab.io/kvm=true --overwrite >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  echo "note: could not label $node wecolab.io/kvm=true; workspaces will not run on it until a converge does" >&2
 }
 
 # firewall_script PUBLIC: WeCoLab's own iptables chains, applied at every boot before k3s starts (pods ran
@@ -912,6 +927,7 @@ converge() {
   sync_timer
   firewall "$PUBLIC"
   apparmor
+  kvm_label
   [ ! -f "$STATE/install.json" ] || install_sops
   ssh_unappend
   # Not migrated: k3s from before bind-address and the agent token. Its tokens are the fabric's, which a
@@ -939,6 +955,7 @@ uninstall() {
     $ipt -X WECOLAB-HOST 2>/dev/null || true
   done
   if has k3s; then
+    ! has kata || pkill -f '^/opt/kata/' || true   # workspaces' VMs and their shims: k3s's killall knows only its own
     for u in k3s-uninstall.sh k3s-agent-uninstall.sh; do [ ! -x "/usr/local/bin/$u" ] || "/usr/local/bin/$u" >/dev/null 2>&1 || true; done
     rm -rf /etc/rancher/node   # the node password; k3s's own uninstall leaves it
     systemctl stop kubepods.slice >/dev/null 2>&1 || true   # the kubelet's cgroups outlive it
@@ -946,6 +963,7 @@ uninstall() {
     rmdir /var/lib/kubelet 2>/dev/null || true
   fi
   rm -f /etc/systemd/system/k3s.service.d/10-nebula.conf /etc/systemd/system/k3s-agent.service.d/10-nebula.conf
+  ! has kata || rm -rf /opt/kata   # Kata's files; its containerd settings went with k3s
   if has apparmor; then   # after k3s: nothing runs under it now
     apparmor_parser -R /etc/apparmor.d/cri-containerd.apparmor.d >/dev/null 2>&1 || true
     rm -f /etc/apparmor.d/cri-containerd.apparmor.d

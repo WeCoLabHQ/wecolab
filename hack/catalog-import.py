@@ -9,7 +9,8 @@ The translation is mechanical and honest: a role becomes one workload (its main
 container), a CloudNativePG database when the compose has Postgres, sidecars in
 the same pod for other support containers, and a volume per data path. Anything
 that needs the host (devices, privileged, host network, the docker socket) is
-listed but marked unsupported, with the reason.
+listed but marked unsupported, with the reason. WeCoLab's own entries, in
+hack/catalog-own.json, are put first as they are.
 """
 import os, sys, re, json, subprocess, collections, datetime
 import yaml, jinja2
@@ -224,6 +225,8 @@ def main():
             if ent: entries.append(ent)
         except Exception as ex:
             failed.append({'slug': role, 'error': f'{type(ex).__name__}: {str(ex)[:120]}'})
+    # WeCoLab's own entries (a workspace, decision 26) come first, as written.
+    entries = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'catalog-own.json'))) + entries
     commit = subprocess.run(['git', '-C', ROOT, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
     out = {'generated': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
            'source': {'repo': 'https://gitlab.com/vincehark/HomelabOS', 'branch': 'feat/service-batch', 'commit': commit},

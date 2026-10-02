@@ -80,6 +80,13 @@ files on that site's volumes have no copy elsewhere and are gone.
 
 **Add a site, add a box.** See install.md, steps 4 and 5.
 
+**Boxes for workspaces.** install.sh labels a box that has `/dev/kvm` `wecolab.io/kvm=true`, when it joins
+and at every converge (`sudo bash install.sh` on the box), so a box whose virtualization was turned on later
+gets it from a converge. On amd64 the label brings the kata-deploy DaemonSet (`kube-system`), which installs
+Kata Containers and restarts k3s on that box once; running pods keep running. Removing the label, or the box,
+undoes the install there. `kubectl get nodes -L wecolab.io/kvm,katacontainers.io/kata-runtime` shows which
+boxes can run a workspace.
+
 **Make a site a steward.** Sites → the site → Make a steward. The same commit re-encrypts the fabric's
 secrets and every app's secrets to the stewards, the site's key now among them, and its Flux starts
 applying `secrets/`. Stop being a steward works the same way, except for the writer, and never for the last

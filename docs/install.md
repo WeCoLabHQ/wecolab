@@ -15,6 +15,9 @@ steward, writer, Door, vault, project, offer) are explained in the [glossary](gl
   install checks and stops.
 - **Home boxes** for more sites, same system requirements, with outbound internet. Nothing needs to be
   opened on a home router.
+- **For workspaces** (desktops in their own VM), an amd64 box with KVM (`/dev/kvm`): a desktop or server
+  with virtualization on in its firmware, or a VPS that offers nested virtualization. install.sh labels such
+  a box, and Kata Containers is installed on it ([console.md](console.md#workspaces)).
 - **An object storage account** for the vault. Backblaze B2 is the tested one; any S3-compatible store
   with Object Lock works (you then create buckets yourself).
 

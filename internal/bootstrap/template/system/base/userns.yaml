@@ -2,7 +2,8 @@
 # With that, project namespaces are Pod Security "baseline" and images that expect root work
 # unchanged. A pod that runs as non-root (operators such as CloudNativePG do) may keep the box's
 # user namespace, but then every container of it, init and ephemeral ones too, runs as non-root: a
-# container's own settings override the pod's.
+# container's own settings override the pod's. A pod in a Kata VM (a workspace, decision 26) has its own
+# kernel as its boundary; Kata refuses user namespaces.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata: { name: wecolab-userns }
@@ -18,11 +19,11 @@ spec:
       expression: has(object.spec.securityContext) && has(object.spec.securityContext.runAsUser) && object.spec.securityContext.runAsUser == 0
   validations:
     - expression: >-
-        (has(object.spec.hostUsers) && object.spec.hostUsers == false) || (
+        (has(object.spec.hostUsers) && object.spec.hostUsers == false) || (has(object.spec.runtimeClassName) && object.spec.runtimeClassName == 'kata-clh') || (
         object.spec.containers.all(c, (has(c.securityContext) && has(c.securityContext.runAsNonRoot) ? c.securityContext.runAsNonRoot : variables.podNonRoot) && !(has(c.securityContext) && has(c.securityContext.runAsUser) ? c.securityContext.runAsUser == 0 : variables.podRoot)) &&
         (!has(object.spec.initContainers) || object.spec.initContainers.all(c, (has(c.securityContext) && has(c.securityContext.runAsNonRoot) ? c.securityContext.runAsNonRoot : variables.podNonRoot) && !(has(c.securityContext) && has(c.securityContext.runAsUser) ? c.securityContext.runAsUser == 0 : variables.podRoot))) &&
         (!has(object.spec.ephemeralContainers) || object.spec.ephemeralContainers.all(c, (has(c.securityContext) && has(c.securityContext.runAsNonRoot) ? c.securityContext.runAsNonRoot : variables.podNonRoot) && !(has(c.securityContext) && has(c.securityContext.runAsUser) ? c.securityContext.runAsUser == 0 : variables.podRoot))))
-      message: "pods in a project namespace must run in a user namespace (spec.hostUsers: false) or every container as non-root (runAsNonRoot: true, never runAsUser: 0)"
+      message: "pods in a project namespace must run in a user namespace (spec.hostUsers: false), in a Kata VM (runtimeClassName: kata-clh), or every container as non-root (runAsNonRoot: true, never runAsUser: 0)"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

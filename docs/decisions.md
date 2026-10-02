@@ -314,7 +314,9 @@ A workspace (a desktop, a shell, anything a person runs their own code in) runs 
 KVM. The VM is its boundary, so the project policy accepts that RuntimeClass in place of `hostUsers:
 false`, which Kata refuses. Databases and WeCoLab's own components stay on the default runtime. KubeVirt,
 for a project that needs a whole guest OS, is installed at a site only when a project asks, and its VMs
-stay on that site's KVM boxes. Not built yet.
+stay on that site's KVM boxes. Built: Kata in `system/wecolab` on boxes install.sh labels
+`wecolab.io/kvm=true`, the policy, and the catalog's Workspace (a Selkies desktop, on the mesh only).
+KubeVirt is not built.
 
 - **Why:** measured on a 16-core desktop on 2026-10-01. A Kata pod started in 2 to 3 seconds instead of
   1 and cost about 175 MiB; a Selkies desktop ran in one unchanged. `kata-qemu` was slower to start and
