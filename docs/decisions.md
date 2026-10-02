@@ -307,6 +307,27 @@ would stop its archive.
 - **Not taken back:** what the site holds already. A steward held the fabric's CA and tokens, so a steward
   leaves only after Stop being a steward, and rotating the CA is the next thing to build.
 
+## 26. Workspaces run in their own VM; databases do not; whole VMs only on request
+
+A workspace (a desktop, a shell, anything a person runs their own code in) runs under Kata Containers'
+`kata-clh` RuntimeClass: a pod as usual, with its own kernel in a small VM. It runs only on boxes with
+KVM. The VM is its boundary, so the project policy accepts that RuntimeClass in place of `hostUsers:
+false`, which Kata refuses. Databases and WeCoLab's own components stay on the default runtime. KubeVirt,
+for a project that needs a whole guest OS, is installed at a site only when a project asks, and its VMs
+stay on that site's KVM boxes. Not built yet.
+
+- **Why:** measured on a 16-core desktop on 2026-10-01. A Kata pod started in 2 to 3 seconds instead of
+  1 and cost about 175 MiB; a Selkies desktop ran in one unchanged. `kata-qemu` was slower to start and
+  cost more. Postgres under Kata lost 45% of its writes and two thirds of its reads, a price for no gain
+  on images we choose. KubeVirt cost 889 MiB at the site before its first VM; a VM booted in about 13
+  seconds and passed Pod Security `restricted` with KubeVirt's own seccomp profile.
+- **Limits:** a laptop node runs neither. An M1 or M2 Mac cannot nest virtualization; KubeVirt allows
+  arm64 VMs only with KVM, and its cross-architecture emulation needs QEMU builds the release does not
+  ship. A VM moves between sites as an app does, stopped at one and started at the other, and its disks
+  are not replicated, so only a VM without data of its own can move.
+- **Revisit:** a Mac with M3 or later on macOS 15, which can nest, brings laptops into both. A project
+  whose VM disk must survive losing a site needs disk replication first.
+
 ## Not adopted
 
 - **Karmada:** replaced by decision 1. Its useful parts (delivery, per-site differences, status in one

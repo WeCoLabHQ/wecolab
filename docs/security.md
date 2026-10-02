@@ -36,7 +36,7 @@ explained in the [glossary](glossary.md).
 
 | Gap | Reality | Mitigation |
 |---|---|---|
-| Kernel escape | Pods share the box's kernel. User namespaces and `restricted` shrink the attack surface; they do not make a kernel exploit impossible. | For untrusted projects: a sandboxed runtime (gVisor or Kata) per namespace. Not built. |
+| Kernel escape | Pods share the box's kernel. User namespaces and `restricted` shrink the attack surface; they do not make a kernel exploit impossible. | Workspaces, where people run their own code, get their own kernel in a Kata VM (decision 26). Not built. |
 | Every steward is trusted with fabric-level secrets | The Nebula CA key and the fabric's service tokens are encrypted to every steward, so any steward can take over as writer. A steward's root can read them. | The fabric is for people who trust each other's stewards (decisions 5 and 11). A fabric that outgrows that splits the CA from the rest. |
 | The site owner sees everything placed at their site | Volumes are files on the owner's disk; secrets decrypted at a site are readable by its root. | The trusted-peer boundary, by design. Encryption of specific data is an app concern. |
 | Immediate revocation of a box | A blocked certificate stops working at each box's next sync, up to an hour later; a box that cannot reach a steward keeps the blocklist it has until its own certificate expires. | Keep certificates short. |
