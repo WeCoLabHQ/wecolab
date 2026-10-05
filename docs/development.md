@@ -89,7 +89,7 @@ python3 hack/catalog-import.py /path/to/HomelabOS > cmd/console/web/catalog.json
 
 It renders each role's `service.yml` and compose template with stubbed Ansible variables and translates the
 result mechanically: the main container, a database when the compose has Postgres, sidecars, a volume per
-data path, and what needs the host (`unsupported`, refused by the Console) or attention. Each entry's
+data path, and what is host incompatible (`unsupported`, refused by the Console) or attention. Each entry's
 `validated` and `limitations` come from HomelabOS's `docs/development/service-validation-results.json`. The
 file records `source` (the HomelabOS repository and branch, which the script names, and the commit it read),
 `generated` (when) and `failed` (roles the import could not render, with the error). The current file is

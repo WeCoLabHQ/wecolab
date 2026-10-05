@@ -120,7 +120,7 @@ func fillEnv(items []catalogEnv, app, db string, vars map[string]string, generat
 // catalogPod renders the containers, volumes and claims for an entry.
 func catalogPod(e catalogEntry, app, db string, vars map[string]string, generated, secrets map[string]string) (containers, volumes []any, claims []map[string]any, err error) {
 	if len(e.Unsupported) > 0 {
-		return nil, nil, nil, fmt.Errorf("%s needs the host and cannot run on the fabric: %s", e.Title, strings.Join(e.Unsupported, "; "))
+		return nil, nil, nil, fmt.Errorf("%s is host incompatible, so the fabric refuses it: %s", e.Title, strings.Join(e.Unsupported, "; "))
 	}
 	mount := func(prefix string, vols []catalogVolume) []any {
 		mounts := []any{}
