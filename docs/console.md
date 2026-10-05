@@ -111,7 +111,7 @@ database), **volume** (it keeps files on volumes), the number of sidecars, and o
   the app, archives its data and volumes, wipes, restores and reads back. It is not a test on WeCoLab.
 - **incompatible**: HomelabOS found it broken as packaged (an image never published, a dead upstream).
 - **environment blocked**: HomelabOS could not validate it without outside accounts or fixtures.
-- **host incompatible**: refused, with no Use button; hovering shows why. Unlike *incompatible*, the app
+- **host incompatible**: refused, with no Use button; the card says why. Unlike *incompatible*, the app
   may work, but it needs what WeCoLab refuses a project's pod: the Docker socket, extra capabilities such
   as `NET_ADMIN`, the host's network, devices, privileged mode, or a custom Postgres image (CloudNativePG
   runs plain Postgres).
