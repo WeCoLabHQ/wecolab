@@ -26,5 +26,13 @@ shims:
 defaultShim: { amd64: clh } # the chart's, qemu-runtime-rs, is not among the shims: kata-deploy would refuse
 YAML
 } > "$out"
+# Without nodes/proxy, which reaches the kubelet API of every node, for an advisory read of /configz that
+# kata-deploy skips with a warning. Its node patches are bounded by system/wecolab/kata-policy.yaml.
+python3 -c '
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s, n = re.subn(r"(?:#[^\n]*\n)*- apiGroups: \[\"\"\]\n  resources: \[\"nodes/proxy\"\]\n  verbs: \[\"get\"\]\n", "", s)
+assert n == 1, "the nodes/proxy rule moved: read the chart again"
+open(p, "w").write(s)' "$out"
 ! grep -q -e '{{' -e '${' "$out" || { echo "$out has {{ or \${: bootstrap and Flux would both read it as a template" >&2; exit 1; }
 echo "wrote $out"

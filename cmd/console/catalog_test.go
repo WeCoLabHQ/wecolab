@@ -95,10 +95,16 @@ func TestKataContract(t *testing.T) {
 		{kata, "wecolab.io/kvm: \"true\"", "Kata's nodes"},
 		{kata, "SHIMS_X86_64\n          value: \"clh\"\n        - name: DEFAULT_SHIM_X86_64\n          value: \"clh\"", "clh as the only shim and the default"},
 		{install, "label node \"$node\" wecolab.io/kvm=true", "install.sh labelling them"},
-		{read(tpl + "wecolab/kustomization.yaml"), "kata.yaml", "system/wecolab applying Kata"},
+		{read(tpl + "wecolab/kustomization.yaml"), "kata.yaml, kata-policy.yaml", "system/wecolab applying Kata and its policy"},
+		{kata, "serviceAccountName: kata-deploy-sa", "kata-deploy's account"},
+		{read(tpl + "wecolab/kata-policy.yaml"), "'system:serviceaccount:kube-system:kata-deploy-sa'", "the policy bounding that account"},
+		{read(tpl + "wecolab/kata-policy.yaml"), "['authentication.kubernetes.io/node-name'][0] == object.metadata.name", "only the node its token is bound to"},
 	} {
 		if !strings.Contains(c.in, c.want) {
 			t.Errorf("%s: no %q", c.what, c.want)
 		}
+	}
+	if strings.Contains(kata, "nodes/proxy") {
+		t.Error("kata-deploy's role reaches every node's kubelet (nodes/proxy): hack/kata-render.sh strips it")
 	}
 }

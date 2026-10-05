@@ -1,0 +1,39 @@
+# kata-deploy's account may patch nodes, which RBAC cannot narrow to one node: this admits only Kata's own
+# labels on the node its token is bound to, and nothing else of a node. A box taken over through a
+# workspace's VM gets no further with the token it finds there (security.md, Least privilege on the box).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: wecolab-kata-deploy }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [""], apiVersions: [v1], operations: [UPDATE], resources: [nodes] }
+  matchConditions:
+    - name: kata-deploy
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:kata-deploy-sa'
+  variables:
+    - name: new
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+    - name: old
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+  validations:
+    - expression: >-
+        has(request.userInfo.extra) && 'authentication.kubernetes.io/node-name' in request.userInfo.extra &&
+        request.userInfo.extra['authentication.kubernetes.io/node-name'][0] == object.metadata.name
+      message: kata-deploy may change only the node it runs on
+    - expression: >-
+        variables.new.all(k, k.startsWith('katacontainers.io/') || k.startsWith('kata-deploy.katacontainers.io/') || (k in variables.old && variables.old[k] == variables.new[k])) &&
+        variables.old.all(k, k.startsWith('katacontainers.io/') || k.startsWith('kata-deploy.katacontainers.io/') || k in variables.new)
+      message: kata-deploy may change only Kata's own labels
+    - expression: >-
+        object.spec == oldObject.spec &&
+        (has(object.metadata.annotations) ? object.metadata.annotations : {}) == (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {})
+      message: kata-deploy may not change a node's spec, taints or annotations
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: wecolab-kata-deploy }
+spec:
+  policyName: wecolab-kata-deploy
+  validationActions: [Deny]
