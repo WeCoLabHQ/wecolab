@@ -115,7 +115,7 @@
    "state": "volume",
    "title": "AdGuard Home",
    "unsupported": [
-    "needs capabilities NET_ADMIN"
+    "needs extra Linux capabilities: NET_ADMIN"
    ],
    "url": "",
    "validated": "eligible",
@@ -478,7 +478,7 @@
    "state": "volume",
    "title": "Arcane",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "https://github.com/getarcaneapp/arcane",
    "validated": "eligible",
@@ -2232,7 +2232,7 @@
    "state": "volume",
    "title": "Dozzle",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "https://github.com/amir20/dozzle",
    "validated": "eligible",
@@ -2331,7 +2331,7 @@
    "state": "volume",
    "title": "Drone",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "",
    "validated": "eligible",
@@ -4376,7 +4376,7 @@
    "state": "volume",
    "title": "Gluetun",
    "unsupported": [
-    "needs capabilities NET_ADMIN"
+    "needs extra Linux capabilities: NET_ADMIN"
    ],
    "url": "",
    "validated": "environment_blocked",
@@ -5244,7 +5244,7 @@
    "state": "volume",
    "title": "HomelabOS Dash",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "https://gitlab.com/NickBusey/HomelabOS",
    "validated": "incompatible",
@@ -5430,7 +5430,7 @@
    "state": "volume",
    "title": "HomeBridge",
    "unsupported": [
-    "needs network_mode"
+    "needs the host's network"
    ],
    "url": "",
    "validated": "environment_blocked",
@@ -9867,9 +9867,9 @@
    "state": "volume",
    "title": "NetBird",
    "unsupported": [
-    "needs capabilities NET_ADMIN, NET_RAW, SYS_ADMIN, SYS_RESOURCE",
-    "needs devices",
-    "needs network_mode"
+    "needs extra Linux capabilities: NET_ADMIN, NET_RAW, SYS_ADMIN, SYS_RESOURCE",
+    "needs the host's devices",
+    "needs the host's network"
    ],
    "url": "https://netbird.io/",
    "validated": "environment_blocked",
@@ -9912,8 +9912,8 @@
    "state": "volume",
    "title": "Netdata",
    "unsupported": [
-    "docker-socket",
-    "needs capabilities SYS_PTRACE"
+    "needs extra Linux capabilities: SYS_PTRACE",
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "",
    "validated": "eligible",
@@ -10892,7 +10892,7 @@
    "state": "volume",
    "title": "OpenVPN",
    "unsupported": [
-    "needs capabilities NET_ADMIN"
+    "needs extra Linux capabilities: NET_ADMIN"
    ],
    "url": "",
    "validated": "incompatible",
@@ -11952,7 +11952,7 @@
    "state": "volume",
    "title": "Pihole",
    "unsupported": [
-    "needs capabilities NET_ADMIN"
+    "needs extra Linux capabilities: NET_ADMIN"
    ],
    "url": "",
    "validated": "eligible",
@@ -12501,7 +12501,7 @@
    "state": "volume",
    "title": "Portainer",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "",
    "validated": "eligible",
@@ -12690,7 +12690,7 @@
    "state": "volume",
    "title": "Privoxy VPN",
    "unsupported": [
-    "needs capabilities NET_ADMIN"
+    "needs extra Linux capabilities: NET_ADMIN"
    ],
    "url": "",
    "validated": "environment_blocked",
@@ -14463,7 +14463,7 @@
    "state": "volume",
    "title": "SUI",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "",
    "validated": "incompatible",
@@ -14544,7 +14544,7 @@
    "state": "none",
    "title": "Taisun",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "",
    "validated": "incompatible",
@@ -15127,7 +15127,7 @@
    "state": "volume",
    "title": "TICK",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "",
    "user": "telegraf:${tick_docker_sock}",
@@ -15265,9 +15265,9 @@
    "state": "volume",
    "title": "Transmission",
    "unsupported": [
-    "needs capabilities NET_ADMIN",
-    "needs devices",
-    "needs privileged"
+    "needs extra Linux capabilities: NET_ADMIN",
+    "needs privileged mode, which controls the whole box",
+    "needs the host's devices"
    ],
    "url": "",
    "validated": "environment_blocked",
@@ -16189,7 +16189,7 @@
    "state": "none",
    "title": "watchtower",
    "unsupported": [
-    "docker-socket"
+    "needs the Docker socket, which controls the whole box"
    ],
    "url": "",
    "validated": "eligible",

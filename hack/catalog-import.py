@@ -102,6 +102,11 @@ def envmap(e):
     return out
 
 
+# What a compose key asks of the host, as the catalog says it (a project's pod gets none of it).
+HOST_NEEDS = {'privileged': 'privileged mode, which controls the whole box', 'devices': "the host's devices",
+              'network_mode': "the host's network", 'pid': "to see the host's processes", 'ipc': "the host's shared memory"}
+
+
 def volumes(spec, role):
     """host:container[:mode] -> (name, mountPath, readOnly) or a flag."""
     out, flags = [], []
@@ -112,8 +117,8 @@ def volumes(spec, role):
             parts = str(v).split(':'); src, dst = parts[0], (parts[1] if len(parts) > 1 else '')
         ro = str(v).endswith(':ro')
         if not dst: continue
-        if 'docker.sock' in src: flags.append('docker-socket'); continue
-        if src.startswith('/dev/'): flags.append('host-device'); continue
+        if 'docker.sock' in src: flags.append('needs the Docker socket, which controls the whole box'); continue
+        if src.startswith('/dev/'): flags.append("needs one of the host's devices"); continue
         if src in ('/etc/localtime', '/etc/timezone', '/etc/hosts'): continue
         if src.startswith('${volumes_root}/') or src.startswith('${storage_dir}/') or src.startswith('/') or src.startswith('${'):
             name = re.sub(r'[^a-z0-9]+', '-', src.replace('${volumes_root}/' + role, '').replace('${storage_dir}', 'storage').replace('${volumes_root}', 'data').lower()).strip('-') or 'data'
@@ -169,10 +174,10 @@ def entry(role, svc, doc, validation):
     if vols and e['state'] == 'none': e['state'] = 'volume'
     if vols and e['state'] == 'database': e['state'] = 'database+volume'
     # host access the sites forbid
-    for key in ('privileged', 'devices', 'network_mode', 'pid', 'ipc'):
-        if m.get(key): e['unsupported'].append(f'needs {key}')
+    for key, what in HOST_NEEDS.items():
+        if m.get(key): e['unsupported'].append('needs ' + what)
     caps = set(str(c).upper().removeprefix('CAP_') for c in (m.get('cap_add') or []))
-    if caps - BASELINE_CAPS: e['unsupported'].append('needs capabilities ' + ', '.join(sorted(caps - BASELINE_CAPS)))
+    if caps - BASELINE_CAPS: e['unsupported'].append('needs extra Linux capabilities: ' + ', '.join(sorted(caps - BASELINE_CAPS)))
     if m.get('sysctls'): e['attention'].append('sets sysctls')
     if m.get('security_opt'): e['attention'].append('security_opt: ' + ', '.join(map(str, m['security_opt'])))
     if m.get('env_file'): e['attention'].append('reads an env_file the import cannot see')

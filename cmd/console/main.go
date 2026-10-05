@@ -166,21 +166,22 @@ func str(m map[string]any, k string) string { v, _ := m[k].(string); return v }
 type box struct {
 	Name, IP, Role      string
 	Laptop, Ready, Idle bool
+	Kata                bool   // Kata Containers is ready there: a workspace may run on it
 	CPU, Memory         string // its node's allocatable as the site reports it, empty until it does
 	Added               time.Time
 }
 
 // boxReport is a box as its site's Warden reports it: only what the Sites and Resources pages show.
 type boxReport struct {
-	Name                string
-	Laptop, Idle, Ready bool
-	CPU, Memory         string // allocatable
+	Name                      string
+	Laptop, Idle, Ready, Kata bool
+	CPU, Memory               string // allocatable
 }
 
 func boxReports(nodes []warden.NodeStatus) []boxReport {
 	out := []boxReport{}
 	for _, n := range nodes {
-		out = append(out, boxReport{Name: n.Name, Laptop: n.Laptop, Idle: n.Idle, Ready: n.Ready, CPU: n.Allocatable["cpu"], Memory: n.Allocatable["memory"]})
+		out = append(out, boxReport{Name: n.Name, Laptop: n.Laptop, Idle: n.Idle, Ready: n.Ready, Kata: n.Kata, CPU: n.Allocatable["cpu"], Memory: n.Allocatable["memory"]})
 	}
 	return out
 }
@@ -283,7 +284,7 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, b := range x.Spec.Boxes {
 			n := rep[b.Name]
-			st.Boxes = append(st.Boxes, box{Name: b.Name, IP: b.IP, Role: b.Role, Laptop: b.Laptop, Ready: n.Ready, Idle: n.Idle, CPU: n.CPU, Memory: n.Memory, Added: b.Added.Time})
+			st.Boxes = append(st.Boxes, box{Name: b.Name, IP: b.IP, Role: b.Role, Laptop: b.Laptop, Ready: n.Ready, Idle: n.Idle, Kata: n.Kata, CPU: n.CPU, Memory: n.Memory, Added: b.Added.Time})
 		}
 		sites = append(sites, st)
 	}

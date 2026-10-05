@@ -108,6 +108,7 @@ type NodeStatus struct {
 	Ready       bool              `json:"ready"`
 	Laptop      bool              `json:"laptop"`
 	Idle        bool              `json:"idle"` // a laptop whose person is away: best-effort work may run
+	Kata        bool              `json:"kata"` // Kata Containers is installed and ready: a workspace may run here
 	Allocatable map[string]string `json:"allocatable"`
 }
 
@@ -132,7 +133,7 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 	}
 	alloc := corev1.ResourceList{}
 	for _, n := range nodes.Items {
-		ns := NodeStatus{Name: n.Name, Laptop: n.Labels["wecolab.io/laptop"] == "true", Idle: true, Allocatable: map[string]string{}}
+		ns := NodeStatus{Name: n.Name, Laptop: n.Labels["wecolab.io/laptop"] == "true", Kata: n.Labels["katacontainers.io/kata-runtime"] == "true", Idle: true, Allocatable: map[string]string{}}
 		for _, c := range n.Status.Conditions {
 			if c.Type == corev1.NodeReady {
 				ns.Ready = c.Status == corev1.ConditionTrue

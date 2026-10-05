@@ -171,7 +171,9 @@ like any app, and differs in three ways.
   for the VM. A 2Gi `/dev/shm` in memory keeps its browser from crashing. Its home, `/home/ubuntu`, is a 5Gi
   volume at each of its sites, which a move does not carry.
 
-Its sites, primary, moves and deletion are as for any app.
+**Use** selects one site: the one with the largest box where Kata is ready, as its site reports. A second
+site would run a second desktop, with its own home. Its sites, primary, moves and deletion are as for any
+app.
 
 ### What happens next
 
