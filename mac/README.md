@@ -24,6 +24,11 @@ make sign     # dist/WeCoLab.app and dist/wecolab-node, ad-hoc signed with WeCoL
 make dmg      # dist/WeCoLab.dmg
 ```
 
+CI also builds the SwiftUI executable with the macOS 15 runner's Swift 6.1 compiler.
+Keep the login-item `Binding` setter as an explicit closure: passing the actor-isolated
+method reference directly triggers [Swift compiler crash #82491](https://github.com/swiftlang/swift/issues/82491)
+in that toolchain. The closure preserves the same synchronous main-actor behavior.
+
 Virtualization.framework refuses to run without the `com.apple.security.virtualization` entitlement.
 An unsigned `swift build` binary fails with *"Invalid virtual machine configuration. The process doesn't
 have the “com.apple.security.virtualization” entitlement."*; `make sign` fixes that. The signature is

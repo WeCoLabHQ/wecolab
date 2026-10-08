@@ -219,7 +219,7 @@ struct MainView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Startup") {
-                Toggle("Start WeCoLab at login", isOn: Binding(get: { model.config.startAtLogin }, set: setStartAtLogin))
+                Toggle("Start WeCoLab at login", isOn: Binding(get: { model.config.startAtLogin }, set: { setStartAtLogin($0) }))
                 Text(loginText).font(.caption).foregroundStyle(.secondary)
                 if loginStatus == .requiresApproval {
                     Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
