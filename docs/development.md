@@ -358,6 +358,17 @@ and KVM device visibility; device visibility alone does not certify KVM workload
 Capacity and success/failure `result.json` artifacts are retained for 30 days, including
 the capacity report when the storage gate refuses the run.
 
+The [2026-10-08 hosted trial](https://github.com/WeCoLabHQ/wecolab/actions/runs/37855204838)
+measured 4 CPUs, 15.61 GiB RAM and 83.75 GiB free in `/var/lib/docker`; no pruning was
+needed. The capacity gate, fabric bootstrap and `failed-backup` scenario passed,
+including historical and current database checksum readbacks. After writer takeover
+back to `pub`, `recreate` timed out at its initial database-ready prerequisite with
+`app absent or ambiguous`, before exercising recreation. `name-race`, `replay-lag`,
+`partition` and the final fabric tests were not reached. The Linux, catalog and ARM
+macOS jobs passed. This demonstrates usable hosted capacity, not a full integration
+pass or guaranteed capacity on subsequent runners. The hosted path remains opt-in;
+the recovery failure's root cause is not established by the retained evidence.
+
 The development vault is credential-free/emulated. Its presence alone proves neither an
 application-data restore nor B2 compliance retention, production S3 dial policy,
 identity-provider enforcement, physical fencing or native Virtualization.framework boot.
