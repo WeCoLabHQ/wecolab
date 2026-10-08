@@ -6,14 +6,14 @@ happens when something is lost. The choices behind it, and when to revisit them,
 [decisions.md](decisions.md). Every term it uses, with its Kubernetes or standard equivalent, is in
 [glossary.md](glossary.md).
 
-## The rule it is built to
+## Recovery goal and present limits
 
-> Losing any one site, the first included, loses nothing, starting from two sites; and the fabric gets
-> stronger with every site that joins.
-
-Every other property follows from it: the desired state lives at every site, each site runs its own
-share, and every site derives what it does from that desired state rather than from a coordinator or
-from what other sites say.
+Desired state is copied between sites so a surviving steward can recover coordination.
+Database recovery depends on completed backups, retained WAL, measured replay and an
+independently fenced old primary. Losing a site can lose unreplayed database writes and
+all files held only on its volumes. Two sites do not by themselves guarantee zero loss.
+The system reports those scopes separately; actual restore/readback evidence is required
+before claiming a tested recovery path.
 
 ## Boxes, sites and roles
 
@@ -79,10 +79,11 @@ from what other sites say.
 ## The Fabric
 
 The Fabric is a Git repository holding the whole desired state. Every site runs **Forgejo** with a
-full copy. The writer's copy accepts the Console's commits and pushes every commit to every other
-site's copy the moment it is made (Forgejo push mirrors), retrying every two minutes for a site that is
-away. Every copy protects its `main` branch. Only the mirroring account may push to it, and never with
-force. The Console and Warden may also commit, but only at the writer, and only once the writer's copy
+full copy. The writer's Warden checks the other copies every twenty seconds and fast-forward pushes
+only `main`, skipping unchanged heads and reusing one pinned source snapshot across destinations.
+There are no scheduled Forgejo push mirrors. Every copy protects `main`: only the mirroring account
+may push to a follower, and never with force.
+The Console and Warden may also commit, but only at the writer, and only once the writer's copy
 holds the Fabric. So a copy that has gone its own way (an old writer back from the dead) is refused by
 Git itself. **Flux** at every site applies its own local copy, so a site that loses every other site
 keeps running what it has.
@@ -92,6 +93,12 @@ files are read from the writer's copy with their hashes, the change is decided f
 is made only if none of the files it changes changed meanwhile; otherwise they are read and the change
 decided again. The copy Flux applied to a site's cluster lags Git by up to a minute and is never the basis
 of a change.
+
+Public and mesh routes use owner claims changed in the same commit as the App. A shared
+placement revision fences decisions against concurrent Site/Offer/Pool/App changes.
+Database mutations also change the project's encrypted vault revision so rotation,
+reconciliation and provider retirement cannot race an incomplete app inventory.
+Direct administrator writes outside these boundaries bypass their guarantees.
 
 ```text
 crds/                        WeCoLab's CRDs
@@ -127,9 +134,15 @@ NetBird, the certificate lifetime, the blocklist of Nebula certificates) are one
 | Domain | cluster | `fabric/domains/<project>.<domain>.yaml` | `name`, `project` | the Console | the writer's Warden (checks its DNS records), the Console (which hostnames a project may use) |
 | Namespace (a project) | cluster | `fabric/projects/<project>.yaml` | its name | install (the first project); the Console (admins) | Flux and Warden at every site |
 | ConfigMap `fabric` (the settings) | `wecolab-system` | `system/base/fabric.yaml` | `zone`, `email`, `network`, `writer`, `epoch`, `people`, `certLife`, `blocklist` | install; a takeover (the Console or `warden takeover`); the blocklist (the Console when it removes a box, the writer's Warden) | Warden, the certificate service, the Door, the Console |
+| Coordination records | Git only | `coordination/` | upgrade gate, migration marker, placement revision, route claims | staged upgrader; supported Console/Warden transactions | the writer's transaction boundary, never Flux |
 
 Status is never in Git: Warden writes it only into its own site's cluster (Apps' and Members' at every
 site, Domains' at the writer).
+
+The App also records immutable `archiveID`, an operator-fencing assertion (`force`) and
+optional operator-recorded `restoreVerification`. These are explicit durable facts about
+an incarnation or operation, not a cached health report. Non-Kubernetes coordination
+JSON/YAML is kept outside the recursively reconciled `fabric/` tree.
 
 ### Kustomizations at every site
 
@@ -183,8 +196,8 @@ Warden is this repository's controller. The same binary runs at every site:
   holds here, and the writer and epoch its own copy of the Fabric names. Other sites read a site's status
   only from its manager's Nebula address, refuse an answer that names another site, and use it only about
   that site and only as far as the Fabric allows.
-- **The writer's part.** At every site, Warden keeps its copy's branch protection and push mirrors as the
-  writer's election says (see "The writer").
+- **The writer's part.** At every site, Warden maintains branch protection, exact-ref replication and
+  history custody as the writer's election says (see "The writer").
 
 **Entrance mode**, in the Door's pod at public sites: writes Traefik's routes and the fabric's DNS zone for
 Names (see "The Door and Names"). It also answers Traefik's DNS challenge (lego's `httpreq` provider) by
@@ -206,12 +219,31 @@ it. It may change only that taint, and only on its own node.
 
 Each site follows the writer its own copy of the Fabric names, unless a steward publishes a claim with a
 higher epoch (ties go to the lowest site name); a claim naming a site that is not a steward counts for
-nothing. At the writer, Warden admits the Console to its copy (once the copy holds the Fabric) and keeps a
-push mirror to every other site's copy. Everywhere else, the copy admits only the mirroring account and
-has no push mirrors. A copy whose head is not on the writer's history (the writer's Warden answers
-`GET /fabric/commits/<sha>` on its status port) starts over from the writer's: at a steward, its own
-commits are first pushed to the writer as a branch `superseded-<site>-<commit>`. Nothing starts over from a
-writer whose copy is empty.
+nothing. At the writer, Warden admits the Console once the copy holds the Fabric and replicates only
+`main`. Everywhere else, the copy admits only the mirroring account. An ancestry observation from
+`GET /fabric/commits/<sha>` is not a custody receipt.
+
+Before a divergent steward copy can be recreated, Warden closes Console writes, drains the old
+Forgejo process, and snapshots every advertised ref. The winning Warden accepts
+`POST /fabric/preserve` only from the registered source steward's actual manager address. Under its
+own writer-transition Lease, it fetches the pinned losing main and all earlier `superseded-*` branches
+and installs create-only refs. New names use the full commit ID: `superseded-<site>-<commit>`.
+Different histories cannot overwrite or collapse onto the same preservation name. The receipt
+identifies the winning claim, repository ID and exact refs; the source rechecks its complete ref set
+and identity before deletion. Later handoffs carry earlier custody forward.
+
+The receiver protects `superseded-**` against remote mirroring accounts, so a third site's legacy
+`--mirror` job cannot erase acknowledged history. Cutover records unfinished work before changing
+protection or deleting old mirror configurations, then observes a fresh Forgejo Recreate rollout
+with no old pods. Successful fencing is bound to the repository ID; unchanged retries do not restart
+Forgejo. A durable journal on the transition Lease blocks custody, takeover and ordinary Ensure
+after an uncertain repository deletion. Recovery first drains Forgejo, then Ensures and protects;
+it never repeats that DELETE. Unmanaged refs or a non-steward's former-writer history fail closed.
+
+Transport uses pure Go in Warden's read-only image. Each transfer caps compressed history and
+aggregate expanded objects/delta targets at 8 MiB, and the object table at 16,384 entries, before
+go-git's allocating parser. Larger histories are refused, not truncated; source custody is retained.
+These are transfer budgets, not a guarantee of total process RSS. Nothing starts over from an empty writer.
 
 ## An app's primary, from Git
 
@@ -225,8 +257,9 @@ every other site's replays its archive.
 **Planned move.** A person picks a new primary, and the Console refuses unless the move can complete. The
 target's standby must be staged (StandbyStaged: up, built for its current archive, with a ready
 instance). For a new move, the primary must also be healthy (PrimaryHealthy) and writable, and it must be
-archiving WAL with the target's replica healthy (WithinRPO). An app without a database has nothing to
-hand over: its move only changes `primary`. For an app with one:
+archiving WAL with fresh same-history primary/replay measurements proving the objective
+(WithinRPO). An app without a database has nothing to hand over: its move only changes
+`primary`. For an app with one:
 
 1. The commit sets `primary` to the target and `handover {id, from}` with the old primary.
 2. The old primary demotes. Every site, the target included, keeps following the old primary and replays
@@ -242,9 +275,13 @@ Before step 4 the move may be retargeted to another standby, or cancelled by mov
 primary. After it, a planned move elsewhere is refused, because another site promoting with the same token
 would fork the history: move again when this one is done, or force. No data is lost.
 
-**Forced move.** A person forces the move when the primary is gone. The commit sets `primary` with no
-handover and gives every other site a new archive generation; the new primary promotes without a token,
-and every other site's database is rebuilt from the vault as a standby (see "Data").
+**Forced move.** The operator independently powers off or fully write-isolates the old
+history-bearing primary, then submits the fencing method/evidence against a writer-Git
+revision and ArchiveID preview. The backend records authenticated actor, time and source.
+This assertion does not physically fence a partitioned machine. The commit changes
+`primary`, clears handover and increments other archive generations. The target promotes
+without a token; unreplayed writes can be lost without a fixed bound. Other databases
+rebuild only after current-history survivor proof, never because an object was uploaded.
 
 **Generations in Git.** Every move records its target's archive generation, and the writer records a new
 database's once its primary has a base backup. A recorded generation is how Git shows the database was
@@ -255,8 +292,9 @@ made: from then on no site makes it again by initdb.
 Each app's PostgreSQL is a CloudNativePG cluster at every site of the app, in CloudNativePG's
 distributed topology: primary at one site, standby clusters elsewhere. They replicate only through
 the **vault**: object storage (Backblaze B2, S3, R2, MinIO) under Object Lock, where each site's
-database archives WAL and base backups to its own folder, `<db>-<site>` or `<db>-<site>-g<n>` after a
-rebuild. Standbys replay the primary's archive. Base backups run only at the primary, which takes one as
+database archives WAL and base backups to `<archiveID>-<site>[-g<n>]`. New databases use
+random immutable IDs; gated migration preserves existing `<db>-<site>[-g<n>]` names.
+Standbys replay the primary's archive. The primary starts its first backup as
 soon as its vault holds none for its current folder, so a standby can bootstrap from it; while backups
 fail it tries again hourly, since each attempt leaves Object-Locked files. The primary also takes a base
 backup every night at 02:00; standbys never do, nor does any site while a handover is in flight. Every
@@ -266,8 +304,10 @@ Nothing destroys a database without proof from Git and from the survivor. A site
 app's database, to rebuild it under a new archive generation or because the app left the site, only when
 Git says it is not the primary, not a planned move's origin, and no handover is waiting for a token, and
 the primary reports itself the primary, writable, healthy, promoted with the handover's token if Git has
-one, and with a base backup in its vault. Until then a database waiting to be rebuilt follows its role but
-keeps writing its own archive. The primary can never be removed from an app's sites.
+one, and with parsed DONE backup evidence for the current archive, database system and
+timeline. A failed, malformed, stale-observed or history-mismatched metadata object cannot
+authorize destruction. Until this proof arrives the existing database is kept. The
+primary can never be removed from an app's sites.
 
 WeCoLab never replaces a lost database with an empty one. The site holding the app's history is the
 primary, or, during a planned move, the old primary until its token is in Git. There, Warden lets Flux
@@ -287,6 +327,19 @@ database follows it but its files do not: the new primary uses its own site's vo
 primary's stay where they are. A catalog app's uploaded files are on such volumes. An app without a
 database runs at every site it names at once, each with its own volumes; the Door sends people to the
 primary's. An app that needs its data at two sites keeps it in its database.
+
+Recovery telemetry uses CNPG 1.30.1 custom-query ConfigMaps, installed both by new deployment
+and the legacy migration. Warden reads the owned instance exporter's `/metrics` on port
+9187 with the exporter's existing `pg_monitor` permission, observing system ID, timeline,
+role and WAL position. Primary and replica samples must describe the same history and
+have bounded independent ages. Receiver-local monotonic receipts expire after 15 seconds
+and cached reads do not renew them. Unknown remains unknown; a large upper bound alone
+does not prove that the objective was exceeded.
+
+Operational Ready covers primary availability and routing. Database backup prerequisites,
+site-local files and recovery confidence are separate fields. A restore timestamp appears
+only for a matching, authenticated operator-recorded drill with checksum readbacks and
+explicit database/file scope. It is not a guarantee about the next outage.
 
 ## Networking
 

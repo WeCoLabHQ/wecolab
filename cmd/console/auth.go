@@ -251,10 +251,14 @@ func (s *server) lookup(ctx context.Context, email string) (*identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	if m.Spec.Blocked {
-		return nil, errors.New("this account is blocked")
+	if !activeMember(m) {
+		return nil, errors.New("this account is blocked or being removed")
 	}
 	return identityOf(m), nil
+}
+
+func activeMember(m *v1alpha1.Member) bool {
+	return !m.Spec.Blocked && m.DeletionTimestamp.IsZero()
 }
 
 func identityOf(m *v1alpha1.Member) *identity {
@@ -315,12 +319,19 @@ func (s *server) who(r *http.Request) *identity {
 	}
 	if s.auth == nil {
 		ml := &v1alpha1.MemberList{}
-		if s.c.List(s.elevated(r.Context()), ml) == nil {
-			for _, m := range ml.Items {
-				if m.Spec.Role == "owner" {
-					return &identity{Email: m.Spec.Email, Name: m.Spec.Name, Role: "owner", Admin: true, Projects: m.Spec.Projects}
-				}
+		if err := s.c.List(s.elevated(r.Context()), ml); err != nil {
+			return nil
+		}
+		for i := range ml.Items {
+			m := &ml.Items[i]
+			if m.Spec.Role == "owner" && activeMember(m) {
+				return identityOf(m)
 			}
+		}
+		// Development bootstrap can act before its first Member exists, but never
+		// replaces a blocked/terminating owner with a more privileged identity.
+		if len(ml.Items) != 0 {
+			return nil
 		}
 		return &identity{Email: "door", Role: "owner", Admin: true}
 	}
@@ -351,7 +362,7 @@ func (s *server) protect(next http.Handler) http.Handler {
 				email, exp := id.Email, id.Exp
 				id = nil
 				for i := range ml.Items {
-					if m := &ml.Items[i]; strings.EqualFold(m.Spec.Email, email) && !m.Spec.Blocked {
+					if m := &ml.Items[i]; strings.EqualFold(m.Spec.Email, email) && activeMember(m) {
 						id = identityOf(m)
 						id.Exp = exp
 					}

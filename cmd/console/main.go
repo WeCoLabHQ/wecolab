@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	coordinationclient "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -46,18 +47,19 @@ import (
 var web embed.FS
 
 type server struct {
-	dev       bool          // the development fabric (docs/development.md): its vault is plain http on the stand-in internet
-	c         client.Client // this site's API, acting as the signed-in person
-	site      string        // this site
-	domain    string        // the fabric's zone
-	publicURL string        // https://console.<zone>, where boxes join
-	version   string        // WeCoLab's image tag, told to joining boxes
-	dist      string        // what joining boxes download before a registry holds WeCoLab's images
-	meshURL   string
-	auth      *auth // nil: no sign-in (the development fabric)
-	catalog   map[string]catalogEntry
-	git       *fabric.Git // this site's copy of the Fabric; it takes commits only at the writer
-	peers     *warden.Peers
+	dev          bool          // the development fabric (docs/development.md): its vault is plain http on the stand-in internet
+	c            client.Client // this site's API, acting as the signed-in person
+	site         string        // this site
+	domain       string        // the fabric's zone
+	publicURL    string        // https://console.<zone>, where boxes join
+	version      string        // WeCoLab's image tag, told to joining boxes
+	dist         string        // what joining boxes download before a registry holds WeCoLab's images
+	meshURL      string
+	auth         *auth // nil: no sign-in (the development fabric)
+	catalog      map[string]catalogEntry
+	git          *fabric.Git // this site's copy of the Fabric; it takes commits only at the writer
+	peers        *warden.Peers
+	coordination coordinationclient.CoordinationV1Interface
 }
 
 // meshToken is the NetBird service token as the netbird Secret holds it now, "" when there is none: the
@@ -204,6 +206,8 @@ type app struct {
 	Handover                                                                      *v1alpha1.Handover // a planned move in flight, from Git, without its token
 	Deleted                                                                       bool               // a person deleted it; its sites are removing their part
 	Archive                                                                       map[string]int
+	ArchiveID                                                                     string
+	Protection                                                                    warden.Protection
 }
 
 // listApps lists what the person may see: everything for admins, else each project's namespace.
@@ -298,9 +302,11 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 			c.Token = ""
 			h = &c
 		}
+		filesKnown, hasFiles := s.fileScope(ctx, &x)
 		apps = append(apps, app{Namespace: x.Namespace, Name: x.Name, Primary: x.Spec.Primary, Active: active, Hostname: x.Spec.Hostname, Workload: x.Spec.Workload, Database: x.Spec.Database,
 			Ready: string(rd.Status), Reason: rd.Reason, Sites: x.Spec.Sites, RPO: x.Spec.RPO.Duration.String(), Conditions: append(conds, rd), Handover: h, Deleted: x.Spec.Deleted,
-			Archive: x.Spec.Archive, Mesh: x.Spec.Mesh, MeshName: warden.MeshName(&x, s.domain)})
+			Archive: x.Spec.Archive, ArchiveID: x.Spec.ArchiveID, Mesh: x.Spec.Mesh, MeshName: warden.MeshName(&x, s.domain),
+			Protection: warden.ProtectionOf(&x, answers, time.Now(), 24*time.Hour, filesKnown, hasFiles)})
 	}
 	if id := s.who(r); id != nil && !id.Admin {
 		mine := func(p string) bool { return slices.Contains(id.Projects, p) }
@@ -576,8 +582,9 @@ func (s *server) setPrimary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		To    string
-		Force bool
+		To      string
+		Force   bool
+		Fencing *fencingConfirmation
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.To == "" {
 		http.Error(w, "to required", 400)
@@ -587,13 +594,36 @@ func (s *server) setPrimary(w http.ResponseWriter, r *http.Request) {
 	a := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: r.PathValue("ns"), Name: r.PathValue("app")}}
 	msg := fmt.Sprintf("%s/%s: primary %s", a.Namespace, a.Name, in.To)
 	if in.Force {
-		msg += ", forced; the other sites' databases are rebuilt from the vault"
+		msg += ", operator-fenced recovery (assertion, not machine-verified fencing)"
 	}
 	id := randHexStr(16)
 	answers, _ := s.siteStatuses(ctx)
-	err := s.editObj(ctx, a, msg, func(exists bool) (client.Object, error) {
+	appPath, err := s.pathOf(a)
+	if err != nil {
+		answer(w, err, 400)
+		return
+	}
+	err = s.edit(ctx, msg, []string{appPath}, func(snap *fabric.Snapshot) ([]fabric.FileChange, error) {
+		b, exists := snap.Get(appPath)
+		if _, err := decode(b, exists, a); err != nil {
+			return nil, err
+		}
 		if !exists {
 			return nil, fail(404, "no such app")
+		}
+		if in.Force {
+			if a.Spec.Database == "" {
+				return nil, fail(400, "this app has no database to fence")
+			}
+			f := in.Fencing
+			if f == nil || f.ArchiveID == "" || f.ExpectedAppSHA == "" ||
+				f.Method != "power-off" && f.Method != "write-path-isolated" ||
+				strings.TrimSpace(f.Evidence) == "" || len(f.Evidence) > 1024 {
+				return nil, fail(400, "force requires an explicit operator fencing method, evidence and current preview")
+			}
+			if f.ExpectedAppSHA != snap.SHA(appPath) || f.ArchiveID != a.Spec.ArchiveID || f.PreviousPrimary != warden.Serving(a.Spec) {
+				return nil, fail(409, "the app changed; obtain a fresh fencing preview and acknowledgement")
+			}
 		}
 		spec, err := move(a.Spec, in.To, id, in.Force)
 		if err != nil {
@@ -606,8 +636,20 @@ func (s *server) setPrimary(w http.ResponseWriter, r *http.Request) {
 				return nil, fail(409, "%v", err)
 			}
 		}
+		if in.Force {
+			actor := s.who(r)
+			if actor == nil {
+				return nil, fail(401, "sign in again")
+			}
+			spec.Force = &v1alpha1.ForceRecord{ID: id, Actor: actor.Email, From: in.Fencing.PreviousPrimary, To: in.To,
+				At: metav1.NewTime(time.Now().UTC()), Method: in.Fencing.Method, Evidence: strings.TrimSpace(in.Fencing.Evidence)}
+		}
 		a.Spec = spec
-		return a, nil
+		if err := s.dryRun(ctx, a); err != nil {
+			return nil, err
+		}
+		f, err := s.fileOf(a, false)
+		return []fabric.FileChange{f}, err
 	})
 	if err != nil {
 		answer(w, err, 502)
@@ -753,12 +795,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	coordination, err := coordinationclient.NewForConfig(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
 	set, err := warden.ReadSettings(context.Background(), c)
 	if err != nil {
 		log.Fatal(err)
 	}
 	s := &server{c: c, site: *site, domain: set.Zone, publicURL: "https://console." + set.Zone, version: Version, dist: *dist,
-		meshURL: os.Getenv("NETBIRD_URL"), git: fabric.GitFromEnv(), peers: &warden.Peers{Client: c}}
+		meshURL: os.Getenv("NETBIRD_URL"), git: fabric.GitFromEnv(), peers: &warden.Peers{Client: c}, coordination: coordination}
 	if s.git == nil {
 		log.Fatal("WECOLAB_GIT_URL and WECOLAB_GIT_TOKEN are required")
 	}
@@ -910,6 +956,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/pools/{name}", s.deletePool)
 	mux.HandleFunc("POST /api/pools/{name}/key", s.poolKey)
 	mux.HandleFunc("POST /api/apps/{ns}/{app}/primary", s.setPrimary)
+	mux.HandleFunc("GET /api/apps/{ns}/{app}/force-preview", s.forcePreview)
 	mux.HandleFunc("POST /api/apps/{ns}/{app}/mesh", s.setMesh)
 	mux.HandleFunc("POST /api/deploy", s.deploy)
 	mux.HandleFunc("DELETE /api/apps/{ns}/{app}", s.deleteApp)

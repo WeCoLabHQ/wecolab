@@ -41,16 +41,12 @@ addresses in the pictures are examples.
 
 ## Start
 
-On a fresh Linux box with a public address, after delegating a DNS zone to it:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/wecolabhq/wecolab/main/install.sh | sudo bash
-```
-
-It asks for the zone, your email, the site's and your project's names and your password, then prints the
-Console's address and where it wrote the recovery card (`/root/wecolab-recovery-card.txt`). Every other
-box joins with a one-time invite from the Console.
-The whole path is in [docs/install.md](docs/install.md).
+On a fresh Linux box with a public address, delegate the DNS zone, then download an **immutable
+release candidate**, verify its GitHub Actions attestation against `wecolabhq/wecolab`'s release
+workflow and its artifact digests, and only then run its local `install.sh` as root. Never pipe the
+moving `main` installer or the Console's join endpoint into `sudo`. The exact download, trust
+anchor, first-site and join commands are in [docs/install.md](docs/install.md). No release has
+been published by this remediation; a candidate is not a production-tested release.
 
 ## Documentation
 

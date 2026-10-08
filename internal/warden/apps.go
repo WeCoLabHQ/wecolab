@@ -68,6 +68,8 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		primary = r.report(ctx, app.Spec.Primary)
 	}
 	p := PlanAt(app, r.Site, here, primary)
+	p.Local.PrimaryReady = here.Archive == ArchiveName(app, r.Site) &&
+		writable(dbStatus(local)) && str(dbStatus(local), "phase") == cnpgHealthy
 	app.Status.Active = RoleAt(app.Spec, r.Site).Primary
 	if local != nil {
 		RememberDemotion(app, r.Site, dbStatus(local))
@@ -105,7 +107,7 @@ func (r *AppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if p.Suspend {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	if app.Spec.Primary == r.Site && app.Spec.Handover == nil && str(dbStatus(local), "phase") == cnpgHealthy {
+	if app.Spec.Primary == r.Site && app.Spec.Handover == nil && p.Local.PrimaryReady {
 		if err := r.ensureBaseBackup(ctx, app, now); err != nil {
 			lg.Error(err, "base backup")
 		}
@@ -124,6 +126,7 @@ type Here struct {
 	Exists  bool
 	Created bool   // Flux made one here before, so a missing one was lost, not never made
 	Archive string // the archive it was built for
+	Role    Role   // preserve while fenced; a CNPG replica transition removes its own fence
 }
 
 // here is this site's database. When there is none, the app's Kustomization tells a lost one from one
@@ -136,7 +139,10 @@ func (r *AppReconciler) here(ctx context.Context, app *v1alpha1.App) (Here, *uns
 	u.SetGroupVersionKind(gvkDBCluster)
 	err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Spec.Database}, u)
 	if err == nil {
-		return Here{Exists: true, Created: true, Archive: serverName(u)}, u, nil
+		primary, _, _ := unstructured.NestedString(u.Object, "spec", "replica", "primary")
+		source, _, _ := unstructured.NestedString(u.Object, "spec", "replica", "source")
+		token, _, _ := unstructured.NestedString(u.Object, "spec", "replica", "promotionToken")
+		return Here{Exists: true, Created: true, Archive: serverName(u), Role: Role{Primary: primary, Source: source, Token: token}}, u, nil
 	}
 	if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
 		return Here{}, nil, err
@@ -178,11 +184,16 @@ type Plan struct {
 //     it is new and Flux never made one here; otherwise it would start empty under the app's history, so
 //     the app is held until a person moves the primary;
 //   - a database built for an older archive generation than the spec's is rebuilt from the vault once
-//     MayDestroy allows; until then it follows its role but keeps writing its own archive, never the
-//     new one its rebuilt self will need empty.
+//     MayDestroy allows; until then it stays fenced in its existing role and archive. Changing its
+//     role would let CNPG's replica-transition cleanup remove the fence before guarded deletion.
 func PlanAt(app *v1alpha1.App, self string, here Here, primary *SiteStatus) Plan {
 	p := Plan{Local: Local{Created: here.Exists || here.Created}, Promotion: Promotion(app.Spec)}
 	if app.Spec.Database == "" {
+		return p
+	}
+	if app.Spec.ArchiveID == "" {
+		p.Suspend = true
+		p.Promotion = cond(v1alpha1.CondPromotion, false, "ArchiveMigrationRequired", "database archive identity is missing; complete the coordinated review upgrade before reconciliation")
 		return p
 	}
 	want := ArchiveName(app, self)
@@ -193,6 +204,8 @@ func PlanAt(app *v1alpha1.App, self string, here Here, primary *SiteStatus) Plan
 		p.Promotion = cond(v1alpha1.CondPromotion, false, "DatabaseMissing",
 			self+" holds the app's database and has none; it is never made again empty. Move the primary, forced, to a site that has one")
 	case !holds && here.Exists && here.Archive != "" && here.Archive != want:
+		p.Local.Fenced = true
+		p.Local.RetainedRole = here.Role
 		if err := MayDestroy(app, self, primary); err != nil {
 			p.Local.Archive = here.Archive
 			p.Promotion = cond(v1alpha1.CondPromotion, false, "RebuildWaiting", fmt.Sprintf("rebuilt from the vault as %s once safe: %v", want, err))
@@ -238,10 +251,25 @@ func proven(app *v1alpha1.App, primary *SiteStatus) error {
 		return fmt.Errorf("%s is not a healthy primary yet", s.Primary)
 	case s.Handover != nil && str(db, "lastPromotionToken") != s.Handover.Token:
 		return fmt.Errorf("%s has not promoted with the handover's token yet", s.Primary)
-	case st.Vault == nil || st.Vault.Err != "" || st.Vault.LatestBackup.IsZero():
-		// ponytail: any base backup under the primary's current archive counts, even one from before a
-		// forced move made it primary again; a backup since its promotion needs the backup's timeline.
-		return fmt.Errorf("%s has no base backup in its vault yet", s.Primary)
+	case st.Vault == nil || st.Vault.Err != "" || st.Vault.BackupEvidence == nil:
+		return fmt.Errorf("%s has no validated completed backup in its vault", s.Primary)
+	}
+	now := time.Now()
+	e := st.Vault.BackupEvidence
+	if s.ArchiveID == "" || e.Archive != ArchiveName(app, s.Primary) ||
+		e.ID == "" || e.CompletedAt.IsZero() || e.CompletedAt.After(now) ||
+		e.ObservedAt.IsZero() || e.ObservedAt.After(now) || now.Sub(e.ObservedAt) > vaultEvery ||
+		!e.CompletedAt.Equal(st.Vault.LatestBackup) {
+		return fmt.Errorf("%s has no fresh backup evidence for this archive", s.Primary)
+	}
+	receiptAge := statusReceiptAge(primary, now)
+	if receiptAge < 0 || st.Recovery == nil || st.Recovery.Error != "" || len(st.Recovery.Samples) == 0 {
+		return fmt.Errorf("%s has no fresh database history measurement", s.Primary)
+	}
+	current := st.Recovery.Samples[len(st.Recovery.Samples)-1]
+	if !validRecoverySample(current, s.ArchiveID, "primary") || sampleAge(current, receiptAge) < 0 ||
+		sampleAge(current, receiptAge) > recoveryMaxReplayAge || current.SystemID != e.SystemID || current.Timeline != e.Timeline {
+		return fmt.Errorf("%s backup does not match its current database history", s.Primary)
 	}
 	return nil
 }
@@ -358,7 +386,7 @@ func AppKustomization(app *v1alpha1.App, self string, l Local, st Standing) *uns
 		}
 		patches = append(patches,
 			jsonPatch("postgresql.cnpg.io", "Cluster", db, ops...),
-			jsonPatch("postgresql.cnpg.io", "ScheduledBackup", db+"-backup", add("/spec/suspend", !runs)))
+			jsonPatch("postgresql.cnpg.io", "ScheduledBackup", db+"-backup", add("/spec/suspend", !runs || !l.PrimaryReady)))
 		if !runs {
 			patches = append(patches, jsonPatch("apps", "Deployment", app.Spec.Workload, add("/spec/replicas", 0)))
 		}
@@ -422,12 +450,17 @@ func (r *AppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 var gvkBackup = gvkDBCluster.GroupVersion().WithKind("Backup")
 
 // NeedsBackup says whether the primary's database needs a base backup now: its vault, as the primary
-// last saw it, holds none under the current archive (a new database, or one just promoted or rebuilt
-// under a new generation), none asked for in the last ten minutes is still going, and none failed in the
+// last saw it, holds none matching the current archive, system and timeline (a new database, or one
+// just promoted or rebuilt), none asked for in the last ten minutes is still going, and none failed in the
 // last hour: while backups fail (failed, or ended because WAL archiving fails) they are retried hourly,
 // since every attempt leaves Object-Locked files. Without a clean look at the vault it waits.
-func NeedsBackup(vault *VaultStatus, backups []unstructured.Unstructured, db string, now time.Time) bool {
-	if vault == nil || vault.Err != "" || !vault.LatestBackup.IsZero() {
+// current must be a fresh writable-primary measurement, validated by the caller.
+func NeedsBackup(vault *VaultStatus, backups []unstructured.Unstructured, db, archive string, current RecoverySample, now time.Time) bool {
+	if vault == nil || vault.Err != "" || current.SystemID == "" || current.Timeline == 0 {
+		return false
+	}
+	if e := vault.BackupEvidence; e != nil && e.Archive == archive && e.SystemID == current.SystemID &&
+		e.Timeline == current.Timeline && !e.CompletedAt.IsZero() && !e.CompletedAt.After(now) {
 		return false
 	}
 	for _, b := range backups {
@@ -443,24 +476,34 @@ func NeedsBackup(vault *VaultStatus, backups []unstructured.Unstructured, db str
 	return true
 }
 
-// ensureBaseBackup asks CloudNativePG for a base backup at the primary when its database has none: a
-// standby elsewhere can only start from one, and the schedule may be a day away.
+// ensureBaseBackup asks CloudNativePG for a base backup after observing a writable primary whose
+// current history has none: a standby needs one, and the schedule may be a day away.
 func (r *AppReconciler) ensureBaseBackup(ctx context.Context, app *v1alpha1.App, now time.Time) error {
+	st := r.report(ctx, r.Site)
+	if st == nil || st.Site != r.Site {
+		return nil
+	}
+	state, db := st.Apps[app.Namespace+"/"+app.Name], st.DB[app.Namespace+"/"+app.Spec.Database]
+	if state.Active != r.Site || !writable(db) || str(db, "phase") != cnpgHealthy ||
+		state.Recovery == nil || state.Recovery.Error != "" || len(state.Recovery.Samples) == 0 {
+		return nil
+	}
+	current := state.Recovery.Samples[len(state.Recovery.Samples)-1]
+	age := sampleAge(current, statusReceiptAge(st, time.Now()))
+	if !validRecoverySample(current, app.Spec.ArchiveID, "primary") || age < 0 || age > recoveryMaxReplayAge {
+		return nil
+	}
 	l := &unstructured.UnstructuredList{}
 	l.SetGroupVersionKind(gvkBackup.GroupVersion().WithKind("BackupList"))
 	if err := r.List(ctx, l, client.InNamespace(app.Namespace)); err != nil {
 		return err
 	}
-	var vault *VaultStatus
-	if st := r.report(ctx, r.Site); st != nil { // what this site's own status says of the vault
-		vault = st.Apps[app.Namespace+"/"+app.Name].Vault
-	}
-	if !NeedsBackup(vault, l.Items, app.Spec.Database, now) {
+	if !NeedsBackup(state.Vault, l.Items, app.Spec.Database, ArchiveName(app, r.Site), current, now) {
 		return nil
 	}
 	b := newObj(gvkBackup.GroupVersion().String(), "Backup", fmt.Sprintf("%s-base-%d", app.Spec.Database, now.Unix()), app.Namespace, map[string]any{
 		"cluster": map[string]any{"name": app.Spec.Database}, "method": "plugin",
 		"pluginConfiguration": map[string]any{"name": "barman-cloud.cloudnative-pg.io"}})
-	log.FromContext(ctx).Info("no base backup yet: asking for one", "database", app.Namespace+"/"+app.Spec.Database)
+	log.FromContext(ctx).Info("no current-history base backup: asking for one", "database", app.Namespace+"/"+app.Spec.Database)
 	return r.Create(ctx, b)
 }

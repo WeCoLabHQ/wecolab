@@ -116,7 +116,7 @@ func (s *server) takeInvite(ctx context.Context, token string) (*invite, error) 
 }
 
 func (s *server) joinCommand(code string) string {
-	return fmt.Sprintf("curl -fsSL %s/join.sh | sudo bash -s %s", s.publicURL, code)
+	return fmt.Sprintf("First download and verify the pinned release as in docs/install.md (including its GitHub attestation and source digest). Then, using that verified local release directory, run:\nsudo WECOLAB_BIN=\"$HOME/wecolab-release\" bash \"$HOME/wecolab-release/install.sh\" '%s'", code)
 }
 
 // inviteSite: an admin invites a new site: its name, owner, whether it is a steward, whether public.

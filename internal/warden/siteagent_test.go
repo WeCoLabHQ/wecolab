@@ -2,6 +2,7 @@ package warden
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,9 +51,18 @@ func TestSiteStatus(t *testing.T) {
 	wikiSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "wiki", Namespace: "vince"}, Data: map[string][]byte{"b2-key-id": []byte("K2"), "b2-key": []byte("the-key-itself")}}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(node("box", false, false), node("mac-in-use", true, false), node("mac-away", true, true),
 		pod, named("wiki"), elsewhere, svc, wikiPod, wikiSecret).WithStatusSubresource(&v1alpha1.App{}).Build()
-	st, err := (&SiteAgent{Client: c, Site: "vince"}).Status(context.Background())
+	st, err := (&SiteAgent{Client: c, Site: "vince", SchemaVersion: "v2"}).Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if st.SchemaVersion != "v2" {
+		t.Fatalf("published warden schema version: %q", st.SchemaVersion)
+	}
+	if st.ReceivedAt.IsZero() || st.ReceivedAt.Before(st.Time) {
+		t.Fatalf("local receipt must be stamped after status collection: %+v", st)
+	}
+	if b, err := json.Marshal(st); err != nil || strings.Contains(string(b), "ReceivedAt") || strings.Contains(string(b), "receivedAt") {
+		t.Fatalf("receipt must stay local: %s %v", b, err)
 	}
 	idle := map[string]bool{}
 	for _, n := range st.Nodes {
@@ -72,6 +82,31 @@ func TestSiteStatus(t *testing.T) {
 	}
 	if id := st.Apps["vince/wiki"].VaultKeyID; id != "K2" || strings.Contains(toJSON(st), "the-key-itself") {
 		t.Errorf("the id of the vault key the app's Secret holds, never the key: %q", id)
+	}
+	if got := st.Apps["vince/wiki"].Recovery; got == nil || got.Error == "" {
+		t.Fatalf("missing CNPG exporter is an explicit unknown: %+v", got)
+	}
+}
+
+func TestPeerReceiptPreservedAcrossCachedPolls(t *testing.T) {
+	body := &SiteStatus{Site: "home", ReceivedAt: time.Now().Add(-time.Hour)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	defer server.Close()
+	site := testSite("home", false, "10.77.2.1")
+	p := &Peers{Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(&site).Build(),
+		HTTP: &http.Client{Transport: toServer{server.URL}}}
+	first, ok := p.Get(context.Background(), "home")
+	if !ok || first.ReceivedAt.IsZero() || time.Since(first.ReceivedAt) > time.Second {
+		t.Fatalf("receipt must be local to HTTP decode, not the remote JSON: %+v", first)
+	}
+	received := first.ReceivedAt
+	for range 3 {
+		again, ok := p.Get(context.Background(), "home")
+		if !ok || again.ReceivedAt != received {
+			t.Fatalf("cached poll renewed receipt: %+v", again)
+		}
 	}
 }
 
@@ -104,6 +139,41 @@ func TestVaultLookPerArchive(t *testing.T) {
 	app.Spec.Archive = map[string]int{"vince": 2}
 	if v := a.vault(app); v != nil {
 		t.Fatalf("the new archive's first look is its own, not the old folder's: %+v", v)
+	}
+	app.Spec.Archive = nil
+	app.Spec.ArchiveID = "new-identity"
+	if v := a.vault(app); v != nil {
+		t.Fatalf("a recreated database with the same archive label cannot reuse old vault evidence: %+v", v)
+	}
+}
+
+// Report age increases from the producer's receipt; pod role changes invalidate it.
+func TestRecoveryPodSelectionAndReceiptAge(t *testing.T) {
+	app := sampleApp()
+	app.Spec.ArchiveID = "archive"
+	a := &SiteAgent{Site: "vince"}
+	now := time.Now()
+	key := app.Namespace + "/" + app.Spec.Database + "/archive/" + ArchiveName(app, "vince")
+	a.recoveries = map[string]*recoveryAnswer{key: {pod: "docs-db-1", role: "primary", expectedRole: "primary", at: now, report: RecoveryReport{Samples: []RecoverySample{
+		{ArchiveID: "archive", SystemID: "system", Timeline: 1, Pod: "docs-db-1", Role: "primary", LSNLow: 1, ObservedAt: now.Add(-time.Second)},
+	}}}}
+	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "docs-db-1", Namespace: app.Namespace, Labels: map[string]string{
+		"cnpg.io/cluster": app.Spec.Database, "app.kubernetes.io/managed-by": "cloudnative-pg",
+		"app.kubernetes.io/component": "database", "cnpg.io/instanceName": "docs-db-1", "cnpg.io/instanceRole": "primary",
+	}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: app.Spec.Database, UID: "owner"}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "invalid-ip"}}
+	db := map[string]any{"currentPrimary": "docs-db-1"}
+	got := a.recovery(app, db, []corev1.Pod{pod}, "owner")
+	if got.Error != "" || len(got.Samples) != 1 || got.Samples[0].AgeNanos < int64(time.Second) {
+		t.Fatalf("sample receipt age must increase without resampling: %+v", got)
+	}
+	pod.Labels["cnpg.io/instanceRole"] = "replica"
+	got = a.recovery(app, db, []corev1.Pod{pod}, "owner")
+	if len(got.Samples) != 0 || got.Error == "" {
+		t.Fatalf("role change must invalidate previous primary history: %+v", got)
+	}
+	got = a.recovery(app, db, []corev1.Pod{pod}, "different-cluster")
+	if got.Error == "" {
+		t.Fatal("a pod owned by another CNPG Cluster cannot supply telemetry")
 	}
 }
 

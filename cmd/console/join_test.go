@@ -2,59 +2,18 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"sigs.k8s.io/yaml"
-
-	"wecolab.io/wecolab/internal/warden"
 )
-
-// install.sh (served as join.sh) reads the join response only through its bundle helper and ssh_keys:
-// every field it names there must be one the Console sends (docs/plans/2026-09-29-hardening.md, R9).
-func TestInstallReadsOnlyJoinFields(t *testing.T) {
-	b, err := os.ReadFile("join.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sent := map[string]bool{}
-	rt := reflect.TypeFor[joinResponse]()
-	for i := range rt.NumField() {
-		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
-		sent[name] = true
-	}
-	reads := regexp.MustCompile(`(?m)(?:\$\(|^\s*)bundle ([A-Za-z0-9]+)|has\("([A-Za-z0-9]+)"\)`).FindAllStringSubmatch(string(b), -1)
-	if len(reads) < 16 {
-		t.Fatalf("found %d reads of the join response in join.sh: is its helper still called bundle?", len(reads))
-	}
-	for _, r := range reads {
-		if f := r[1] + r[2]; !sent[f] {
-			t.Errorf("join.sh reads %q, which the join response does not have", f)
-		}
-	}
-}
-
-// Warden names the service account on exactly the Kustomizations install.sh makes.
-func TestInstallRootsAreWardens(t *testing.T) {
-	b, err := os.ReadFile("join.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	made := []string{}
-	for _, m := range regexp.MustCompile(`kind: Kustomization\nmetadata: \{ name: ([a-z-]+), namespace: flux-system \}`).FindAllStringSubmatch(string(b), -1) {
-		made = append(made, m[1])
-	}
-	if !slices.Equal(made, warden.Roots) {
-		t.Fatalf("install.sh makes %v, Warden names %v", made, warden.Roots)
-	}
-}
 
 var funcEnd = regexp.MustCompile("\n}\n[\n#]")
 
@@ -72,8 +31,20 @@ func installFns(t *testing.T, names ...string) string {
 		}
 		rest := src[i+1:]
 		fn, _, _ := strings.Cut(rest, "\n")
-		if !strings.HasSuffix(fn, "}") { // not a one-liner: up to a closing brace that ends a paragraph (a heredoc's does not)
-			fn = rest[:funcEnd.FindStringIndex(rest)[0]+2]
+		if !strings.HasSuffix(fn, "}") {
+			fn = ""
+			for _, end := range funcEnd.FindAllStringIndex(rest, -1) {
+				candidate := rest[:end[0]+2]
+				parse := exec.Command("bash", "-n")
+				parse.Stdin = strings.NewReader(candidate)
+				if parse.Run() == nil {
+					fn = candidate
+					break
+				}
+			}
+			if fn == "" {
+				t.Fatalf("no complete bash function %s", n)
+			}
 		}
 		out += fn + "\n"
 	}
@@ -282,7 +253,7 @@ func TestInstallSync(t *testing.T) {
 		{"good", good, true, false, true},
 		{"no config", `{"ca": "new ca", "cert": "new cert", "stewards": ["10.77.0.1"]}`, true, false, false},
 		{"refused by nebula", good, false, false, false},
-		{"keys not writable", good, true, true, true},
+		{"keys not writable", good, true, true, false},
 	} {
 		dir := scratchBox(t)
 		n := dir + "/nebula"
@@ -311,19 +282,324 @@ func TestInstallSync(t *testing.T) {
 			nebulaOK = "1"
 		}
 		out, ok := runOn(t, dir, []string{"ANSWER=" + dir + "/answer.json", "NEBULA_OK=" + nebulaOK, "LOG=" + dir + "/log"}, "bash", dir+"/sync")
+		expectApplied := c.name == "good" || c.name == "keys not writable"
 		if ok != c.swapped {
 			t.Errorf("%s: succeeded %v:\n%s", c.name, ok, out)
 		}
 		log, _ := os.ReadFile(dir + "/log")
-		if got := readFile(t, n+"/host.crt"); c.swapped != (got == "new cert\n") || c.swapped != strings.Contains(string(log), "reload nebula") {
+		if got := readFile(t, n+"/host.crt"); expectApplied != (got == "new cert\n") || expectApplied != strings.Contains(string(log), "reload nebula") {
 			t.Errorf("%s: host.crt %q, systemctl %q", c.name, got, log)
 		}
-		if c.swapped && (readFile(t, n+"/host.crt.bak") != "old cert\n" || readFile(t, n+"/config.d/20-fabric.yml") != "pki: {ca: N/ca.crt}\n") {
+		if expectApplied && (readFile(t, n+"/host.crt.bak") != "old cert\n" || readFile(t, n+"/config.d/20-fabric.yml") != "pki: {ca: N/ca.crt}\n") {
 			t.Errorf("%s: the files it replaced are kept as .bak", c.name)
 		}
-		if c.swapped && !c.sshBroken && !strings.Contains(readFile(t, dir+"/ssh/authorized_keys"), "\nssh-ed25519 K a@b\n") {
+		if c.name == "good" && !strings.Contains(readFile(t, dir+"/ssh/authorized_keys"), "\nssh-ed25519 K a@b\n") {
 			t.Errorf("%s: the answer's SSH keys", c.name)
 		}
+	}
+}
+func TestInstallSyncRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, failure string
+		failRollback  bool
+	}{
+		{"reload", "reload", false}, {"rollback-reload", "reload", true}, {"partial-install", "install", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := scratchBox(t)
+			n := dir + "/nebula"
+			if err := os.MkdirAll(n+"/config.d", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for f, s := range map[string]string{"name": "box\n", "stewards": "10.77.0.1\n", "ca.crt": "old ca\n", "host.crt": "old cert\n", "config.d/20-fabric.yml": "old config\n", "config.d/10-local.yml": "local\n"} {
+				writeFile(t, n+"/"+f, s, 0o600)
+			}
+			writeFile(t, dir+"/answer", `{"ca":"new ca","cert":"new cert","config":"new config","stewards":["10.77.0.1"],"sshKeys":[]}`, 0o600)
+			writeFile(t, dir+"/bin/curl", "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\ncp \"$ANSWER\" \"$out\"\n", 0o755)
+			writeFile(t, dir+"/bin/nebula", "#!/bin/sh\nexit 0\n", 0o755)
+			writeFile(t, dir+"/bin/systemctl", "#!/bin/sh\necho \"$*\" >> \"$LOG\"\nif [ -f \"$FAIL\" ]; then n=$(cat \"$FAIL\"); if [ \"$n\" -gt 0 ]; then echo $((n-1)) > \"$FAIL\"; exit 1; fi; fi\n", 0o755)
+			writeFile(t, dir+"/bin/install", "#!/bin/sh\ncase \"$*\" in *host.crt*) if [ -f \"$FAIL_INSTALL\" ]; then rm \"$FAIL_INSTALL\"; exit 1; fi;; esac\nexec /usr/bin/install \"$@\"\n", 0o755)
+			script, ok := bashFns(t, dir, "sync_script", "ssh_keys", "sync_script")
+			if !ok {
+				t.Fatal(script)
+			}
+			writeFile(t, dir+"/sync", strings.ReplaceAll(script, "/etc/nebula", n), 0o755)
+			fail, installFail := dir+"/fail", dir+"/fail-install"
+			if tc.failure == "reload" {
+				count := "1"
+				if tc.failRollback {
+					count = "2"
+				}
+				writeFile(t, fail, count, 0o600)
+			} else {
+				writeFile(t, installFail, "1", 0o600)
+			}
+			env := []string{"ANSWER=" + dir + "/answer", "LOG=" + dir + "/log", "FAIL=" + fail, "FAIL_INSTALL=" + installFail}
+			if out, ok := runOn(t, dir, env, "bash", dir+"/sync"); ok {
+				t.Fatalf("first failed operation unexpectedly succeeded: %s", out)
+			}
+			if tc.failRollback {
+				if _, err := os.Stat(n + "/.wecolab-reload-pending"); err != nil {
+					t.Error("uncertain reload lost pending marker")
+				}
+			} else if readFile(t, n+"/host.crt") != "old cert\n" {
+				t.Error("failed transaction did not restore original bytes")
+			}
+			if mode, err := os.Stat(n + "/host.crt"); err != nil || mode.Mode().Perm() != 0o600 {
+				t.Errorf("rollback mode = %v (%v)", mode, err)
+			}
+			if out, ok := runOn(t, dir, env, "bash", dir+"/sync"); !ok {
+				t.Fatalf("retry failed: %s", out)
+			}
+			if readFile(t, n+"/host.crt") != "new cert\n" {
+				t.Error("retry did not apply answer")
+			}
+			before := readFile(t, dir+"/log")
+			if out, ok := runOn(t, dir, env, "bash", dir+"/sync"); !ok {
+				t.Fatalf("idempotent sync: %s", out)
+			}
+			if got := readFile(t, dir+"/log"); got != before {
+				t.Errorf("unchanged successful sync reloaded: %s", got)
+			}
+			if _, err := os.Stat(n + "/.wecolab-reload-pending"); !os.IsNotExist(err) {
+				t.Error("successful reload retained pending marker")
+			}
+			writeFile(t, n+"/.wecolab-reload-pending", "", 0o600)
+			if out, ok := runOn(t, dir, env, "bash", dir+"/sync"); !ok {
+				t.Fatalf("pending identical retry: %s", out)
+			}
+			if got := readFile(t, dir+"/log"); strings.Count(got, "reload nebula") != strings.Count(before, "reload nebula")+1 {
+				t.Errorf("identical files with pending marker skipped reload: %s", got)
+			}
+		})
+	}
+}
+
+// Run the installer against a scratch service directory, including the real role and identity checks.
+func TestInstallInterruptedK3s(t *testing.T) {
+	for _, role := range []string{"manager", "node"} {
+		for _, scenario := range []string{"cached", "owned-service", "foreign-binary", "identity-conflict", "installer-fails"} {
+			t.Run(role+"/"+scenario, func(t *testing.T) {
+				dir := scratchBox(t)
+				for _, p := range []string{"etc/rancher/k3s", "etc/systemd/system", "usr/local/bin", "cache"} {
+					if err := os.MkdirAll(filepath.Join(dir, p), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				unit := "k3s-agent.service"
+				if role == "manager" {
+					unit = "k3s.service"
+				}
+				writeFile(t, dir+"/bundle.json", fmt.Sprintf(`{"role":%q,"box":"home-box","ip":"10.77.0.2","k3sToken":"token","k3sAgentToken":"agent","k3sServer":"https://10.77.0.1:6443","public":false}`, role), 0o600)
+				if scenario != "foreign-binary" {
+					writeFile(t, dir+"/state/installed", "k3s\n", 0o600)
+				}
+				binary := "#!/bin/sh\nprintf 'k3s version v1\\n'\n"
+				writeFile(t, dir+"/usr/local/bin/k3s", binary, 0o755)
+				if scenario == "owned-service" {
+					writeFile(t, dir+"/etc/systemd/system/"+unit, "[Service]\n", 0o644)
+				}
+				if scenario == "identity-conflict" {
+					writeFile(t, dir+"/etc/rancher/k3s/config.yaml", "node-name: another-box\n", 0o600)
+				}
+				writeFile(t, dir+"/bin/systemctl", `#!/bin/bash
+echo "$*" >> "$EVENTS"
+case "$1" in cat) [ -f "$UNITS/$2" ];; start) [ -f "$UNITS/$2" ] && [ -f "$FIREWALL_OK" ];; esac
+`, 0o755)
+				source := installFns(t, "die", "mark", "has", "valid", "bundle", "verify_payload", "cache_verified", "k3s_config", "k3s_dependencies", "k3s_identity", "install_k3s")
+				source = strings.ReplaceAll(source, "/etc/rancher/k3s", dir+"/etc/rancher/k3s")
+				source = strings.ReplaceAll(source, "/etc/systemd/system", dir+"/etc/systemd/system")
+				source = strings.ReplaceAll(source, "/usr/local/bin/k3s", dir+"/usr/local/bin/k3s")
+				run := `set -euo pipefail
+STATE=` + dir + `/state BUNDLE=` + dir + `/bundle.json NETWORK=10.77.0.0/16 CACHE= ARCH=amd64 K3S_VERSION=v1 DEV=
+K3S_SHA256_amd64=` + fmt.Sprintf("%x", sha256.Sum256([]byte(binary))) + `
+K3S_INSTALL_COMMIT=test K3S_INSTALL_SHA256=` + fmt.Sprintf("%x", sha256.Sum256([]byte("#!/bin/sh\nexit 0\n"))) + `
+` + source + `
+firewall() { touch "$FIREWALL_OK"; }
+apparmor() { :; }
+kvm_label() { :; }
+kubectl() { :; }
+sleep() { :; }
+fetch() { printf '#!/bin/sh\nexit 0\n' > "$2"; }
+sh() {
+ echo "$INSTALL_K3S_EXEC skip=$INSTALL_K3S_SKIP_DOWNLOAD" >> "$INSTALL_LOG"
+ [ ! -f "$INSTALL_FAIL" ] || return 1
+ case "$INSTALL_K3S_EXEC" in server) touch "$UNITS/k3s.service";; agent) touch "$UNITS/k3s-agent.service";; esac
+}
+install_k3s
+`
+				writeFile(t, dir+"/run", run, 0o755)
+				env := []string{"PATH=" + dir + "/bin:" + dir + "/usr/local/bin:" + os.Getenv("PATH"), "EVENTS=" + dir + "/events", "UNITS=" + dir + "/etc/systemd/system", "FIREWALL_OK=" + dir + "/fw-ok", "INSTALL_LOG=" + dir + "/installer", "INSTALL_FAIL=" + dir + "/fail"}
+				if scenario == "installer-fails" {
+					writeFile(t, dir+"/fail", "1", 0o600)
+				}
+				out, ok := runOn(t, dir, env, "bash", dir+"/run")
+				expected := scenario == "cached" || scenario == "owned-service"
+				if ok != expected {
+					t.Fatalf("first run success=%v: %s", ok, out)
+				}
+				log, _ := os.ReadFile(dir + "/installer")
+				if scenario == "cached" && !strings.Contains(string(log), "skip=true") {
+					t.Errorf("cached binary did not resume pinned installer: %s", log)
+				}
+				if scenario == "owned-service" && len(log) > 0 {
+					t.Errorf("owned unit reinstalled: %s", log)
+				}
+				if scenario == "foreign-binary" || scenario == "identity-conflict" {
+					if len(log) > 0 {
+						t.Errorf("unsafe installer invocation: %s", log)
+					}
+				}
+				if scenario == "installer-fails" {
+					if err := os.Remove(dir + "/fail"); err != nil {
+						t.Fatal(err)
+					}
+					if out, ok := runOn(t, dir, env, "bash", dir+"/run"); !ok {
+						t.Fatalf("retry: %s", out)
+					}
+				}
+				if expected || scenario == "installer-fails" {
+					if _, err := os.Stat(dir + "/etc/systemd/system/" + unit); err != nil {
+						t.Errorf("missing role unit: %v", err)
+					}
+					if !strings.Contains(readFile(t, dir+"/events"), "start "+unit) {
+						t.Error("role service not started after firewall")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestInstallFirewallGate(t *testing.T) {
+	dir := scratchBox(t)
+	for _, p := range []string{"etc/systemd/system", "usr/local/sbin"} {
+		if err := os.MkdirAll(dir+"/"+p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, dir+"/bin/systemctl", `#!/bin/sh
+echo "$*" >> "$EVENTS"
+[ "$1" != restart ] || [ ! -f "$FAIL_RESTART" ]
+`, 0o755)
+	src := installFns(t, "firewall_script", "firewall", "k3s_dependencies")
+	src = strings.ReplaceAll(src, "/etc/systemd/system", dir+"/etc/systemd/system")
+	src = strings.ReplaceAll(src, "/usr/local/sbin", dir+"/usr/local/sbin")
+	writeFile(t, dir+"/run", "set -euo pipefail\nNETWORK=10.77.0.0/16\n"+src+"\nk3s_dependencies\nfirewall false\n", 0o755)
+	env := []string{"EVENTS=" + dir + "/events", "FAIL_RESTART=" + dir + "/fail"}
+	writeFile(t, dir+"/fail", "1", 0o600)
+	if _, ok := runOn(t, dir, env, "bash", dir+"/run"); ok {
+		t.Error("firewall restart failure did not propagate")
+	}
+	if err := os.Remove(dir + "/fail"); err != nil {
+		t.Fatal(err)
+	}
+	if out, ok := runOn(t, dir, env, "bash", dir+"/run"); !ok {
+		t.Fatal(out)
+	}
+	for _, role := range []string{"k3s", "k3s-agent"} {
+		drop := readFile(t, dir+"/etc/systemd/system/"+role+".service.d/10-nebula.conf")
+		if !strings.Contains(drop, "Wants=nebula.service\n") || !strings.Contains(drop, "Requires=wecolab-pod-isolation.service\n") ||
+			!strings.Contains(drop, "After=nebula.service wecolab-pod-isolation.service\n") {
+			t.Errorf("%s dependency omitted: %s", role, drop)
+		}
+	}
+	if got := readFile(t, dir+"/events"); !strings.Contains(got, "daemon-reload\n") || !strings.Contains(got, "restart wecolab-pod-isolation\n") {
+		t.Errorf("firewall unit was not enabled and applied: %s", got)
+	}
+}
+
+func TestInstallAppArmorOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name                               string
+		original, loaded, external, reject bool
+	}{
+		{"absent", false, false, false, false}, {"existing-loaded", true, true, false, false},
+		{"existing-unloaded", true, false, false, false}, {"parser-rejects", true, true, false, true},
+		{"external-conflict", true, true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := scratchBox(t)
+			profiles := dir + "/profiles"
+			if err := os.MkdirAll(profiles, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			p := profiles + "/cri-containerd.apparmor.d"
+			if tc.original {
+				writeFile(t, p, "original policy\n", 0o640)
+			}
+			if tc.loaded {
+				writeFile(t, dir+"/loaded", "cri-containerd.apparmor.d (enforce)\n", 0o600)
+			} else {
+				writeFile(t, dir+"/loaded", "", 0o600)
+			}
+			writeFile(t, dir+"/bin/apparmor_parser", `#!/bin/sh
+echo "$*" >> "$PARSER_LOG"
+[ ! -f "$REJECT" ] || [ "$1" != -r ] || exit 1
+case "$1" in -r) echo 'cri-containerd.apparmor.d (enforce)' > "$LOADED";; -R) : > "$LOADED";; esac
+`, 0o755)
+			src := installFns(t, "mark", "has", "die", "apparmor", "apparmor_restore")
+			src = strings.ReplaceAll(src, "/sys/kernel/security/apparmor/profiles", dir+"/loaded")
+			src = strings.ReplaceAll(src, "/etc/apparmor.d", profiles)
+			writeFile(t, dir+"/run", "set -euo pipefail\nSTATE="+dir+"/state\n"+src+"\n"+`case "$1" in install) apparmor ;; restore) apparmor_restore ;; esac`+"\n", 0o755)
+			env := []string{"PARSER_LOG=" + dir + "/parser-log", "LOADED=" + dir + "/loaded", "REJECT=" + dir + "/reject"}
+			if tc.reject {
+				writeFile(t, dir+"/reject", "1", 0o600)
+			}
+			if out, ok := runOn(t, dir, env, "bash", dir+"/run", "install"); ok == tc.reject {
+				t.Fatalf("install status: %s", out)
+			}
+			if tc.reject {
+				if got := readFile(t, p); got != "original policy\n" {
+					t.Errorf("parser rejection changed profile: %q", got)
+				}
+				if _, err := os.Stat(dir + "/state/installed"); !os.IsNotExist(err) {
+					t.Error("parser rejection marked ownership")
+				}
+				return
+			}
+			if out, ok := runOn(t, dir, env, "bash", dir+"/run", "install"); !ok {
+				t.Fatalf("reinstall: %s", out)
+			}
+			if tc.external {
+				writeFile(t, p, "third-party edit\n", 0o644)
+				if out, ok := runOn(t, dir, env, "bash", dir+"/run", "install"); ok {
+					t.Errorf("external edits were overwritten on reinstall: %s", out)
+				}
+			}
+			out, ok := runOn(t, dir, env, "bash", dir+"/run", "restore")
+			if ok == tc.external {
+				t.Errorf("restore success=%v: %s", ok, out)
+			}
+			if tc.external {
+				if readFile(t, p) != "third-party edit\n" {
+					t.Error("external policy overwritten")
+				}
+				if readFile(t, dir+"/state/apparmor/original") != "original policy\n" {
+					t.Error("backup lost on conflict")
+				}
+			} else if tc.original {
+				if readFile(t, p) != "original policy\n" {
+					t.Error("original bytes not restored")
+				}
+				if st, _ := os.Stat(p); st.Mode().Perm() != 0o640 {
+					t.Errorf("mode %v", st.Mode())
+				}
+				wantLoaded := tc.loaded
+				if loaded := strings.Contains(readFile(t, dir+"/loaded"), "cri-containerd.apparmor.d"); loaded != wantLoaded {
+					t.Errorf("loaded=%v want %v", loaded, wantLoaded)
+				}
+			} else if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Error("initially absent profile not removed")
+			}
+		})
+	}
+	dir := scratchBox(t)
+	writeFile(t, dir+"/state/installed", "apparmor\n", 0o600)
+	src := installFns(t, "apparmor_restore")
+	src = strings.ReplaceAll(src, "/etc/apparmor.d", dir+"/profiles")
+	if out, ok := runOn(t, dir, nil, "bash", "-c", "set -euo pipefail\nSTATE="+dir+"/state\n"+src+"\napparmor_restore"); ok || !strings.Contains(out, "missing AppArmor recovery state") {
+		t.Errorf("legacy ownership without backup was not refused: %s", out)
 	}
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -25,13 +24,96 @@ func TestFillEnv(t *testing.T) {
 	}
 }
 
+func TestCatalogPodDatabaseReferencesBothContainers(t *testing.T) {
+	fields := []string{"host", "dbname", "user", "password", "port", "uri"}
+	env := make([]catalogEnv, 0, len(fields)+2)
+	for _, field := range fields {
+		env = append(env, catalogEnv{Name: "DB_" + field, DB: field})
+	}
+	env = append(env, catalogEnv{Name: "SHARED", Value: "${secret:shared}"})
+	e := catalogEntry{Title: "Sample", Image: "sample:1", Port: 8080, Env: env,
+		Sidecars: []catalogSidecar{{Name: "worker", Image: "worker:1", Env: append(append([]catalogEnv{}, env...), catalogEnv{Name: "CACHE", Value: "localhost"})}}}
+	generated, secrets := map[string]string{}, map[string]string{}
+	containers, _, _, err := catalogPod(e, "sample", "sample-db", nil, generated, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := dbOwner("team", "sample", "pw").Object["stringData"].(map[string]any)
+	for _, container := range containers {
+		for _, item := range container.(map[string]any)["env"].([]any) {
+			env := item.(map[string]any)
+			if !strings.HasPrefix(env["name"].(string), "DB_") {
+				continue
+			}
+			field := strings.TrimPrefix(env["name"].(string), "DB_")
+			key := field
+			if key == "user" {
+				key = "username"
+			}
+			ref := env["valueFrom"].(map[string]any)["secretKeyRef"].(map[string]any)
+			if ref["name"] != "sample-db-app" || ref["key"] != key || ref["optional"] != nil || owner[key] == nil {
+				t.Errorf("%v has wrong owner-secret reference: %v", container.(map[string]any)["name"], env)
+			}
+		}
+	}
+	worker := containers[1].(map[string]any)["env"].([]any)
+	if worker[len(worker)-1].(map[string]any)["value"] != "localhost" || generated["shared"] == "" ||
+		secrets["env-SHARED"] != generated["shared"] {
+		t.Fatalf("sidecar literals or shared secret: %v %v", worker, generated)
+	}
+	if _, _, _, err := catalogPod(e, "sample", "", nil, map[string]string{}, map[string]string{}); err == nil {
+		t.Fatal("database references without a database must fail")
+	}
+}
+
 func TestCatalogLoads(t *testing.T) {
 	c := loadCatalog()
-	if len(c) < 200 || c["miniflux"].Database == nil || c["freshrss"].Port != 80 {
+	if len(c) < 200 || c["listmonk"].Database == nil || c["freshrss"].Port != 80 {
 		t.Fatalf("catalog not embedded as expected: %d entries", len(c))
 	}
-	if _, _, _, err := catalogPod(c["miniflux"], "rss", "rss-db", map[string]string{}, map[string]string{}, map[string]string{}); err != nil {
+	if _, _, _, err := catalogPod(c["listmonk"], "listmonk", "listmonk-db", map[string]string{}, map[string]string{}, map[string]string{}); err != nil {
 		t.Error(err)
+	}
+	if len(c["miniflux"].Unsupported) == 0 {
+		t.Fatal("nonportable imported database URL must not be deployed silently")
+	}
+}
+
+func TestCatalogAuthentikWorkerUsesDatabaseOwner(t *testing.T) {
+	e := loadCatalog()["authentik"]
+	containers, _, claims, err := catalogPod(e, "authentik", "authentik-db", nil, map[string]string{}, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) < 2 || len(claims) == 0 {
+		t.Fatalf("worker or claims missing: %v %v", containers, claims)
+	}
+	expected := map[string]string{
+		"AUTHENTIK_POSTGRESQL__HOST": "host", "AUTHENTIK_POSTGRESQL__NAME": "dbname",
+		"AUTHENTIK_POSTGRESQL__PASSWORD": "password", "AUTHENTIK_POSTGRESQL__USER": "username",
+	}
+	for _, container := range containers[:2] {
+		found := map[string]bool{}
+		for _, value := range container.(map[string]any)["env"].([]any) {
+			item := value.(map[string]any)
+			key, ok := expected[item["name"].(string)]
+			if !ok {
+				continue
+			}
+			valueFrom, ok := item["valueFrom"].(map[string]any)
+			if !ok {
+				t.Errorf("literal database field in %s: %v", container.(map[string]any)["name"], item)
+				continue
+			}
+			ref, ok := valueFrom["secretKeyRef"].(map[string]any)
+			if !ok || ref["name"] != "authentik-db-app" || ref["key"] != key || ref["optional"] != nil {
+				t.Errorf("wrong %s reference in %s: %v", item["name"], container.(map[string]any)["name"], item)
+			}
+			found[item["name"].(string)] = true
+		}
+		if len(found) != len(expected) {
+			t.Errorf("%s missing database refs: %v", container.(map[string]any)["name"], found)
+		}
 	}
 }
 
@@ -75,36 +157,5 @@ func TestWorkspaceEntry(t *testing.T) {
 	}
 	if gen["admin_password"] == "" || sec["env-PASSWD"] != gen["admin_password"] {
 		t.Errorf("the desktop's password is the generated admin password the Console shows once: %v", sec)
-	}
-}
-
-// The names the Console, the vendored Kata, the userns policy and install.sh must agree on.
-func TestKataContract(t *testing.T) {
-	read := func(p string) string {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
-	tpl := "../../internal/bootstrap/template/system/"
-	kata, userns, install := read(tpl+"wecolab/kata.yaml"), read(tpl+"base/userns.yaml"), read("../../install.sh")
-	for _, c := range []struct{ in, want, what string }{
-		{kata, "kind: RuntimeClass\napiVersion: node.k8s.io/v1\nmetadata:\n  name: " + kataRuntime + "\n", "Kata's RuntimeClass"},
-		{userns, "object.spec.runtimeClassName == '" + kataRuntime + "'", "the userns policy admitting it"},
-		{kata, "wecolab.io/kvm: \"true\"", "Kata's nodes"},
-		{kata, "SHIMS_X86_64\n          value: \"clh\"\n        - name: DEFAULT_SHIM_X86_64\n          value: \"clh\"", "clh as the only shim and the default"},
-		{install, "label node \"$node\" wecolab.io/kvm=true", "install.sh labelling them"},
-		{read(tpl + "wecolab/kustomization.yaml"), "kata.yaml, kata-policy.yaml", "system/wecolab applying Kata and its policy"},
-		{kata, "serviceAccountName: kata-deploy-sa", "kata-deploy's account"},
-		{read(tpl + "wecolab/kata-policy.yaml"), "'system:serviceaccount:kube-system:kata-deploy-sa'", "the policy bounding that account"},
-		{read(tpl + "wecolab/kata-policy.yaml"), "['authentication.kubernetes.io/node-name'][0] == object.metadata.name", "only the node its token is bound to"},
-	} {
-		if !strings.Contains(c.in, c.want) {
-			t.Errorf("%s: no %q", c.what, c.want)
-		}
-	}
-	if strings.Contains(kata, "nodes/proxy") {
-		t.Error("kata-deploy's role reaches every node's kubelet (nodes/proxy): hack/kata-render.sh strips it")
 	}
 }

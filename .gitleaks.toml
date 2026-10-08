@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "The catalog's credential-free Keycloak JDBC address is not an API key."
+condition = "AND"
+paths = ['''(^|/)cmd/console/web/catalog\.json$''']
+regexTarget = "match"
+regexes = ['''^keycloak-postgres:5432/keycloak"$''']

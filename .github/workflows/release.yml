@@ -1,0 +1,38 @@
+name: Candidate release provenance
+# An authorized operator publishes a privacy-reviewed public source snapshot first. This job only
+# constructs candidates; publication of a GitHub Release requires a separate authorized operation.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    if: github.ref == 'refs/heads/main' && github.repository == 'wecolabhq/wecolab'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Check embed before build
+        run: cmp install.sh cmd/console/join.sh
+      - name: Construct candidate from public snapshot
+        run: hack/release.sh build "$GITHUB_SHA" dist/release
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/release/release.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ github.sha }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 30

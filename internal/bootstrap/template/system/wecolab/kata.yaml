@@ -80,7 +80,7 @@ spec:
       terminationGracePeriodSeconds: 600
       containers:
       - name: kube-kata
-        image: quay.io/kata-containers/kata-deploy:4.2.0
+        image: quay.io/kata-containers/kata-deploy:4.2.0@sha256:8878e275eeb611f5ed1613009db195f4034b25fea461aef61d407fead58872d3
         imagePullPolicy: IfNotPresent
         command:
         - /usr/bin/kata-deploy

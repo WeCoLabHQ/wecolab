@@ -95,6 +95,18 @@ counts as one that succeeded. Each attempt first finishes an interrupted `dpkg`,
 again, which skips what an earlier attempt finished. The Console uses up the invite only when it has
 recorded the Mac; a VM that is reset needs a new one.
 
+The seed test mounts a transient `hdiutil makehybrid` ISO in a temporary directory (never the
+user's VM), checks its `cidata` label and `meta-data` keys, and reads the mounted cloud-config
+as cloud-init's NoCloud consumer would. It checks the decoded installer against `install.sh`,
+the root-only invite, the join service and its first-boot commands. The Oct 5 failure compared
+mounted `user-data` to a second, independently generated invite: the test's JSON-backed invite
+can serialize its dictionary keys in different orders. That byte equality did not establish
+an ISO or guest-boot defect; the test now uses one invite and checks consumed content instead.
+Do not print the mounted `user-data`: it contains the invite. A passing ISO test does not
+prove guest boot; the release gate still requires a disposable ARM VM with a throwaway
+invite/fabric, observing cloud-init `wecolab-join`, its log, Nebula and node-agent, then
+removing only that VM and its throwaway identity.
+
 `guest-version` records which WeCoLab for Mac made `disk.img`. v1 kept a NetBird guest at the same paths;
 a disk without the stamp, or a share with v1's `netbird.json`, is not started until it is reset.
 
@@ -145,6 +157,16 @@ Kubernetes is told through the `mode` file: the site's node agent (a DaemonSet o
 `wecolab.io/idle` taint on the node whenever the mode is not `idle`. Of the apps' pods, only best-effort
 ones may run on a laptop node. They can start only while the idle taint is off, and are evicted a minute
 after it comes back (when the person returns).
+
+Mode publication is atomic and the cached state advances only after the share write succeeds.
+The app reports publication errors in its window; the headless CLI writes them to stderr.
+Both retry on the next five-second tick. On an idle-to-active transition the Mac removes any
+stale `idle` file before writing `active`: a failed active write leaves no idle grant, so the
+node agent keeps/reapplies its idle taint. If removal fails, the VM is stopped instead of
+continuing to advertise workload eligibility. Failed idle writes retain the non-idle
+backstop; the balloon target is still applied every tick. To test actual guest convergence,
+use a dedicated test account and a disposable VM/share, never change permissions on the
+user's existing VM share.
 
 A Mac runs only the apps without a database of projects whose every offer held at its site, directly or
 through a pool, is best effort (Console: Sites, New offer, tick best effort; an offer that names boxes must

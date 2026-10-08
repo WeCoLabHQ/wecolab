@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -20,9 +21,11 @@ import (
 	"testing"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -39,17 +42,22 @@ import (
 // fakeGit is a Forgejo holding the Fabric in memory. Like the real one, it refuses a commit whose sha
 // is not the file's current one (409) and a create where the file exists (422).
 type fakeGit struct {
-	mu      sync.Mutex
-	files   map[string]string
-	commits int
-	failing bool     // every commit fails
-	refuse  int      // the next commits are refused as pushes to a protected branch
-	pushers []string // branch protection's push whitelist; nil: none
+	mu        sync.Mutex
+	files     map[string]string
+	commits   int
+	failing   bool // every commit fails
+	pausePost func([]byte)
+	pushers   []string // branch protection's push whitelist; nil: none
 }
 
 func sha(c string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(c))) }
 
 func (f *fakeGit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && f.pausePost != nil {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		f.pausePost(body)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := strings.TrimPrefix(r.URL.Path, "/api/v1/repos/fabric/fabric")
@@ -78,11 +86,6 @@ func (f *fakeGit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if f.failing {
 			http.Error(w, "down", http.StatusServiceUnavailable)
-			return
-		}
-		if f.refuse > 0 {
-			f.refuse--
-			http.Error(w, "protected branch", http.StatusForbidden)
 			return
 		}
 		for _, c := range body.Files {
@@ -145,8 +148,16 @@ var testScheme = func() *runtime.Scheme {
 // inGit is objects as the Fabric keeps them, by path, with the settings.
 func inGit(t *testing.T, objs ...client.Object) map[string]string {
 	t.Helper()
-	out := map[string]string{settingsPath: testSettings}
+	out := map[string]string{settingsPath: testSettings,
+		fabric.UpgradePath:           `{"phase":"ready","sites":["a","b"]}`,
+		fabric.PlacementRevisionPath: `{"revision":"0"}`,
+		fabric.MigrationCompletePath: `{"archiveIDs":true,"routeClaims":true,"keyVersions":true}`}
 	for _, o := range objs {
+		if a, ok := o.(*v1alpha1.App); ok && a.Spec.Database != "" && a.Spec.ArchiveID == "" {
+			cp := a.DeepCopy()
+			cp.Spec.ArchiveID = cp.Spec.Database
+			o = cp
+		}
 		gvk, _ := apiutil.GVKForObject(o, testScheme)
 		p, _ := fabric.Path(gvk, o.GetNamespace(), o.GetName())
 		b, err := fabric.YAML(o, gvk)
@@ -167,8 +178,12 @@ func testServer(t *testing.T, git map[string]string, objs ...client.Object) (*se
 	cm := &corev1.ConfigMap{}
 	_ = yaml.Unmarshal([]byte(testSettings), cm)
 	c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(append(objs, cm)...).Build()
+	coordination := kubefake.NewClientset(&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{
+		Name: "wecolab-writer-transition", Namespace: warden.SystemNS,
+	}}).CoordinationV1()
 	return &server{c: c, site: "a", domain: "fab.example", publicURL: "https://console.fab.example",
-		git: &fabric.Git{URL: hs.URL, Token: "t", Repo: "fabric/fabric", HTTP: hs.Client()}, peers: &warden.Peers{Client: c}}, f
+		git: &fabric.Git{URL: hs.URL, Token: "t", Repo: "fabric/fabric", HTTP: hs.Client()}, peers: &warden.Peers{Client: c},
+		coordination: coordination}, f
 }
 
 // fromFake reads an object back from the fake Fabric.
@@ -191,12 +206,20 @@ func call(h http.HandlerFunc, method string, body any, pathValues ...string) *ht
 	return w
 }
 
-// fakeSops puts a sops on the PATH that passes files through as they are: the tests check what is
-// written and read, not the encryption. The Console opens files with this site's age key.
+// fakeSops keeps the SOPS recipient metadata in test files without performing
+// encryption. Decrypt strips it, as real SOPS does, so repeated rekeys retain
+// the actual recipient set instead of silently accepting a missing footer.
 func fakeSops(t *testing.T) client.Object {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sops"), []byte("#!/bin/sh\nexec cat\n"), 0o755); err != nil {
+	script := `#!/bin/sh
+if [ "$1" = decrypt ]; then
+  awk '/^sops:/{exit} {print}'
+else
+  awk -v recipients="$3" '{print} END {n=split(recipients,a,","); print "sops:"; print "  age:"; for(i=1;i<=n;i++) print "    - recipient: " a[i]}'
+fi
+`
+	if err := os.WriteFile(filepath.Join(dir, "sops"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -370,9 +393,16 @@ func TestRemoveBoxBlocklistsItsCertificates(t *testing.T) {
 // Moves are spec changes in Git: planned only when the sites report it can complete (MoveGates), forced
 // with every other site rebuilt; the target is one of the app's sites.
 func TestSetPrimary(t *testing.T) {
+	age := fakeSops(t)
 	app := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "wiki"}, Spec: v1alpha1.AppSpec{Sites: []string{"a", "b"}, Primary: "a", Workload: "wiki", Database: "wiki-db"}}
 	moving := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "docs"}, Spec: v1alpha1.AppSpec{Sites: []string{"a", "b"}, Primary: "b", Workload: "docs", Database: "docs-db", Handover: &v1alpha1.Handover{ID: "h", From: "a"}}}
-	s, _ := testServer(t, inGit(t, app, moving))
+	git := inGit(t, app, moving)
+	vault, err := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-test", "b2-key-id": "k0", "key-version": "0", "mutation-revision": "0"}, []string{testAge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	git[vault.Path] = string(vault.Content)
+	s, _ := testServer(t, git, age)
 	if w := call(s.setPrimary, "POST", map[string]any{"To": "c"}, "ns", "p", "app", "wiki"); w.Code != 409 {
 		t.Fatalf("c is not one of the app's sites: %d", w.Code)
 	}
@@ -391,12 +421,12 @@ func TestSetPrimary(t *testing.T) {
 	if w := call(s.setMesh, "POST", map[string]any{}, "ns", "p", "app", "wiki"); w.Code != 400 {
 		t.Fatalf("a body without the flag: %d", w.Code)
 	}
-	if w := call(s.setPrimary, "POST", map[string]any{"To": "b", "Force": true}, "ns", "p", "app", "wiki"); w.Code != 200 {
-		t.Fatalf("%d %s", w.Code, w.Body)
+	if w := call(s.setPrimary, "POST", map[string]any{"To": "b", "Force": true}, "ns", "p", "app", "wiki"); w.Code != 400 {
+		t.Fatalf("force without fencing acknowledgement: %d %s", w.Code, w.Body)
 	}
 	got := fromFake(t, s, &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "wiki"}})
-	if got.Spec.Primary != "b" || got.Spec.Handover != nil || got.Spec.Archive["a"] != 2 {
-		t.Fatalf("forced: %+v", got.Spec)
+	if got.Spec.Primary != "a" || got.Spec.Handover != nil {
+		t.Fatalf("unacknowledged force changed Git: %+v", got.Spec)
 	}
 }
 
@@ -457,7 +487,7 @@ func TestTakeover(t *testing.T) {
 	if w := call(s.takeover, "POST", nil); w.Code == 200 || !slices.Equal(f.pushers, []string{warden.ForgejoMirror}) {
 		t.Fatalf("a failed takeover leaves the copy open: %d %v", w.Code, f.pushers)
 	}
-	f.failing, f.refuse = false, 1 // this site's Warden closed the copy again between opening and committing
+	f.failing = false
 	if w := call(s.takeover, "POST", nil); w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
@@ -687,10 +717,10 @@ func TestRotateRetiresTheOldKey(t *testing.T) {
 	wiki := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "wiki"}, Spec: v1alpha1.AppSpec{Sites: []string{"a"}, Primary: "a", Workload: "wiki", Database: "wiki-db"}}
 	git := inGit(t, testSite("a", 1, true), wiki)
 	git["keys/a.age.pub"], git["keys/recovery.age.pub"] = testAge+"\n", testAge+"\n"
-	vault, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": "k0", "b2-key": "old"}, []string{testAge})
+	vault, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": "k0", "b2-key": "old", "key-version": "0", "mutation-revision": "0"}, []string{testAge})
 	git[vault.Path] = string(vault.Content)
 	appSecret := fabric.AppFolder("p", "wiki") + "/secret-wiki.sops.yaml"
-	git[appSecret] = "apiVersion: v1\nkind: Secret\nmetadata: {name: wiki}\nstringData: {b2-key-id: k0, b2-key: old, db-password: pw}\n"
+	git[appSecret] = "apiVersion: v1\nkind: Secret\nmetadata: {name: wiki}\nstringData: {b2-key-id: k0, b2-key: old, db-password: pw, key-version: '0'}\nsops:\n  age:\n    - recipient: " + testAge + "\n"
 	acct := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: warden.SystemNS, Name: storageSecret}, Data: map[string][]byte{"key-id": []byte("acct"), "key": []byte("secret")}}
 	project := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p", Labels: map[string]string{"wecolab.io/tenant": "p"}}}
 	s, f := testServer(t, git, sopsAge, acct, project, wiki.DeepCopy())
@@ -706,12 +736,13 @@ func TestRotateRetiresTheOldKey(t *testing.T) {
 		app.StringData["b2-key-id"] != "k2" || app.StringData["db-password"] != "pw" {
 		t.Fatalf("B2 calls %v; vault %v; app %v", calls, sec.StringData["retiring"], app.StringData["b2-key-id"])
 	}
-	here := &corev1.Secret{} // as Flux applies it from Git
-	if err := s.c.Get(context.Background(), client.ObjectKey{Namespace: warden.SystemNS, Name: vaultSecret("p")}, here); err != nil || here.StringData["retiring"] != "" {
-		t.Fatalf("the Console writes the new key here, and leaves the retiring keys to Flux: %v %v", err, here.StringData)
+	// Console never applies its captured version to the live Secret: an older
+	// request can resume after a newer rotation. Flux applies Git's winner.
+	here := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: warden.SystemNS, Name: vaultSecret("p")},
+		Data: map[string][]byte{"b2-key-id": []byte(sec.StringData["b2-key-id"]), "retiring": []byte(sec.StringData["retiring"]), "key-version": []byte(sec.StringData["key-version"])}}
+	if err := s.c.Create(context.Background(), here); err != nil {
+		t.Fatal(err)
 	}
-	here.Data, here.StringData = map[string][]byte{"b2-key-id": []byte(sec.StringData["b2-key-id"]), "retiring": []byte(sec.StringData["retiring"])}, nil
-	_ = s.c.Update(context.Background(), here)
 	var page struct {
 		Vaults []struct{ Retiring, Awaiting []string }
 	}
@@ -723,7 +754,7 @@ func TestRotateRetiresTheOldKey(t *testing.T) {
 	// While the next rotation makes its key, the writer retires k0 and another rotation replaces k2 with
 	// k9: the vault is changed as Git holds it then, so k0 does not come back and k9 is not lost.
 	meanwhile = func() {
-		v, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": "k9", "b2-key": "nine", "retiring": "k1 k2"}, []string{testAge})
+		v, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": "k9", "b2-key": "nine", "retiring": "k1 k2", "key-version": "3", "mutation-revision": "5"}, []string{testAge})
 		f.mu.Lock()
 		f.files[v.Path] = string(v.Content)
 		f.mu.Unlock()
@@ -745,7 +776,7 @@ func TestDeployDuringRotation(t *testing.T) {
 	git := inGit(t, testSite("a", 1, true))
 	git["keys/a.age.pub"], git["keys/recovery.age.pub"] = testAge+"\n", testAge+"\n"
 	vault := func(id, retiring string) fabric.FileChange {
-		f, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": id, "b2-key": "key-" + id, "retiring": retiring}, []string{testAge})
+		f, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": id, "b2-key": "key-" + id, "retiring": retiring, "key-version": map[string]string{"k0": "0", "k1": "1"}[id], "mutation-revision": map[string]string{"k0": "0", "k1": "1"}[id]}, []string{testAge})
 		return f
 	}
 	git[vault("k0", "").Path] = string(vault("k0", "").Content)
@@ -770,6 +801,69 @@ func TestDeployDuringRotation(t *testing.T) {
 	}
 }
 
+func TestDeployAddsFirstDatabaseToStatelessApp(t *testing.T) {
+	age := fakeSops(t)
+	app := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "wiki"}, Spec: v1alpha1.AppSpec{Sites: []string{"a"}, Primary: "a", Workload: "wiki", Hostname: "wiki.fab.example"}}
+	git := inGit(t, testSite("a", 1, true), app)
+	git["keys/a.age.pub"], git["keys/recovery.age.pub"] = testAge+"\n", testAge+"\n"
+	vault, err := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": "k1", "b2-key": "key", "key-version": "1", "mutation-revision": "0"}, []string{testAge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	git[vault.Path] = string(vault.Content)
+	project := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "p", Labels: map[string]string{"wecolab.io/tenant": "p"}}}
+	s, f := testServer(t, git, age, project)
+	in := deployRequest{Name: "wiki", Project: "p", Image: "nginx", Sites: []string{"a"}, Primary: "a", Database: true}
+	if w := call(s.deploy, "POST", in); w.Code != 200 {
+		t.Fatalf("adding first database: %d %s", w.Code, w.Body)
+	}
+	first := fromFake(t, s, &v1alpha1.App{ObjectMeta: app.ObjectMeta})
+	if first.Spec.Database != "wiki-db" || !strings.HasPrefix(first.Spec.ArchiveID, "id-") || len(first.Spec.ArchiveID) != 35 {
+		t.Fatalf("database has no new archive incarnation: %+v", first.Spec)
+	}
+	if w := call(s.deploy, "POST", in); w.Code != 200 {
+		t.Fatalf("redeploy database: %d %s", w.Code, w.Body)
+	}
+	if got := fromFake(t, s, &v1alpha1.App{ObjectMeta: app.ObjectMeta}); got.Spec.ArchiveID != first.Spec.ArchiveID {
+		t.Fatalf("redeploy replaced archive incarnation: %s -> %s", first.Spec.ArchiveID, got.Spec.ArchiveID)
+	}
+	legacy := first.DeepCopy()
+	legacy.Spec.ArchiveID = ""
+	legacyYAML, err := fabric.YAML(legacy, v1alpha1.GroupVersion.WithKind("App"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appPath, _ := fabric.Path(v1alpha1.GroupVersion.WithKind("App"), "p", "wiki")
+	changed := first.DeepCopy()
+	changed.Spec.ArchiveID = "id-ffffffffffffffffffffffffffffffff"
+	changedYAML, err := fabric.YAML(changed, v1alpha1.GroupVersion.WithKind("App"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	altered := false
+	s.c = interceptor.NewClient(s.c.(client.WithWatch), interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+		if !altered && obj.GetName() == "wiki-db-vault" {
+			altered = true
+			f.mu.Lock()
+			f.files[appPath] = string(changedYAML)
+			f.mu.Unlock()
+		}
+		return c.Patch(ctx, obj, p, opts...)
+	}})
+	if w := call(s.deploy, "POST", in); w.Code != 409 || !altered {
+		t.Fatalf("concurrent archive change was not fenced: %d %s", w.Code, w.Body)
+	}
+	if got := fromFake(t, s, &v1alpha1.App{ObjectMeta: app.ObjectMeta}); got.Spec.ArchiveID != changed.Spec.ArchiveID {
+		t.Fatalf("retry discarded concurrent archive incarnation: %s", got.Spec.ArchiveID)
+	}
+	f.mu.Lock()
+	f.files[appPath] = string(legacyYAML)
+	f.mu.Unlock()
+	if w := call(s.deploy, "POST", in); w.Code != 409 || !strings.Contains(w.Body.String(), "migration required") {
+		t.Fatalf("legacy database must be migrated: %d %s", w.Code, w.Body)
+	}
+}
+
 // Every project comes through applyProject: system namespaces are not projects.
 func TestProjectNames(t *testing.T) {
 	s, _ := testServer(t, inGit(t))
@@ -783,10 +877,13 @@ func TestProjectNames(t *testing.T) {
 // Deleting an app only marks it in Git: the sites remove their part, data included, and the writer then
 // removes the App and its folder. Nothing is removed from Git by the Console.
 func TestDeleteMarksTheApp(t *testing.T) {
+	age := fakeSops(t)
 	app := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "wiki"}, Spec: v1alpha1.AppSpec{Sites: []string{"a", "b"}, Primary: "a", Workload: "wiki", Database: "wiki-db"}}
 	git := inGit(t, app)
+	vault, _ := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-x", "endpoint": "https://s3.example.org", "b2-key-id": "k0", "b2-key": "old", "key-version": "0", "mutation-revision": "0"}, []string{testAge})
+	git[vault.Path] = string(vault.Content)
 	git[fabric.AppFolder("p", "wiki")+"/deployment.yaml"] = "kind: Deployment\n"
-	s, f := testServer(t, git)
+	s, f := testServer(t, git, age)
 	for range 2 { // deleting twice is fine
 		if w := call(s.deleteApp, "DELETE", nil, "ns", "p", "app", "wiki"); w.Code != 200 {
 			t.Fatalf("%d %s", w.Code, w.Body)
@@ -840,6 +937,7 @@ func TestLogged(t *testing.T) {
 // otherwise its file, key and secret go, it leaves the apps it held standbys for, its offers go, and its
 // boxes' certificates join the blocklist. The vault keys its apps carried are rotated, or it says why not.
 func TestRemoveSite(t *testing.T) {
+	age := fakeSops(t)
 	fp, until := strings.Repeat("cd", 32), time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	a := testSite("a", 0, true, v1alpha1.Box{Name: "a-m", IP: "10.77.0.1", Role: "manager", Key: "k"})
 	b := testSite("b", 1, false, v1alpha1.Box{Name: "b-m", IP: "10.77.1.1", Role: "manager", Key: "k", Certs: []v1alpha1.IssuedCert{{Fingerprint: fp, NotAfter: metav1.NewTime(until)}}})
@@ -849,10 +947,15 @@ func TestRemoveSite(t *testing.T) {
 	docs := &v1alpha1.App{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "docs"}, Spec: v1alpha1.AppSpec{Sites: []string{"a", "b"}, Primary: "b", Workload: "docs"}}
 	offer := &v1alpha1.Offer{ObjectMeta: metav1.ObjectMeta{Name: "b-spare"}, Spec: v1alpha1.OfferSpec{Site: "b"}}
 	git := inGit(t, a, b, c, project, wiki, docs, offer)
+	vault, err := secretFile(vaultSecret("p"), map[string]string{"bucket": "wcl-test", "b2-key-id": "k0", "key-version": "0", "mutation-revision": "0"}, []string{testAge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	git[vault.Path] = string(vault.Content)
 	siteSecret := secretPath(warden.SiteSecret("b"))
 	git["keys/b.age.pub"], git[siteSecret] = testAge+"\n", "sealed"
 	git[kustomizationPath] = "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [" + pathpkg.Base(siteSecret) + ", vault-p.sops.yaml]\n"
-	s, f := testServer(t, git, a, b, c)
+	s, f := testServer(t, git, a, b, c, age)
 	for site, why := range map[string]string{"a": "the writer", "c": "a steward", "b": "docs' primary"} {
 		if w := call(s.removeSite, "DELETE", nil, "site", site); w.Code != 409 {
 			t.Fatalf("%s is %s: %d %s", site, why, w.Code, w.Body)

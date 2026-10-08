@@ -4,12 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -81,7 +78,7 @@ func (s *server) storage(w http.ResponseWriter, r *http.Request) {
 		}
 		if v.Retiring = strings.Fields(string(sec.Data["retiring"])); len(v.Retiring) > 0 {
 			apps := slices.DeleteFunc(slices.Clone(al.Items), func(a v1alpha1.App) bool { return a.Namespace != n.Name })
-			v.Awaiting = warden.Retirable(string(sec.Data["b2-key-id"]), apps, func(site string) *warden.SiteStatus {
+			v.Awaiting = warden.Retirable(string(sec.Data["b2-key-id"]), string(sec.Data["key-version"]), apps, func(site string) *warden.SiteStatus {
 				st, _ := s.peers.Get(s.elevated(ctx), site)
 				return st
 			})
@@ -152,7 +149,7 @@ func (s *server) createVault(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 502)
 		return
 	}
-	data := map[string]string{"b2-key-id": v.KeyID, "b2-key": v.Key, "bucket": v.Bucket, "endpoint": v.Endpoint}
+	data := map[string]string{"b2-key-id": v.KeyID, "b2-key": v.Key, "bucket": v.Bucket, "endpoint": v.Endpoint, "key-version": "0", "mutation-revision": "0"}
 	if err := s.putSecret(ctx, "project "+in.Project+": its vault, bucket "+v.Bucket, vaultSecret(in.Project), data, false); err != nil {
 		answer(w, err, 502)
 		return
@@ -166,7 +163,7 @@ func (s *server) createVault(w http.ResponseWriter, r *http.Request) {
 // site or the fabric's networks.
 func vaultEndpoint(ctx context.Context, raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fail(400, "the vault endpoint must be an https URL")
 	}
 	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", u.Hostname())
@@ -174,15 +171,12 @@ func vaultEndpoint(ctx context.Context, raw string) error {
 		return fail(400, "the vault endpoint %s does not resolve", u.Hostname())
 	}
 	for _, ip := range ips {
-		if ip = ip.Unmap(); !ip.IsGlobalUnicast() || ip.IsPrivate() || cgnat.Contains(ip) {
+		if !warden.PublicS3Address(ip) {
 			return fail(400, "the vault endpoint %s is not a public address (%s)", u.Hostname(), ip)
 		}
 	}
 	return nil
 }
-
-// cgnat is shared address space (RFC 6598), where NetBird puts people's devices.
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 // rotateVault gives a project's vault a new key (decision 25): made at B2 with the account key in
 // Settings and written into the project's vault and every database app's Secret. The old key is marked
@@ -230,8 +224,9 @@ func (s *server) rotate(r *http.Request, project string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Changed as Git holds the vault when the edit commits, so another rotation or the writer retiring old
-	// keys meanwhile is built on, not undone.
+	// The version and revision are persisted before any app rekey. A crash after
+	// this commit is repaired by the writer; an orphan key from a failed commit
+	// must be inventoried at the provider rather than guessed and deleted here.
 	err = s.editSecret(ctx, "project "+project+": its vault's key rotated", vaultSecret(project), func(b []byte, exists bool) (map[string]string, error) {
 		if !exists {
 			return nil, fail(404, "project %s has no vault", project)
@@ -240,7 +235,9 @@ func (s *server) rotate(r *http.Request, project string) (string, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Space-separated, so a second rotation before the first old key is gone waits for both.
+		if err := fabric.NextKeyVersion(now); err != nil {
+			return nil, fail(409, "%v", err)
+		}
 		if old := now["b2-key-id"]; old != "" && !slices.Contains(strings.Fields(now["retiring"]), old) {
 			now["retiring"] = strings.TrimSpace(now["retiring"] + " " + old)
 		}
@@ -251,74 +248,14 @@ func (s *server) rotate(r *http.Request, project string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	here := maps.Clone(vault)
-	delete(here, "retiring") // Flux brings it, so it goes here too when the writer takes it out of Git
-	through(s.localSecret(r, vaultSecret(project), here), "vault "+project)
-	if err := s.rekeyApps(ctx, project, v); err != nil {
-		return "", fmt.Errorf("the vault has its new key, but its apps do not yet (the old key still works; rotate again): %w", err)
+	// Never apply a request's captured key directly to the cluster: an older
+	// request can resume after a newer Git rotation. Flux applies Git's winner.
+	ageKey, err := s.siteKey(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := warden.ConvergeVaultApps(ctx, s.git, ageKey, project); err != nil {
+		return "", fmt.Errorf("vault committed; writer will repair outstanding app keys: %w", err)
 	}
 	return vault["bucket"], nil
-}
-
-// rekeyApps writes a vault's new key into the Secret of every database app of the project: each carries
-// a copy (deploy), encrypted for the app's sites and the stewards.
-func (s *server) rekeyApps(ctx context.Context, project string, v warden.Vault) error {
-	apps, err := readDir[v1alpha1.App](ctx, s.git, "fabric/apps/"+project)
-	if err != nil {
-		return err
-	}
-	paths, err := s.sitePaths(ctx)
-	if err != nil {
-		return err
-	}
-	files := map[string]v1alpha1.App{}
-	for _, a := range apps {
-		if a.Spec.Database != "" && !a.Spec.Deleted {
-			f := fabric.AppFolder(project, a.Name) + "/secret-" + a.Name + ".sops.yaml" // as fabric.WorkloadFiles names it
-			files[f] = a
-			paths = append(paths, f)
-		}
-	}
-	if len(files) == 0 {
-		return nil
-	}
-	return s.edit(ctx, "project "+project+": its apps take the vault's new key", compact(paths), func(snap *fabric.Snapshot) ([]fabric.FileChange, error) {
-		sites, err := sitesOf(snap, paths)
-		if err != nil {
-			return nil, err
-		}
-		out := []fabric.FileChange{}
-		for _, f := range slices.Sorted(maps.Keys(files)) {
-			b, ok := snap.Get(f)
-			if !ok {
-				continue
-			}
-			data, err := s.openSecret(ctx, b, f)
-			if err != nil {
-				return nil, err
-			}
-			data["b2-key-id"], data["b2-key"] = v.KeyID, v.Key
-			recips, err := s.recipients(ctx, sites, files[f].Spec.Sites, nil)
-			if err != nil {
-				return nil, err
-			}
-			sec := obj("v1", "Secret", files[f].Name, "", nil)
-			sec.Object["type"] = "Opaque"
-			sd := map[string]any{}
-			for k, x := range data {
-				sd[k] = x
-			}
-			sec.Object["stringData"] = sd
-			plain, err := fabric.YAML(sec, sec.GroupVersionKind())
-			if err != nil {
-				return nil, err
-			}
-			enc, err := fabric.Encrypt(plain, path.Base(f), recips)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, fabric.FileChange{Path: f, Content: enc})
-		}
-		return out, nil
-	})
 }

@@ -84,7 +84,7 @@ func opValue(ops []map[string]any, path string) any {
 func TestAppKustomization(t *testing.T) {
 	a := sampleApp()
 	a.Spec.Archive = map[string]int{"friend": 2}
-	prim, stby := patchesOf(t, a, "vince", Local{Created: true}), patchesOf(t, a, "friend", Local{Created: true})
+	prim, stby := patchesOf(t, a, "vince", Local{Created: true, PrimaryReady: true}), patchesOf(t, a, "friend", Local{Created: true})
 	if opValue(prim["Cluster/docs-db"], "/spec/replica/self") != "vince" || opValue(stby["Cluster/docs-db"], "/spec/replica/source") != "vince" {
 		t.Fatalf("db roles: %v / %v", prim["Cluster/docs-db"], stby["Cluster/docs-db"])
 	}
@@ -165,11 +165,15 @@ func TestAppKustomization(t *testing.T) {
 	}
 }
 
-// provenReport is a primary's report that proves R4: promoted, healthy, a base backup in its vault.
+// provenReport carries completed current-history evidence, not only an upload date.
 func provenReport(site string, now time.Time) *SiteStatus {
-	return &SiteStatus{Site: site,
-		DB:   map[string]map[string]any{"vince/docs-db": dbReport(true, "", "")},
-		Apps: map[string]AppState{"vince/docs": {Active: site, Vault: &VaultStatus{LatestBackup: now}}}}
+	a := sampleApp()
+	e := &BackupEvidence{Archive: ArchiveName(a, site), ID: "20261005T110000", SystemID: "7284954224128361771", Timeline: 1,
+		BeginWAL: "000000010000000000000002", EndWAL: "000000010000000000000003", CompletedAt: now, ObservedAt: now}
+	return &SiteStatus{Site: site, Time: now, ReceivedAt: now,
+		DB: map[string]map[string]any{"vince/docs-db": dbReport(true, "", "")},
+		Apps: map[string]AppState{"vince/docs": {Active: site, Vault: &VaultStatus{LatestBackup: now, BackupEvidence: e},
+			Recovery: &RecoveryReport{Samples: []RecoverySample{{ArchiveID: a.Spec.ArchiveID, SystemID: e.SystemID, Timeline: 1, Pod: "db-1", Role: "primary", ObservedAt: now}}}}}}
 }
 
 // dbReport is a CloudNativePG status as a site reports it.
@@ -209,6 +213,12 @@ func TestMayDestroy(t *testing.T) {
 		{"vault unreadable", app("friend", nil), "vince", mod(func(s *SiteStatus) {
 			s.Apps["vince/docs"] = AppState{Active: "friend", Vault: &VaultStatus{Err: "401"}}
 		}), false},
+		{"wrong backup archive", app("friend", nil), "vince", mod(func(s *SiteStatus) { s.Apps["vince/docs"].Vault.BackupEvidence.Archive = "other-friend" }), false},
+		{"wrong backup system", app("friend", nil), "vince", mod(func(s *SiteStatus) { s.Apps["vince/docs"].Vault.BackupEvidence.SystemID = "123" }), false},
+		{"old backup timeline", app("friend", nil), "vince", mod(func(s *SiteStatus) { s.Apps["vince/docs"].Vault.BackupEvidence.Timeline = 2 }), false},
+		{"stale observation", app("friend", nil), "vince", mod(func(s *SiteStatus) { s.Apps["vince/docs"].Vault.BackupEvidence.ObservedAt = now.Add(-time.Hour) }), false},
+		{"stale source report", app("friend", nil), "vince", mod(func(s *SiteStatus) { s.ReceivedAt = now.Add(-time.Hour) }), false},
+		{"untrusted source report", app("friend", nil), "vince", mod(func(s *SiteStatus) { s.ReceivedAt = time.Time{} }), false},
 		{"promoted without the handover's token", app("friend", &v1alpha1.Handover{ID: "m", From: "third", Token: "t"}), "vince", provenReport("friend", now), false},
 		{"promoted with it", app("friend", &v1alpha1.Handover{ID: "m", From: "third", Token: "t"}), "vince", mod(func(s *SiteStatus) { s.DB["vince/docs-db"]["lastPromotionToken"] = "t" }), true},
 	} {
@@ -320,7 +330,9 @@ func TestNeedsBackup(t *testing.T) {
 		return u
 	}
 	empty := &VaultStatus{}
-	full := &VaultStatus{LatestBackup: now.Add(-time.Hour)}
+	current := RecoverySample{SystemID: "system", Timeline: 2}
+	full := &VaultStatus{LatestBackup: now.Add(-time.Hour), BackupEvidence: &BackupEvidence{
+		Archive: "archive", SystemID: current.SystemID, Timeline: current.Timeline, CompletedAt: now.Add(-time.Hour)}}
 	for i, c := range []struct {
 		vault   *VaultStatus
 		backups []unstructured.Unstructured
@@ -337,9 +349,135 @@ func TestNeedsBackup(t *testing.T) {
 		{empty, []unstructured.Unstructured{bk("docs-db", "walArchivingFailing", 20*time.Minute)}, false},
 		{empty, []unstructured.Unstructured{bk("other-db", "running", time.Minute)}, true},
 	} {
-		if got := NeedsBackup(c.vault, c.backups, "docs-db", now); got != c.want {
+		if got := NeedsBackup(c.vault, c.backups, "docs-db", "archive", current, now); got != c.want {
 			t.Errorf("case %d: got %v", i, got)
 		}
+	}
+}
+
+func TestEnsureBaseBackupRequiresCurrentPrimaryHistory(t *testing.T) {
+	now := time.Now()
+	app := sampleApp()
+	for _, tc := range []struct {
+		name   string
+		change func(*SiteStatus)
+		want   int
+	}{
+		{"matching history", func(*SiteStatus) {}, 0},
+		{"promoted timeline", func(st *SiteStatus) {
+			st.Apps["vince/docs"].Recovery.Samples[0].Timeline = 2
+		}, 1},
+		{"different database", func(st *SiteStatus) {
+			st.Apps["vince/docs"].Vault.BackupEvidence.SystemID = "old-system"
+		}, 1},
+		{"different archive", func(st *SiteStatus) {
+			st.Apps["vince/docs"].Vault.BackupEvidence.Archive = "old-archive"
+		}, 1},
+		{"standby", func(st *SiteStatus) {
+			st.Apps["vince/docs"].Vault.BackupEvidence = nil
+			st.Apps["vince/docs"].Recovery.Samples[0].Role = "replica"
+			st.DB["vince/docs-db"] = dbReport(false, "", "")
+		}, 0},
+		{"stale history", func(st *SiteStatus) {
+			st.Apps["vince/docs"].Vault.BackupEvidence = nil
+			st.Apps["vince/docs"].Recovery.Samples[0].AgeNanos = int64(recoveryMaxReplayAge)
+		}, 0},
+		{"unknown history", func(st *SiteStatus) {
+			st.Apps["vince/docs"].Vault.BackupEvidence = nil
+			st.Apps["vince/docs"].Recovery.Error = "exporter unavailable"
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := provenReport("vince", now)
+			tc.change(report)
+			scheme := runtime.NewScheme()
+			scheme.AddKnownTypeWithName(gvkBackup, &unstructured.Unstructured{})
+			listKind := gvkBackup.GroupVersion().WithKind("BackupList")
+			scheme.AddKnownTypeWithName(listKind, &unstructured.UnstructuredList{})
+			c := fake.NewClientBuilder().WithScheme(scheme).Build()
+			r := &AppReconciler{Client: c, Site: "vince", Peers: &Peers{
+				cache: map[string]peerAnswer{"vince": {st: report, at: time.Now()}},
+			}}
+			if err := r.ensureBaseBackup(context.Background(), app, now); err != nil {
+				t.Fatal(err)
+			}
+			backups := &unstructured.UnstructuredList{}
+			backups.SetGroupVersionKind(listKind)
+			if err := c.List(context.Background(), backups, client.InNamespace(app.Namespace)); err != nil {
+				t.Fatal(err)
+			}
+			if len(backups.Items) != tc.want {
+				t.Fatalf("current-history backup requests = %d, want %d", len(backups.Items), tc.want)
+			}
+		})
+	}
+}
+
+func TestRetainedOldGenerationKeepsDesiredProcessFence(t *testing.T) {
+	a := sampleApp()
+	a.Spec.Primary, a.Spec.Archive = "friend", map[string]int{"vince": 2}
+	old := Here{Exists: true, Created: true, Archive: "docs-db-vince"}
+	for _, report := range []*SiteStatus{nil, provenReport("friend", time.Now())} {
+		p := PlanAt(a, "vince", old, report)
+		if fence := opValue(DBPatch(a, "vince", p.Local), "/metadata/annotations/cnpg.io~1fencedInstances"); fence != `["*"]` {
+			t.Fatalf("old generation must remain process-fenced while retained or awaiting deletion: %v", fence)
+		}
+	}
+	for _, here := range []Here{{Created: true}, {Exists: true, Created: true, Archive: "docs-db-vince-g2"}} {
+		p := PlanAt(a, "vince", here, nil)
+		if fence := opValue(DBPatch(a, "vince", p.Local), "/metadata/annotations/cnpg.io~1fencedInstances"); fence != nil {
+			t.Fatalf("replacement inherited the old incarnation's fence: %v", fence)
+		}
+	}
+	a.Spec.Handover = &v1alpha1.Handover{ID: "planned", From: "vince"}
+	p := PlanAt(a, "vince", old, nil)
+	if fence := opValue(DBPatch(a, "vince", p.Local), "/metadata/annotations/cnpg.io~1fencedInstances"); fence != nil {
+		t.Fatalf("planned handover fenced the site still holding the history: %v", fence)
+	}
+}
+
+func TestRetainedOldGenerationDoesNotTriggerReplicaTransition(t *testing.T) {
+	for _, role := range []Role{
+		{Primary: "vince", Source: "friend"},
+		{Primary: "vince", Source: "friend", Token: "previous-promotion"},
+		{Primary: "third", Source: "third"},
+	} {
+		t.Run(fmt.Sprintf("%s/%s", role.Primary, role.Token), func(t *testing.T) {
+			a := sampleApp()
+			a.Spec.Primary, a.Spec.Archive = "friend", map[string]int{"vince": 2}
+			db := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster",
+				"metadata": map[string]any{"name": a.Spec.Database, "namespace": a.Namespace},
+				"spec": map[string]any{
+					"replica": map[string]any{"primary": role.Primary, "self": "vince", "source": role.Source, "promotionToken": role.Token},
+					"plugins": []any{map[string]any{"parameters": map[string]any{"serverName": "docs-db-vince"}}},
+				},
+			}}
+			r := &AppReconciler{Client: fake.NewClientBuilder().WithObjects(db).Build()}
+			here, _, err := r.here(context.Background(), a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := PlanAt(a, "vince", here, nil)
+			ops := DBPatch(a, "vince", p.Local)
+			if opValue(ops, "/spec/replica/primary") != role.Primary ||
+				opValue(ops, "/spec/replica/source") != role.Source {
+				t.Fatal("retained role changed: CNPG's replica transition can remove the process fence")
+			}
+			if role.Token != "" && opValue(ops, "/spec/replica/promotionToken") != role.Token {
+				t.Fatal("retained incarnation lost its existing promotion token")
+			}
+			if opValue(ops, "/spec/plugins/0/parameters/serverName") != "docs-db-vince" || p.Destroy {
+				t.Fatal("retained incarnation changed archive or was destroyed without backup proof")
+			}
+		})
+	}
+}
+
+func TestScheduledBackupWaitsForActualPrimaryReadiness(t *testing.T) {
+	patches := patchesOf(t, sampleApp(), "vince", Local{Created: true})
+	if suspended := opValue(patches["ScheduledBackup/docs-db-backup"], "/spec/suspend"); suspended != true {
+		t.Fatalf("desired primary is not sufficient to run a scheduled backup: suspend=%v", suspended)
 	}
 }
 

@@ -86,14 +86,30 @@ import { url } from "../lib/paths";
                 <a href="https://yunohost.org/">YunoHost</a>
               </h3>
               <p>
-                Co-op Cloud brings cooperative operators together around app
-                recipes. Coolify makes deploying onto servers you control or
-                rent approachable. YunoHost helps people tend services for
-                themselves, friends and small groups. WeCoLab starts one step
-                earlier: someone in your circle chooses to contribute bounded
-                capacity at their site, and your app can be placed across those
-                sites. Their deployment and self-hosting work remains valuable.
+                <a href="https://docs.coopcloud.tech/maintainers/upgrade/">Co-op Cloud's maintainer guide</a>{" "}
+                already documents recipe upgrades (evergreen guidance, not a dated
+                release). <a href="https://github.com/coollabsio/coolify/releases/tag/v4.3.18">Coolify
+                v4.3.18 (8 September 2026)</a> includes missing-backup alerts,
+                direct-to-S3 volume backups and in-progress edit preservation.{" "}
+                <a href="https://forum.yunohost.org/t/lufi-critical-vulnerability-fixed-in-0-07-4-ynh1/42998">YunoHost's
+                Lufi advisory (14 September)</a> and{" "}
+                <a href="https://forum.yunohost.org/t/conduit-two-security-issues-fixed-with-0-10-14-ynh1/43080/1">Conduit
+                advisory (27 September)</a> document maintained app security
+                fixes. WeCoLab does not claim those projects lack backups,
+                upgrades or security response: its different model is bounded
+                capacity explicitly offered by known collaborators.
               </p>
+            </div>
+          </article>
+          <article class="comparison-row">
+            <div class="row-category">Deploy to your servers</div>
+            <div class="row-content">
+              <h3><a href="https://dokploy.com/">Dokploy</a></h3>
+              <p><a href="https://github.com/Dokploy/dokploy/releases/tag/v0.30.6">Dokploy v0.30.6 (8 September 2026)</a>{" "}
+                includes server-side authentication and DNS work. WeCoLab's
+                proposed distinction is not the presence of DNS or a catalog:
+                it is a cooperative placement and recovery model across sites
+                deliberately offered by trusted collaborators.</p>
             </div>
           </article>
           <article class="comparison-row">
@@ -166,23 +182,27 @@ import { url } from "../lib/paths";
             too. A collaborator's outage is a real outage to plan around.
           </p>
           <p>
-            There is no managed-cloud SLA hiding inside a collaboration. WeCoLab's
-            Git-based fabric, explicit app roles and recovery paths are designed
-            to make failures legible and recoverable, not to erase the work of
-            operating them. A Mac's idle capacity also has a different
-            availability profile from a reserved, persistent app placement.{" "}
+            There is no managed-cloud SLA hiding inside a collaboration. WeCoLab
+            coordinates Git desired state across sites and designs database
+            recovery around separately archived history. Actual loss bounds and
+            recovery depend on current archive evidence and an operator-fenced
+            move; no independent cross-site fencing or general replicated
+            file-backup engine is claimed. Catalog imports are not certified
+            deployments without image-specific install and restore drills.{" "}
             <a href={url("docs/operations/")}>Read the operations guide</a>{" "}
             before trusting it with something important.
           </p>
         </div>
         <div class="research-note">
-          <span>Research note · 30 September 2026</span>
+          <span>Research note · 6 October 2026</span>
           <p>
-            Descriptions of other projects reflect their linked primary websites
-            and documentation on this date. This is a comparison of purpose and
-            operating model, not a tested feature or performance benchmark.
-            WeCoLab's architecture is described in the{" "}
-            <a href={url("docs/decisions/")}>design decisions</a>.
+            Other projects' linked primary releases and maintainer guidance
+            describe capabilities, not a feature or performance benchmark.
+            WeCoLab's cooperative bounded-capacity model is described in the{" "}
+            <a href={url("docs/decisions/")}>design decisions</a>; cross-site
+            recovery remains a design capability until a dated, repeatable
+            real-stack drill demonstrates it. Database backups do not restore
+            site-local files or establish a verified restore timestamp.
           </p>
         </div>
       </div>

@@ -77,6 +77,98 @@ func run(_ tool: String, _ args: [String]) throws -> String {
     #expect(NodeVM.balloonTarget(active: false, config: c) == 4 << 30)
 }
 
+@Test func modePublicationRetriesAndCachesOnlySuccessfulWrites() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "mode")
+    var attempts = 0
+    let publication = ModePublication(url: url, write: { data, url in
+        attempts += 1
+        if attempts == 1 { throw NodeError("disk full") }
+        try data.write(to: url, options: .atomic)
+    })
+    #expect(throws: NodeError.self) { try publication.publish("idle") }
+    #expect(publication.mode == "")
+    try publication.publish("idle")
+    #expect(publication.mode == "idle")
+    #expect(attempts == 2)
+    #expect(try String(contentsOf: url, encoding: .utf8) == "idle")
+}
+
+@Test func modePublicationFailedActiveWriteInvalidatesIdleAndRetries() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "mode")
+    var failActive = true
+    let publication = ModePublication(url: url, write: { data, url in
+        if String(decoding: data, as: UTF8.self) == "active" && failActive { throw NodeError("disk full") }
+        try data.write(to: url, options: .atomic)
+    })
+    try publication.publish("idle")
+    #expect(throws: NodeError.self) { try publication.publish("active") }
+    #expect(publication.mode == "")
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+    failActive = false
+    try publication.publish("active")
+    #expect(publication.mode == "active")
+    #expect(try String(contentsOf: url, encoding: .utf8) == "active")
+}
+
+@Test func modePublicationFailedActiveThenIdleRepublishes() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "mode")
+    var writes = 0
+    let publication = ModePublication(url: url, write: { data, url in
+        writes += 1
+        if String(decoding: data, as: UTF8.self) == "active" { throw NodeError("disk full") }
+        try data.write(to: url, options: .atomic)
+    })
+    try publication.publish("idle")
+    #expect(throws: NodeError.self) { try publication.publish("active") }
+    try publication.publish("idle")
+    #expect(writes == 3)
+    #expect(publication.mode == "idle")
+    #expect(try String(contentsOf: url, encoding: .utf8) == "idle")
+}
+
+@Test func modePublicationIdleFailureKeepsActiveFile() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "mode")
+    let publication = ModePublication(url: url, write: { data, url in
+        if String(decoding: data, as: UTF8.self) == "idle" { throw NodeError("disk full") }
+        try data.write(to: url, options: .atomic)
+    })
+    try publication.publish("active")
+    #expect(throws: NodeError.self) { try publication.publish("idle") }
+    #expect(publication.mode == "active")
+    #expect(try String(contentsOf: url, encoding: .utf8) == "active")
+}
+
+@Test func modePublicationInvalidatesIdleLeftByPreviousProcess() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "mode")
+    try "idle".write(to: url, atomically: true, encoding: .utf8)
+    let publication = ModePublication(url: url, write: { _, _ in throw NodeError("disk full") })
+    #expect(throws: NodeError.self) { try publication.publish("active") }
+    #expect(publication.mode == "")
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
+@Test func modePublicationFailedInvalidationRequiresStop() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "mode")
+    let publication = ModePublication(url: url, remove: { _ in throw NodeError("cannot remove idle") })
+    try publication.publish("idle")
+    publication.reset()  // a restarted process has no in-memory cache
+    #expect(throws: ModePublicationError.self) { try publication.publish("active") }
+    #expect(publication.mode == "")
+    #expect(try String(contentsOf: url, encoding: .utf8) == "idle")
+}
+
 @Test func inviteIsCheckedBeforeItReachesTheGuest() throws {
     #expect(try Invite(makeInvite()).console == "https://console.fab.example")
     #expect(try Invite(makeInvite(console: "https://console.fab.example:8443")).console == "https://console.fab.example:8443")
@@ -99,36 +191,6 @@ func run(_ tool: String, _ args: [String]) throws -> String {
     // The node is <site>-<host>, at most 63 characters, and a site name may take 32.
     #expect(32 + 1 + guestHostname(String(repeating: "a", count: 90)).count == 63)
     #expect(guestHostname(String(repeating: "a", count: 25) + "-b").count == 29)  // no trailing dash
-}
-
-@Test func userDataEmbedsTheRepoJoinScript() throws {
-    let invite = try Invite(makeInvite())
-    let ud = Provision.userData(invite: invite, hostname: "mac-test")
-    #expect(ud.hasPrefix("#cloud-config\n"))
-    #expect(ud.contains("hostname: mac-test\n"))
-    // The embedded script is byte-for-byte install.sh as of this build.
-    let repoScript = try Data(contentsOf: URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../install.sh"))
-    #expect(ud.contains("content: \(repoScript.base64EncodedString())\n"))
-    // The invite only in a root-only file, never in a world-readable unit.
-    #expect(ud.contains("path: /var/lib/wecolab-mac/invite\n    permissions: \"0600\"\n    content: \(invite.code)\n"))
-    #expect(ud.components(separatedBy: invite.code).count == 2)
-    // The join is a unit that retries until its done marker exists (or install.sh's), as a laptop, repairing an interrupted dpkg.
-    for line in ["ConditionPathExists=!/var/lib/wecolab-mac/joined", "Restart=on-failure", "StartLimitIntervalSec=0",
-                 "Environment=WECOLAB_LAPTOP=1", "[ \"$rc\" != 0 ] || touch /var/lib/wecolab-mac/joined",
-                 "( [ ! -f /var/lib/wecolab/done ] || exit 0; set -- ",
-                 "dpkg --configure -a || true", "[systemctl, enable, --now, --no-block, wecolab-join.service]"] {
-        #expect(ud.contains(line), "\(line)")
-    }
-    // The share is a mount unit, enabled at first boot and started at every boot before the node agent
-    // can bind-mount an empty /wecolab; not cloud-init's mounts:, which drops a device not under /dev.
-    for line in ["path: /etc/systemd/system/wecolab.mount", "Before=k3s-agent.service", "What=wecolab", "Where=/wecolab",
-                 "Type=virtiofs", "WantedBy=multi-user.target", "[systemctl, enable, --now, wecolab.mount]"] {
-        #expect(ud.contains(line), "\(line)")
-    }
-    #expect(!ud.contains("\nmounts:") && !ud.contains("mount -t virtiofs"))
-    #expect(ud.contains(":8094/") && !ud.contains(":8093"))  // the certificate service answers any box; /status is managers' only
-    #expect(ud.contains("OnUnitActiveSec=30"))
-    #expect(ud.contains("[systemctl, enable, --now, wecolab-share.timer]"))
 }
 
 /// The join wrapper as the guest runs it, with its paths moved into `dir`.
@@ -242,18 +304,99 @@ func joinWrapper(in dir: URL) throws -> String {
     }
 }
 
+/// Parse the cloud-init write_files subset used by this seed, from the mounted filesystem.
+/// Reject missing headers/entries rather than comparing how Swift renders a multiline string.
+func seedFiles(_ userData: String) -> [String: (content: String, permissions: String?, encoding: String?)]? {
+    guard userData.hasPrefix("#cloud-config\n"), userData.contains("\nwrite_files:\n") else { return nil }
+    let sections = userData.components(separatedBy: "\n  - path: ").dropFirst()
+    guard !sections.isEmpty else { return nil }
+    var files: [String: (content: String, permissions: String?, encoding: String?)] = [:]
+    for section in sections {
+        let lines = section.components(separatedBy: "\n")
+        guard let path = lines.first, path.hasPrefix("/"), !files.keys.contains(path) else { return nil }
+        var content: String?, permissions: String?, encoding: String?
+        var index = 1
+        while index < lines.count {
+            let line = lines[index]
+            if line.hasPrefix("    permissions: ") {
+                permissions = String(line.dropFirst("    permissions: ".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            } else if line.hasPrefix("    encoding: ") {
+                encoding = String(line.dropFirst("    encoding: ".count))
+            } else if line.hasPrefix("    content: ") {
+                let value = String(line.dropFirst("    content: ".count))
+                if value == "|" {
+                    var block: [String] = []
+                    index += 1
+                    while index < lines.count && lines[index].hasPrefix("      ") {
+                        block.append(String(lines[index].dropFirst(6)))
+                        index += 1
+                    }
+                    content = block.joined(separator: "\n") + "\n"
+                    continue
+                }
+                content = value
+            } else if line == "runcmd:" || line.hasPrefix("  - [") {
+                break
+            }
+            index += 1
+        }
+        guard let content else { return nil }
+        files[path] = (content, permissions, encoding)
+    }
+    return files
+}
+
 @Test func seedIsANoCloudISO() throws {
     let dir = try tempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let iso = dir.appending(path: "seed.iso"), mnt = dir.appending(path: "mnt")
-    try Provision.seed(invite: Invite(makeInvite()), hostname: "mac-test", to: iso)
-    // Volume identifier of the ISO 9660 primary descriptor (sector 16, byte 40); NoCloud accepts CIDATA or cidata.
-    let label = try Data(contentsOf: iso).subdata(in: 32768 + 40 ..< 32768 + 46)
-    #expect(String(decoding: label, as: UTF8.self) == "CIDATA")
+    let invite = try Invite(makeInvite())
+    try Provision.seed(invite: invite, hostname: "mac-test", to: iso)
     try run("/usr/bin/hdiutil", ["attach", "-quiet", "-readonly", "-nobrowse", "-mountpoint", mnt.path, iso.path])
     defer { _ = try? run("/usr/bin/hdiutil", ["detach", "-quiet", mnt.path]) }
-    #expect(try String(contentsOf: mnt.appending(path: "meta-data"), encoding: .utf8) == "instance-id: wecolab-mac-test\nlocal-hostname: mac-test\n")
-    #expect(try String(contentsOf: mnt.appending(path: "user-data"), encoding: .utf8) == Provision.userData(invite: Invite(makeInvite()), hostname: "mac-test"))
+    // diskutil reads the filesystem label. URLResourceValues.volumeName uses
+    // the custom mountpoint name; raw ISO descriptors include NUL padding.
+    let info = try run("/usr/sbin/diskutil", ["info", "-plist", mnt.path])
+    let volume = try #require(PropertyListSerialization.propertyList(from: Data(info.utf8), format: nil) as? [String: Any])
+    #expect((volume["VolumeName"] as? String)?.lowercased() == "cidata")
+    let metadata = try String(contentsOf: mnt.appending(path: "meta-data"), encoding: .utf8)
+    let meta = Dictionary(uniqueKeysWithValues: metadata.split(separator: "\n").compactMap { line -> (String, String)? in
+        guard let colon = line.firstIndex(of: ":") else { return nil }
+        return (String(line[..<colon]), String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces))
+    })
+    #expect(meta["instance-id"] == "wecolab-mac-test")
+    #expect(meta["local-hostname"] == "mac-test")
+    let userData = try String(contentsOf: mnt.appending(path: "user-data"), encoding: .utf8)
+    let files = try #require(seedFiles(userData), "Mounted user-data does not parse as #cloud-config write_files (bytes: \(userData.utf8.count)); invite redacted")
+    #expect(userData.contains("\nhostname: mac-test\n"))
+    #expect(userData.contains("\nruncmd:\n"))
+    for command in ["[systemctl, daemon-reload]", "[systemctl, enable, --now, wecolab.mount]",
+                    "[systemctl, enable, --now, wecolab-share.timer]",
+                    "[systemctl, enable, --now, --no-block, wecolab-join.service]"] {
+        #expect(userData.components(separatedBy: "\n  - \(command)\n").count == 2, "missing cloud-init command \(command)")
+    }
+    let installer = try #require(files["/opt/wecolab/join.sh"])
+    #expect(installer.encoding == "b64")
+    #expect(installer.permissions == "0755")
+    let embedded = try #require(Data(base64Encoded: installer.content))
+    let repoScript = try Data(contentsOf: URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../install.sh"))
+    #expect(embedded == repoScript)
+    let secret = try #require(files["/var/lib/wecolab-mac/invite"])
+    #expect(secret.permissions == "0600")
+    #expect(secret.content == invite.code)
+    let join = try #require(files["/usr/local/sbin/wecolab-join"])
+    #expect(join.permissions == "0755")
+    #expect(join.content.contains("set -- \"$(cat /var/lib/wecolab-mac/invite)\""))
+    #expect(join.content.contains(". /opt/wecolab/join.sh"))
+    #expect(join.content.contains("touch /var/lib/wecolab-mac/joined"))
+    let unit = try #require(files["/etc/systemd/system/wecolab-join.service"])
+    #expect(unit.content.contains("ExecStart=/usr/local/sbin/wecolab-join"))
+    #expect(unit.content.contains("Environment=WECOLAB_LAPTOP=1"))
+    #expect(unit.content.contains("Restart=on-failure"))
+    #expect(files["/etc/systemd/system/wecolab.mount"]?.content.contains("What=wecolab") == true)
+    #expect(seedFiles("hostname: mac-test\nwrite_files:\n") == nil)
+    #expect(seedFiles("#cloud-config\nwrite_files:\n  - path: /opt/wecolab/join.sh\n") == nil)
+    #expect(seedFiles("") == nil)  // an absent NoCloud payload cannot install or join
 }
 
 @Test func diskGrowsSparselyAndNeverShrinks() throws {

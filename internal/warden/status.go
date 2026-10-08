@@ -26,8 +26,13 @@ type Inputs struct {
 	MaxBackupAge time.Duration
 	// Vault is what the vault itself reports; nil when the app has no database.
 	Vault *VaultStatus
-	// RPO is the app's declared objective, used against the vault's newest WAL.
+	// RPO is the declared objective against a covered primary position's age.
 	RPO time.Duration
+	// Recovery is the same-history exporter observation from each site's report.
+	Recovery map[string]*RecoveryReport
+	// ReceiptAge is elapsed local monotonic time since each site's report was
+	// decoded (or produced locally). Missing/untrusted receipts use -1.
+	ReceiptAge map[string]time.Duration
 }
 
 const cnpgHealthy = "Cluster in healthy state"
@@ -58,6 +63,8 @@ func num(m map[string]any, k string) int64 {
 	case float64:
 		return int64(v)
 	case int:
+		return int64(v)
+	case uint32:
 		return int64(v)
 	}
 	return 0
@@ -110,9 +117,7 @@ func Compute(app *v1alpha1.App, primary string, in Inputs) []metav1.Condition {
 		out = append(out, cond(v1alpha1.CondStandbyStaged, true, "Staged", "standby running at "+standby))
 	}
 
-	// WithinRPO: the vault's newest archived WAL is the honest measure for an
-	// archive-fed replica. The replica must also be healthy to apply it.
-	// ponytail: replica replay position is not read yet; add it for a true end-to-end lag.
+	// WAL object age and CNPG health are operational signals, not replay proof.
 	switch {
 	case !hasDB:
 		out = append(out, cond(v1alpha1.CondWithinRPO, true, "NoDatabase", "no database to replicate"))
@@ -120,27 +125,33 @@ func Compute(app *v1alpha1.App, primary string, in Inputs) []metav1.Condition {
 		out = append(out, cond(v1alpha1.CondWithinRPO, false, "ArchiveStalled", "primary is not archiving WAL"))
 	case str(sdb, "phase") != cnpgHealthy:
 		out = append(out, cond(v1alpha1.CondWithinRPO, false, "ReplicaNotHealthy", fmt.Sprintf("replica at %s: %q", standby, str(sdb, "phase"))))
-	case in.Vault != nil && in.Vault.Err == "" && in.RPO > 0:
-		// Archiving is healthy (a failed archive flips ContinuousArchiving above) and
-		// the replica is healthy, so the only WAL not yet in the vault is the one
-		// still being written. An idle primary archives nothing, which is zero
-		// exposure, not staleness. The WAL age is reported for the operator.
-		// ponytail: a true lag needs the primary's write position; the reference app's
-		// heartbeat row (docs/architecture.md) turns WAL age into a real number.
-		age := in.Now.Sub(in.Vault.LatestWAL).Round(time.Second)
-		switch {
-		case in.Vault.LatestWAL.IsZero():
-			out = append(out, cond(v1alpha1.CondWithinRPO, false, "NoWAL", "no WAL segment in the vault yet"))
-		case age > in.RPO:
-			out = append(out, cond(v1alpha1.CondWithinRPO, true, "Idle", fmt.Sprintf("archiving healthy, replica healthy; newest archived WAL %s old (no newer writes), objective %s", age, in.RPO)))
-		default:
-			out = append(out, cond(v1alpha1.CondWithinRPO, true, "Archiving", fmt.Sprintf("newest archived WAL %s old, objective %s, replica healthy", age, in.RPO)))
-		}
+	case in.Archive[primary] != "" && in.Archive[primary] != ArchiveName(app, primary) ||
+		in.Archive[standby] != "" && in.Archive[standby] != ArchiveName(app, standby):
+		c := cond(v1alpha1.CondWithinRPO, false, "ArchiveRebuilding", "database generation does not match desired archive")
+		c.Status = metav1.ConditionUnknown
+		out = append(out, c)
 	default:
-		out = append(out, cond(v1alpha1.CondWithinRPO, true, "Archiving", "WAL archived continuously, replica healthy"))
+		var point RecoveryPoint
+		if in.Recovery[primary] != nil && in.Recovery[standby] != nil {
+			point = MeasureRecovery(*in.Recovery[primary], *in.Recovery[standby], app.Spec.ArchiveID, in.RPO,
+				receiptAge(in.ReceiptAge, primary), receiptAge(in.ReceiptAge, standby))
+		} else {
+			point = RecoveryPoint{State: "unknown", Reason: "No fresh comparable primary and replay samples"}
+		}
+		switch point.State {
+		case "within-objective":
+			out = append(out, cond(v1alpha1.CondWithinRPO, true, "Measured", fmt.Sprintf("covered primary position, exposure upper bound %.0fs, objective %s", *point.ExposureUpperBoundSeconds, in.RPO)))
+		case "outside-objective":
+			out = append(out, cond(v1alpha1.CondWithinRPO, false, "MeasuredOutsideObjective", point.Reason))
+		default:
+			c := cond(v1alpha1.CondWithinRPO, false, "InsufficientMeasurement", point.Reason)
+			c.Status = metav1.ConditionUnknown
+			out = append(out, c)
+		}
 	}
 
-	// VaultFresh: judged by the vault, not by the primary.
+	// VaultFresh requires a completed backup on the observed database history;
+	// neither CNPG's lastSuccessfulBackup nor object listing time is proof.
 	switch {
 	case !hasDB:
 		out = append(out, cond(v1alpha1.CondVaultFresh, true, "NoDatabase", "no database to back up"))
@@ -152,6 +163,20 @@ func Compute(app *v1alpha1.App, primary string, in Inputs) []metav1.Condition {
 		out = append(out, cond(v1alpha1.CondVaultFresh, false, "NoObjectLock", "bucket has no default Object Lock retention"))
 	case in.Vault.LatestBackup.IsZero():
 		out = append(out, cond(v1alpha1.CondVaultFresh, false, "NoBackup", "no base backup in the vault"))
+	case in.Vault.BackupEvidence == nil || in.Vault.BackupEvidence.ID == "" ||
+		in.Vault.BackupEvidence.BeginWAL == "" || in.Vault.BackupEvidence.EndWAL == "" ||
+		in.Vault.BackupEvidence.Archive != ArchiveName(app, primary) ||
+		!in.Vault.BackupEvidence.CompletedAt.Equal(in.Vault.LatestBackup) ||
+		in.Vault.BackupEvidence.SystemID == "" ||
+		in.Vault.BackupEvidence.SystemID != str(pdb, "systemIdentifier") ||
+		in.Vault.BackupEvidence.Timeline == 0 ||
+		int64(in.Vault.BackupEvidence.Timeline) != num(pdb, "timelineID") ||
+		in.Vault.BackupEvidence.CompletedAt.After(in.Now) ||
+		in.Vault.BackupEvidence.ObservedAt.After(in.Now) ||
+		in.Now.Sub(in.Vault.BackupEvidence.ObservedAt) > vaultEvery:
+		c := cond(v1alpha1.CondVaultFresh, false, "HistoryUnverified", "no fresh validated backup for the current database system and timeline")
+		c.Status = metav1.ConditionUnknown
+		out = append(out, c)
 	case in.Now.Sub(in.Vault.LatestBackup) > in.MaxBackupAge:
 		out = append(out, cond(v1alpha1.CondVaultFresh, false, "Stale", fmt.Sprintf("newest base backup %s old, Object Lock %s", in.Now.Sub(in.Vault.LatestBackup).Round(time.Minute), in.Vault.ObjectLock)))
 	default:
@@ -170,14 +195,15 @@ func Compute(app *v1alpha1.App, primary string, in Inputs) []metav1.Condition {
 	return out
 }
 
-// Ready folds the gate conditions into one. It is never stored as an input.
+// Ready describes operational availability; unknown recovery confidence is
+// surfaced separately by WithinRPO and Protection.RecoveryPoint.
 func Ready(conds []metav1.Condition) metav1.Condition {
 	for _, c := range conds {
-		if c.Type != v1alpha1.CondReady && c.Type != v1alpha1.CondPromotion && c.Status != metav1.ConditionTrue {
+		if (c.Type == v1alpha1.CondPrimaryHealthy || c.Type == v1alpha1.CondRouted) && c.Status != metav1.ConditionTrue {
 			return cond(v1alpha1.CondReady, false, c.Type, c.Message)
 		}
 	}
-	return cond(v1alpha1.CondReady, true, "AllGatesPass", "protected")
+	return cond(v1alpha1.CondReady, true, "Available", "site and workload available; see recovery and protection separately")
 }
 
 // SetCondition upserts by type, keeping LastTransitionTime stable when status is unchanged.
@@ -240,10 +266,31 @@ func MoveGates(app *v1alpha1.App, sites map[string]*SiteStatus, to string, now t
 	return nil
 }
 
+// statusReceiptAge fails closed for reports not obtained by a local status
+// producer or peer HTTP decoder. Polling a cached report never renews this age.
+func statusReceiptAge(st *SiteStatus, now time.Time) time.Duration {
+	if st == nil || st.ReceivedAt.IsZero() {
+		return -1
+	}
+	age := now.Sub(st.ReceivedAt)
+	if age < 0 || age > recoveryDeliveryAllowance {
+		return -1
+	}
+	return age
+}
+
+func receiptAge(ages map[string]time.Duration, site string) time.Duration {
+	age, ok := ages[site]
+	if !ok {
+		return -1
+	}
+	return age
+}
+
 // observe gathers Compute's inputs for the app's sites from their reports, for the site holding the
 // history (Serving), with the Door's view of it.
 func observe(app *v1alpha1.App, sites map[string]*SiteStatus, now time.Time, maxBackupAge time.Duration) (string, Inputs, map[string]AppState) {
-	ready, db, states, built := map[string]bool{}, map[string]map[string]any{}, map[string]AppState{}, map[string]string{}
+	ready, db, states, built, recovery, ages := map[string]bool{}, map[string]map[string]any{}, map[string]AppState{}, map[string]string{}, map[string]*RecoveryReport{}, map[string]time.Duration{}
 	key := app.Namespace + "/" + app.Name
 	for _, site := range app.Spec.Sites {
 		st := sites[site]
@@ -251,15 +298,17 @@ func observe(app *v1alpha1.App, sites map[string]*SiteStatus, now time.Time, max
 		if st == nil {
 			continue
 		}
+		ages[site] = statusReceiptAge(st, now)
 		if d, ok := st.DB[app.Namespace+"/"+app.Spec.Database]; ok && app.Spec.Database != "" {
 			db[site] = d
 		}
 		if a, ok := st.Apps[key]; ok {
 			states[site], built[site] = a, a.Archive
+			recovery[site] = a.Recovery
 		}
 	}
 	active := Serving(app.Spec)
-	in := Inputs{Now: now, ClusterReady: ready, DB: db, Archive: built, MaxBackupAge: maxBackupAge, RPO: app.Spec.RPO.Duration}
+	in := Inputs{Now: now, ClusterReady: ready, DB: db, Archive: built, Recovery: recovery, ReceiptAge: ages, MaxBackupAge: maxBackupAge, RPO: app.Spec.RPO.Duration}
 	if app.Spec.Database != "" {
 		in.Vault = states[active].Vault
 		if in.Vault == nil {

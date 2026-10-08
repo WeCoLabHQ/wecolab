@@ -1,5 +1,9 @@
 # Warden at every site (docs/architecture.md, "Warden"). On the manager's host network so the other
 # sites reach its status and certificate service on the manager's Nebula address.
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata: { name: wecolab-writer-transition, namespace: wecolab-system }
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata: { name: wecolab-warden, namespace: wecolab-system }

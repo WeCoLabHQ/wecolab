@@ -3,13 +3,20 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -94,6 +101,11 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		in.Hostname = in.Name + "." + s.domain
 	}
 	ctx := r.Context()
+	placementBefore, placementExists, err := s.git.Read(ctx, fabric.PlacementRevisionPath)
+	if err != nil || !placementExists {
+		answer(w, cmpErr(err, fail(409, "placement migration required")), 502)
+		return
+	}
 	sites, err := s.sitesInGit(ctx)
 	if err != nil {
 		answer(w, err, 502)
@@ -138,6 +150,24 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		answer(w, cmpErr(err, fail(409, "the primary is %s: move it on the Apps page", app.Spec.Primary)), 502)
 		return
 	}
+	if app.Spec.Database != "" && app.Spec.ArchiveID == "" {
+		http.Error(w, "database archive identity migration required", 409)
+		return
+	}
+	if app.Spec.Database != "" && !in.Database {
+		http.Error(w, "cannot remove an existing database by redeploy; delete the app after data recovery", 409)
+		return
+	}
+	preexistingArchive, preexistingDatabase, oldHostname, oldMesh := app.Spec.ArchiveID, app.Spec.Database, app.Spec.Hostname, app.Spec.Mesh
+	archiveCandidate := ""
+	if in.Database && app.Spec.ArchiveID == "" {
+		raw := make([]byte, 16)
+		if _, err := rand.Read(raw); err != nil {
+			answer(w, err, 500)
+			return
+		}
+		archiveCandidate = "id-" + hex.EncodeToString(raw)
+	}
 	// Applied with the tenant labels every time: a server-side apply without them
 	// would remove the ones this owner set before.
 	if err := s.applyProject(s.elevated(ctx), in.Project); err != nil { // the namespace is the fabric's to keep
@@ -163,6 +193,10 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 				answer(w, err, 500)
 				return
 			}
+			if _, err := fabric.Version(vault, "key-version"); err != nil {
+				answer(w, err, 409)
+				return
+			}
 		case in.Vault.KeyID == "" || in.Vault.Key == "" || in.Vault.Bucket == "" || in.Vault.Endpoint == "":
 			http.Error(w, "this project has no vault yet: create one on the Storage page, or give a bucket, endpoint and key once", 400)
 			return
@@ -174,7 +208,7 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 				answer(w, err, 400)
 				return
 			}
-			vault = map[string]string{"bucket": in.Vault.Bucket, "endpoint": in.Vault.Endpoint, "b2-key-id": in.Vault.KeyID, "b2-key": in.Vault.Key}
+			vault = map[string]string{"bucket": in.Vault.Bucket, "endpoint": in.Vault.Endpoint, "b2-key-id": in.Vault.KeyID, "b2-key": in.Vault.Key, "key-version": "0", "mutation-revision": "0"}
 			if err := s.putSecret(ctx, "project "+in.Project+": its vault, bucket "+in.Vault.Bucket, vaultSecret(in.Project), vault, false); err != nil {
 				answer(w, err, 502)
 				return
@@ -200,12 +234,16 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 			},
 			"retentionPolicy": "30d",
 		})
+		metrics := obj("v1", "ConfigMap", db+"-recovery-metrics", in.Project, nil)
+		metrics.SetLabels(map[string]string{"cnpg.io/reload": "true"})
+		metrics.Object["data"] = map[string]any{"queries": warden.RecoveryQuery}
 		cl := obj("postgresql.cnpg.io/v1", "Cluster", db, in.Project, map[string]any{
 			"instances":         int64(1),
 			"priorityClassName": "wecolab-protected",
 			"storage":           map[string]any{"size": "20Gi"},
 			"resources":         map[string]any{"requests": map[string]any{"cpu": "250m", "memory": "512Mi"}, "limits": map[string]any{"memory": "1Gi"}},
 			"postgresql":        map[string]any{"parameters": map[string]any{"archive_timeout": "60s"}},
+			"monitoring":        map[string]any{"customQueriesConfigMap": []any{map[string]any{"name": db + "-recovery-metrics", "key": "queries"}}, "metricsQueriesTTL": "0s"},
 			"plugins":           []any{map[string]any{"name": "barman-cloud.cloudnative-pg.io", "isWALArchiver": true, "parameters": map[string]any{"barmanObjectName": db + "-vault", "serverName": "PLACEHOLDER"}}},
 			"replica":           map[string]any{"primary": in.Primary, "self": "PLACEHOLDER", "source": "PLACEHOLDER"},
 			"bootstrap":         map[string]any{},
@@ -215,6 +253,9 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		// its role (warden.AppKustomization).
 		roles := app.DeepCopy()
 		merge(roles, in)
+		if roles.Spec.ArchiveID == "" {
+			roles.Spec.ArchiveID = archiveCandidate
+		}
 		for _, ov := range warden.DBPatch(roles, in.Primary, warden.Local{}) {
 			setPath(cl.Object, ov["path"].(string), ov["value"])
 		}
@@ -223,7 +264,7 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 			"cluster": map[string]any{"name": db}, "method": "plugin",
 			"pluginConfiguration": map[string]any{"name": "barman-cloud.cloudnative-pg.io"},
 		})
-		workload = append(workload, vs, cl, sb)
+		workload = append(workload, metrics, vs, cl, sb)
 	}
 
 	// A redeploy keeps the secrets the first deploy generated: data may be encrypted with them.
@@ -278,7 +319,7 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 	}
 	maps.Copy(secrets, generated)
 	if vault != nil {
-		secrets["b2-key-id"], secrets["b2-key"] = vault["b2-key-id"], vault["b2-key"]
+		secrets["b2-key-id"], secrets["b2-key"], secrets["key-version"] = vault["b2-key-id"], vault["b2-key"], vault["key-version"]
 	}
 	spec := map[string]any{
 		"priorityClassName": "wecolab-protected",
@@ -320,11 +361,18 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		objs = append(objs, pvc)
 	}
 	workload = append(workload, append(objs, dep)...)
-	for _, u := range workload { // tried as the person deploying
+	for _, u := range workload { // writer validates schema and security, but never remote PVC quota
+		if u.GetKind() == "PersistentVolumeClaim" {
+			continue
+		}
 		if err := s.dryRun(ctx, u); err != nil {
 			answer(w, fmt.Errorf("%s %s: %w", u.GetKind(), u.GetName(), err), 400)
 			return
 		}
+	}
+	if err := admitClaims(in.Project, in.Sites, sites, offers, pools, workload); err != nil {
+		answer(w, err, 400)
+		return
 	}
 	recipients, err := s.recipients(ctx, sites, in.Sites, nil)
 	if err != nil {
@@ -348,7 +396,7 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		answer(w, err, 502)
 		return
 	}
-	paths := append([]string{appPath, secretPath(vaultSecret(in.Project))}, sitePaths...)
+	paths := append([]string{appPath, secretPath(vaultSecret(in.Project)), fabric.PlacementRevisionPath}, sitePaths...)
 	for _, f := range files {
 		paths = append(paths, f.Path)
 	}
@@ -357,12 +405,38 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 			files, paths = append(files, fabric.FileChange{Path: p}), append(paths, p)
 		}
 	}
+	owner := in.Project + "/" + in.Name
+	claimPaths := []string{}
+	for _, host := range []string{oldHostname, in.Hostname} {
+		if host != "" {
+			claimPaths = append(claimPaths, fabric.PublicClaimPath(host))
+		}
+	}
+	if oldMesh || in.Mesh {
+		claimPaths = append(claimPaths, fabric.MeshClaimPath(meshName(in.Project, in.Name)))
+	}
+	paths = append(paths, claimPaths...)
 	created := false
 	err = s.edit(ctx, fmt.Sprintf("%s/%s: deployed %s", in.Project, in.Name, in.Image), paths, func(snap *fabric.Snapshot) ([]fabric.FileChange, error) {
 		b, ok := snap.Get(appPath)
 		exists, err := decode(b, ok, app)
 		if err != nil {
 			return nil, err
+		}
+		if exists && app.Spec.ArchiveID != preexistingArchive {
+			return nil, fail(409, "app archive identity changed during deploy")
+		}
+		if exists && app.Spec.Database != preexistingDatabase {
+			return nil, fabric.ErrConflict
+		}
+		if exists && (app.Spec.Hostname != oldHostname || app.Spec.Mesh != oldMesh) {
+			return nil, fabric.ErrConflict
+		}
+		if !exists && preexistingArchive != "" {
+			return nil, fabric.ErrConflict
+		}
+		if b, _ := snap.Get(fabric.PlacementRevisionPath); !bytes.Equal(b, placementBefore) {
+			return nil, fabric.ErrConflict
 		}
 		if exists && app.Spec.Deleted {
 			return nil, fail(409, "%s/%s is still being deleted at its sites; deploy it again once it is gone", in.Project, in.Name)
@@ -376,6 +450,36 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 		if b, _ := snap.Get(secretPath(vaultSecret(in.Project))); vaultFile != nil && !bytes.Equal(b, vaultFile) {
 			return nil, fabric.ErrConflict // the vault's key rotated meanwhile: the app would carry the old one
 		}
+		var vaultChange *fabric.FileChange
+		if in.Database {
+			vp := secretPath(vaultSecret(in.Project))
+			vb, ok := snap.Get(vp)
+			if !ok {
+				return nil, fail(409, "vault missing")
+			}
+			nowVault, err := s.openSecret(ctx, vb, vp)
+			if err != nil {
+				return nil, err
+			}
+			if nowVault["retirement-phase"] != "" {
+				return nil, fail(409, "vault retirement in progress")
+			}
+			if nowVault["key-version"] != secrets["key-version"] || nowVault["b2-key-id"] != secrets["b2-key-id"] {
+				return nil, fabric.ErrConflict
+			}
+			if err := fabric.BumpVault(nowVault); err != nil {
+				return nil, fail(409, "%v", err)
+			}
+			ageKey, err := s.siteKey(ctx)
+			if err != nil {
+				return nil, err
+			}
+			enc, err := warden.ResealSecret(vb, path.Base(vp), ageKey, func(v map[string]string) error { v["mutation-revision"] = nowVault["mutation-revision"]; return nil })
+			if err != nil {
+				return nil, err
+			}
+			vaultChange = &fabric.FileChange{Path: vp, Content: enc}
+		}
 		now, err := sitesOf(snap, paths)
 		if err != nil {
 			return nil, err
@@ -384,12 +488,54 @@ func (s *server) deploy(w http.ResponseWriter, r *http.Request) {
 			return nil, cmpErr(err, fabric.ErrConflict) // the stewards changed: the secrets are encrypted for others
 		}
 		created = !exists
+		if in.Database && app.Spec.ArchiveID == "" {
+			if app.Spec.Database != "" {
+				return nil, fail(409, "database archive identity migration required")
+			}
+			app.Spec.ArchiveID = archiveCandidate
+		}
 		merge(app, in)
 		if err := s.dryRun(ctx, app); err != nil {
 			return nil, err
 		}
 		f, err := s.fileOf(app, false)
-		return append(slices.Clone(files), f), err
+		if err != nil {
+			return nil, err
+		}
+		out := append(slices.Clone(files), f)
+		if oldHostname != "" && oldHostname != in.Hostname {
+			release, err := fabric.ReleaseRoute(snap, fabric.PublicClaimPath(oldHostname), oldHostname, owner)
+			if err != nil {
+				return nil, fail(409, "%v", err)
+			}
+			out = append(out, release)
+		}
+		if in.Hostname != "" {
+			acquire, err := fabric.ClaimRoute(snap, fabric.PublicClaimPath(in.Hostname), in.Hostname, owner)
+			if err != nil {
+				return nil, fail(409, "%v", err)
+			}
+			out = append(out, acquire)
+		}
+		mesh := meshName(in.Project, in.Name)
+		if oldMesh && !in.Mesh {
+			release, err := fabric.ReleaseRoute(snap, fabric.MeshClaimPath(mesh), mesh, owner)
+			if err != nil {
+				return nil, fail(409, "%v", err)
+			}
+			out = append(out, release)
+		}
+		if in.Mesh {
+			acquire, err := fabric.ClaimRoute(snap, fabric.MeshClaimPath(mesh), mesh, owner)
+			if err != nil {
+				return nil, fail(409, "%v", err)
+			}
+			out = append(out, acquire)
+		}
+		if vaultChange != nil {
+			out = append(out, *vaultChange)
+		}
+		return out, nil
 	})
 	if err != nil {
 		answer(w, err, 502)
@@ -423,7 +569,7 @@ func merge(app *v1alpha1.App, in deployRequest) {
 func reusable(old map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range old {
-		if !strings.HasPrefix(k, "env-") && k != "b2-key-id" && k != "b2-key" {
+		if !strings.HasPrefix(k, "env-") && k != "b2-key-id" && k != "b2-key" && k != "key-version" {
 			out[k] = v
 		}
 	}
@@ -534,4 +680,51 @@ func setPath(obj map[string]any, path string, value any) {
 			cur = c[n]
 		}
 	}
+}
+
+// admitClaims validates generated PVCs as typed objects and the destination
+// grant. The destination's ResourceQuota/actual capacity remains authoritative.
+func admitClaims(project string, targets []string, sites []v1alpha1.Site, offers []v1alpha1.Offer, pools []v1alpha1.Pool, workload []*unstructured.Unstructured) error {
+	total := resource.MustParse("0")
+	for _, u := range workload {
+		if u.GetKind() != "PersistentVolumeClaim" {
+			continue
+		}
+		var pvc corev1.PersistentVolumeClaim
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &pvc); err != nil {
+			return fail(400, "invalid PVC %s: %v", u.GetName(), err)
+		}
+		if len(pvc.Spec.AccessModes) != 1 || pvc.Spec.AccessModes[0] != corev1.ReadWriteOnce || pvc.Spec.StorageClassName != nil {
+			return fail(400, "PVC %s requires supported default storage class and ReadWriteOnce", u.GetName())
+		}
+		q, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+		if !ok || q.Sign() <= 0 {
+			return fail(400, "PVC %s must request storage", u.GetName())
+		}
+		total.Add(q)
+	}
+	if total.Sign() == 0 {
+		return nil
+	}
+	for _, site := range targets {
+		st := warden.StandingAt(project, site, sites, offers, pools)
+		if st.Owner {
+			continue
+		}
+		if st.Held == nil {
+			return fail(403, "project %s has no storage grant at %s", project, site)
+		}
+		size := st.Held.Storage
+		if size == "" {
+			size = "0"
+		}
+		grant, err := resource.ParseQuantity(size)
+		if err != nil {
+			return fail(409, "invalid storage grant at %s: %v", site, err)
+		}
+		if grant.Cmp(total) < 0 {
+			return fail(403, "%s grants %s storage, app requests %s", site, grant.String(), total.String())
+		}
+	}
+	return nil
 }

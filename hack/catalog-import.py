@@ -120,6 +120,11 @@ def volumes(spec, role):
         if 'docker.sock' in src: flags.append('needs the Docker socket, which controls the whole box'); continue
         if src.startswith('/dev/'): flags.append("needs one of the host's devices"); continue
         if src in ('/etc/localtime', '/etc/timezone', '/etc/hosts'): continue
+        # A PVC is a directory. Mounting it on a file hides the file in the
+        # image (and can fail pod creation); this needs a real file source.
+        if re.search(r'\.(?:conf|config|ini|ya?ml|json|xml|sh|pub|pem|key|crt)$', os.path.basename(dst), re.I):
+            flags.append(f'file mount {dst} cannot use a directory PVC')
+            continue
         if src.startswith('${volumes_root}/') or src.startswith('${storage_dir}/') or src.startswith('/') or src.startswith('${'):
             name = re.sub(r'[^a-z0-9]+', '-', src.replace('${volumes_root}/' + role, '').replace('${storage_dir}', 'storage').replace('${volumes_root}', 'data').lower()).strip('-') or 'data'
         else:
@@ -155,24 +160,30 @@ def entry(role, svc, doc, validation):
             pg = (n, s)
             if any(x in img for x in PG_CUSTOM) or base not in ('postgres', 'postgresql'):
                 e['unsupported'].append(f'database needs a custom Postgres image ({img}); CloudNativePG runs plain Postgres')
-            continue
-        sc = {'name': re.sub(r'[^a-z0-9]+', '-', n.lower()).strip('-')[:40], 'image': img, 'env': [], 'volumes': []}
-        if s.get('command') is not None: sc['command'] = s['command'] if isinstance(s['command'], list) else str(s['command'])
-        vols, fl = volumes(s, role); sc['volumes'] = vols; e['unsupported'] += fl
-        for k, v in envmap(s.get('environment')).items():
-            sc['env'].append(resolve(k, v, names, None, e))
-        e['sidecars'].append(sc)
-        if vols: e['state'] = 'volume'
     if pg:
         pn, ps = pg
         penv = envmap(ps.get('environment'))
         e['database'] = {'user': penv.get('POSTGRES_USER', 'app'), 'name': penv.get('POSTGRES_DB', penv.get('POSTGRES_USER', 'app')), 'password': penv.get('POSTGRES_PASSWORD', '')}
         e['state'] = 'database'
+    database = (pg[0], e['database']) if pg else None
+    main_volumes, flags = volumes(m, role)
+    e['volumes'] = main_volumes
+    e['unsupported'] += flags
+    if main_volumes:
+        e['state'] = 'database+volume' if pg else 'volume'
+    for n, s in services.items():
+        if n == main or (pg and n == pg[0]): continue
+        img = str(s.get('image', ''))
+        sc = {'name': re.sub(r'[^a-z0-9]+', '-', n.lower()).strip('-')[:40], 'image': img, 'env': [], 'volumes': []}
+        if s.get('command') is not None: sc['command'] = s['command'] if isinstance(s['command'], list) else str(s['command'])
+        vols, fl = volumes(s, role); sc['volumes'] = vols; e['unsupported'] += fl
+        for k, v in envmap(s.get('environment')).items():
+            sc['env'].append(resolve(k, v, names, database, e))
+        e['sidecars'].append(sc)
+        if vols and e['state'] == 'none': e['state'] = 'volume'
+        if vols and e['state'] == 'database': e['state'] = 'database+volume'
     for k, v in envmap(m.get('environment')).items():
-        e['env'].append(resolve(k, v, names, (pg[0], e['database']) if pg else None, e))
-    vols, fl = volumes(m, role); e['volumes'] = vols; e['unsupported'] += fl
-    if vols and e['state'] == 'none': e['state'] = 'volume'
-    if vols and e['state'] == 'database': e['state'] = 'database+volume'
+        e['env'].append(resolve(k, v, names, database, e))
     # host access the sites forbid
     for key, what in HOST_NEEDS.items():
         if m.get(key): e['unsupported'].append('needs ' + what)
@@ -197,14 +208,35 @@ def resolve(k, v, names, pg, e):
     item = {'name': k}
     if pg:
         pn, db = pg
-        if re.search(r'@' + re.escape(pn) + r'(:\d+)?/', v) or re.search(r'(host|server)=' + re.escape(pn) + r'\b', v, re.I):
-            item['db'] = 'uri'; return item
+        from urllib.parse import urlsplit
+        if v.startswith(('postgres://', 'postgresql://')):
+            try:
+                parsed = urlsplit(v)
+                if parsed.hostname == pn:
+                    if (not parsed.query and not parsed.fragment and parsed.username == db['user']
+                            and parsed.password == db['password'] and parsed.path == '/' + db['name']
+                            and parsed.port in (None, 5432)):
+                        item['db'] = 'uri'; return item
+                    e['unsupported'].append(f'{k} has database URI semantics CNPG cannot preserve')
+                    item['value'] = v; return item
+            except ValueError:
+                e['unsupported'].append(f'{k} has an invalid database URI')
+                item['value'] = v; return item
+        if re.search(r'(host|server)=' + re.escape(pn) + r'\b', v, re.I):
+            e['unsupported'].append(f'{k} has a database connection string CNPG cannot preserve')
+            item['value'] = v; return item
         if v == pn: item['db'] = 'host'; return item
         if v == db['password'] and v: item['db'] = 'password'; return item
         if v == db['user'] and re.search('user', k, re.I): item['db'] = 'user'; return item
         if v == db['name'] and re.search('db|database|name', k, re.I): item['db'] = 'dbname'; return item
         if v == '5432' and re.search('port', k, re.I): item['db'] = 'port'; return item
+        # A composite reference cannot be replaced with a single CNPG Secret key.
+        # Leaving the old compose hostname apparently deployable would be worse.
+        if re.search(r'(?<![\w.-])' + re.escape(pn) + r'(?::\d+)?(?=[/?#\s]|$)', v):
+            e['unsupported'].append(f'{k} embeds database host in a value CNPG cannot preserve')
+            item['value'] = v; return item
     for n in names:
+        if pg and n == pg[0]: continue
         if n in v and n != v and re.search(r'(^|[@/:\s])' + re.escape(n) + r'([:/\s]|$)', v):
             v = re.sub(r'(^|[@/:\s])' + re.escape(n) + r'([:/\s]|$)', lambda mm: mm.group(1) + 'localhost' + mm.group(2), v)
         elif v == n:
@@ -214,11 +246,42 @@ def resolve(k, v, names, pg, e):
     return item
 
 
+def certification(entry, record):
+    """Curated WeCoLab drills never inherit upstream validation."""
+    allowed = {'not-tested', 'passed', 'failed'}
+    restore = allowed | {'not-applicable'}
+    if not isinstance(record, dict) or record.get('status') not in allowed:
+        raise ValueError(f"invalid certification status for {entry['slug']}")
+    if any(record.get(k) not in restore for k in ('databaseRestore', 'volumeRestore')):
+        raise ValueError(f"invalid restore outcome for {entry['slug']}")
+    result = dict(record)
+    if result['status'] == 'passed':
+        cadence = result.get('updateCadence') or {}
+        reviewed = cadence.get('lastReviewed')
+        try:
+            review_date = datetime.date.fromisoformat(reviewed)
+            tested_date = datetime.date.fromisoformat(result['testedAt'])
+            current = 0 <= (datetime.date.today() - review_date).days <= 92
+        except (TypeError, ValueError):
+            current = False
+        if not (not entry['unsupported'] and result.get('testedImage') == entry['image']
+                and result.get('architecture') in ('amd64', 'arm64')
+                and current and tested_date <= review_date and tested_date <= datetime.date.today()
+                and result.get('evidence') and result.get('maintainer') and cadence.get('interval')
+                and result['databaseRestore'] == ('passed' if entry['database'] else 'not-applicable')
+                and result['volumeRestore'] == ('passed' if entry['volumes'] or any(s['volumes'] for s in entry['sidecars']) else 'not-applicable')):
+            result['status'] = 'not-tested'
+    return result
+
+
 def main():
     validation = {}
     vp = f'{ROOT}/docs/development/service-validation-results.json'
     if os.path.exists(vp):
         validation = json.load(open(vp)).get('roles', {})
+    overlay_path = os.environ.get('WECOLAB_CATALOG_CERTIFICATIONS', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'catalog-certifications.json'))
+    overlay = json.load(open(overlay_path))
+    if not isinstance(overlay, dict): raise ValueError('certifications must be keyed by role')
     entries, failed = [], []
     for role in sorted(os.listdir(ROLES)):
         sp, tp = f'{ROLES}/{role}/service.yml', f'{ROLES}/{role}/templates/docker-compose.{role}.yml.j2'
@@ -232,6 +295,13 @@ def main():
             failed.append({'slug': role, 'error': f'{type(ex).__name__}: {str(ex)[:120]}'})
     # WeCoLab's own entries (a workspace, decision 26) come first, as written.
     entries = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'catalog-own.json'))) + entries
+    for e in entries:
+        if e['slug'] in overlay:
+            e['wecolab'] = certification(e, overlay[e['slug']])
+        else:
+            e['wecolab'] = {'status': 'not-tested'}
+    unknown = set(overlay) - {e['slug'] for e in entries}
+    if unknown: raise ValueError('certification references missing role(s): ' + ', '.join(sorted(unknown)))
     commit = subprocess.run(['git', '-C', ROOT, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
     out = {'generated': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
            'source': {'repo': 'https://gitlab.com/vincehark/HomelabOS', 'branch': 'feat/service-batch', 'commit': commit},

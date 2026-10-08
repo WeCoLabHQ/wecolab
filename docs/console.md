@@ -64,19 +64,21 @@ Door restarts. The change may have been made anyway: refresh and look before try
 
 ## Overview
 
-![The Overview: counts of ready sites, protected apps, moves and stewards, then every app and site](images/console-overview.png)
+The Overview separates operational readiness from data protection.
 
 Four counts, then a line for every app and every site:
 
 - **Sites ready**: sites whose Warden answered, of all sites.
-- **Apps protected**: apps whose every check but Promotion passes, of the apps you see ([Checks](#checks)).
+- **Apps ready**: apps whose primary and route are operational, not a count of protected data.
 - **Moving**: apps with a planned move in flight.
 - **Stewards**: sites trusted with the fabric's secrets and its Nebula CA. It warns below two.
 
-An app's line shows the site serving it now, its hostname, and **Protected** or the first check that
-fails. A site's line shows its owner, Ready or not answering, and which site is the writer. Everything
-comes from each site's own status report, which its Warden publishes over Nebula. The page refreshes every
-ten seconds.
+An app's line shows its serving site, hostname and operational **Ready** state. Its database
+prerequisites and measured recovery confidence are separate; site-local files never inherit
+database protection. The page refreshes state and the visible operational panel every ten
+seconds. In-flight requests are deduplicated, late responses cannot replace a newly selected
+panel, and failed refreshes retain the last data with a visible error. Draft inputs and
+one-time-secret dialogs are not rebuilt by polling.
 
 ## Deploy an app
 
@@ -95,28 +97,36 @@ the Fabric's record of one application, its sites, its primary and its hostname.
 | Hostname | empty means `<name>.<zone>`. Under the zone, a hostname is one free label. Any other hostname must fall under a verified domain of the project ([Domains](#domains)). No two apps share a hostname. |
 | Sites | where the app runs. Only sites the project owns or holds an offer at, directly or through a pool, are listed; the first two are ticked. |
 | Primary | the site that serves the app and, with a database, writes it. The first ticked site unless you pick another. |
-| Postgres, replicated, backed up | a CloudNativePG database ([below](#the-database-its-vault-and-its-backups)). A catalog entry sets it. |
+| Postgres with archive replication | configures a CloudNativePG database; verify its actual protection below. Catalog selection locks the recipe's database policy. |
 | Publish on the mesh | also serve the app to people's devices on the people mesh ([below](#publishing-on-the-mesh)). |
 | Vault | appears with Postgres; used only when the project has no vault yet ([Storage](#storage)). |
 | RPO | the recovery point objective, `5m` by default ([below](#the-database-its-vault-and-its-backups)). |
 
 ### The catalog
 
-The catalog holds WeCoLab's own [Workspace](#workspaces), first, and 226 apps imported from the HomelabOS
-catalog on 2026-09-28. Search it or pick a category; at most 60 cards show at once. A card shows the app's
-version, its category and tags: **own VM** and **mesh only** (a workspace), **postgres** (it has a
-database), **volume** (it keeps files on volumes), the number of sidecars, and one of:
+The catalog contains WeCoLab's own [Workspace](#workspaces) and 226 imported HomelabOS
+recipes. Provenance is pinned to `feat/service-batch` commit
+`411f2c6802a73aaf5517ed3b3ff01a083312d5c9`, rendered with Python 3.14, Jinja2 3.1.6
+and PyYAML 6.0.3. The generated dataset has 227 entries, 183 deployable by the importer,
+44 with PostgreSQL and 201 with main-container volumes. One upstream role (`zammad`)
+failed import. Successful translation is not successful deployment or recovery.
 
-- **validated**: it passed HomelabOS's own validation on a single amd64 droplet, whose backup check stops
-  the app, archives its data and volumes, wipes, restores and reads back. It is not a test on WeCoLab.
-- **incompatible**: HomelabOS found it broken as packaged (an image never published, a dead upstream).
-- **environment blocked**: HomelabOS could not validate it without outside accounts or fixtures.
-- **host incompatible**: refused, with no Use button; the card says why. Unlike *incompatible*, the app
-  may work, but it needs what WeCoLab refuses a project's pod: the Docker socket, extra capabilities such
-  as `NET_ADMIN`, the host's network, devices, privileged mode, or a custom Postgres image (CloudNativePG
-  runs plain Postgres).
+Search or select a category; at most 60 cards show at once. Cards distinguish:
 
-Most entries (173 of the 226) keep all their data on volumes, which are neither replicated nor backed up
+- **HomelabOS validation**: upstream's reported result in its own environment, never a
+  WeCoLab lifecycle certification.
+- **WeCoLab not certified**: no complete evidence for this exact image, architecture,
+  deployment, read/write, backup, restore and upgrade lifecycle. All current entries have
+  this status; the hand-maintained certification overlay must not invent success.
+- **Local VM validation** for Workspace: historical runtime observation, not a file
+  backup/restore claim.
+- **Host incompatible**: no Use button. Unsupported host privileges, custom PostgreSQL
+  requirements or file mounts that cannot become directory PVCs remain refused.
+
+Certification metadata carries maintainer, review cadence, version/image/architecture,
+scenario evidence, security notices and separate database/volume restore outcomes.
+An upstream image change does not inherit an old tested badge. Of the current entries,
+174 are volume-only and 39 combine database and volumes; the files remain site-local
 ([Where an app's data lives](#where-an-apps-data-lives)).
 
 **Use** fills in the name (the entry's own), the image, the port and Postgres, and lists what the app gets
@@ -177,15 +187,20 @@ app.
 
 ### What happens next
 
-The Console tries every object as you, then commits the App and its folder to the Fabric in one commit.
-Within a minute or two each chosen site's Flux applies the folder and its Warden gives the site its part:
+The Console dry-runs non-PVC resources as you for schema, RBAC and security policy.
+Generated PVCs are validated as storage quantities and checked against **each destination's**
+ownership/Offer/Pool grant, rather than the writer's unrelated quota. A shared placement
+revision makes concurrent grant changes conflict with deployment. This preflight cannot
+promise free remote disk or current quota usage: each destination's admission and scheduler
+remain authoritative, and a pending/denied PVC is not successful deployment.
+
+The App and workload folder are committed together. Each site's Flux then applies its part:
 
 1. the Deployment and the Service, in the project's namespace;
 2. with Postgres, a CloudNativePG cluster: the primary at the primary site, and a replica at every other
    site, fed from the vault;
 3. a route at the Door for the hostname, with a certificate, to the primary;
-4. the App's checks on the Apps page. The Overview shows it **Protected** once every check but Promotion
-   passes.
+4. operational readiness and separate database/file/recovery evidence on the Apps page.
 
 With a database, the app runs only at its primary; its other sites keep a standby database and no app pod.
 Without one, every site of the app runs its own copy.
@@ -198,26 +213,37 @@ named after the app. The app finds its database through `DATABASE_URL`, from the
 key `uri`; catalog apps take the fields they need from the same Secret. The Console generates its password
 once and every site gets the same Secret, so moving the app never changes it.
 
-The primary archives its WAL (PostgreSQL's write-ahead log) to the project's vault within 60 seconds of a
-write (`archive_timeout`; an idle primary archives nothing), through CloudNativePG's Barman Cloud plugin,
-under `s3://<bucket>/<project>/<app>/`. It takes a base backup at once, then every night at 02:00. The vault
-keeps what 30 days of recovery need. Every other site's replica replays the archive from the vault. A
-project's first database app needs a vault ([Storage](#storage)).
+The primary uses `archive_timeout=60s` through CloudNativePG's Barman plugin. This controls
+segment switching; it does **not** guarantee upload or replay within one minute. Backups
+and WAL live beneath `s3://<bucket>/<project>/<app>/<archiveID>-<site>[-g<n>]/`.
+Legacy migrations preserve their existing database-name namespace. A new database
+incarnation receives a different immutable ArchiveID, even when the App name is reused.
+An immediate and nightly 02:00 backup is configured; completion still requires evidence.
 
-The RPO changes nothing about archiving. It is the objective the WithinRPO check reports the newest
-archived WAL's age against, and an idle primary whose newest WAL is older still passes.
+RPO is an objective, not an archiving setting or loss guarantee. WithinRPO compares measured
+same-system, same-timeline primary/replay WAL positions with bounded sample ages. Unknown
+or stale history does not pass. An idle database can pass when observed replay covers the
+primary; the age of the last uploaded object alone proves nothing.
 
 ### Where an app's data lives
 
-- The database is replicated to every site of the app through the vault, and backed up there.
-- Volumes hold files on one site's disk. They are never replicated and never backed up.
+- Database replication and backups are configured through the vault; the current evidence
+  decides whether the prerequisites actually hold.
+- Volumes hold files on one site's disk. WeCoLab provides no general replication or backup for them.
 - An app without a database runs a separate copy at every site it names, each with its own volumes. The
   Door sends people to the primary's copy.
 - After a move the database follows and the files do not: the app sees the new site's volumes, empty or
   old.
 - Taking an app off a site, or deleting it, deletes that site's volumes for good.
-- **Protected** never looks at volumes. A catalog app that keeps files on volumes shows Protected at two
-  sites while each of its files exists at one site.
+- Database state is `protected`, `degraded`, `unknown` or `not-applicable`; `protected`
+  means the currently observed database prerequisites, not an exercised restore.
+- File scope is `local-only`, `unknown` or `not-applicable`. Unknown manifests are not
+  silently treated as file-free.
+- Recovery point is `within-objective`, `outside-objective`, `unknown` or
+  `not-applicable`, with nullable measured exposure, observation time and reason.
+- **Last verified restore** remains **Never verified** unless an authenticated operator
+  records a completed matching drill through `warden record-restore`. The displayed
+  database/database-and-files scope is explicit and is not certification.
 
 ### Public names and your own domains
 
@@ -225,6 +251,10 @@ Every app answers at its hostname through the Door, the fabric's public entrance
 Let's Encrypt. The Door forwards to the app's primary site, over Nebula, and follows the primary when it
 moves. `<name>.<zone>` needs nothing more; a hostname under a project's own domain needs that domain
 verified first ([Domains](#domains)).
+
+Public and mesh names have writer-Git ownership claims changed in the same conditional
+commit as deployment. Two concurrent deployments cannot both reserve one name. Claims
+remain held while an App's deletion is pending and are released only after site cleanup.
 
 ### Publishing on the mesh
 
@@ -249,13 +279,13 @@ Each check is a condition on the App, computed from what its sites report now.
 |---|---|---|
 | PrimaryHealthy | the primary site answers and, with a database, its cluster is healthy with a current primary | `SiteNotReady`, `DatabaseNotHealthy` |
 | StandbyStaged | the standby site (the app's first other site, or a move's target) answers and, with a database, its replica has a ready instance built for its current archive | `NoStandby` (the app names one site), `SiteNotReady`, `ReplicaNotReady`, `Rebuilding` |
-| WithinRPO | there is no database, or the primary archives WAL continuously and the standby's replica is healthy | `ArchiveStalled`, `ReplicaNotHealthy`, `NoWAL` |
-| VaultFresh | there is no database, or the vault answers, has a default Object Lock retention, and holds a base backup less than a day old | `VaultUnreachable`, `NoObjectLock`, `NoBackup`, `Stale` |
+| WithinRPO | no database, or current same-history primary/replay measurements prove the objective while the primary archives and target is healthy | `ArchiveStalled`, `ReplicaNotHealthy`, `ArchiveRebuilding`, `MeasuredOutsideObjective`, unknown `InsufficientMeasurement` |
+| VaultFresh | no database, or a fresh valid DONE backup matches the current archive, database system and timeline, with Object Lock | `VaultUnreachable`, `NoObjectLock`, `NoBackup`, `Stale`, unknown `HistoryUnverified` |
 | Routed | a ready pod of the app answers at the primary, for the Door to send people to | `DoorUnreachable` |
 | Promotion | no move is in flight (`Applied`) | `Demoting`, `Promoting` (a planned move); `DatabaseMissing`, `RebuildWaiting`, `Rebuilding` |
 
-**Protected** (the App's Ready condition) needs every check but Promotion. An app at one site is never
-Protected: StandbyStaged needs a second site, with or without a database.
+**Ready** is operational: PrimaryHealthy and Routed must pass. A running app may have
+unknown recovery confidence or unprotected local files. Ready does not certify either.
 
 ### Moving the primary
 
@@ -272,12 +302,18 @@ move. The old primary then stops taking writes and hands a token to the target, 
 commit until the handover is done, typically under two minutes. Files on its volumes stay at the old
 primary. The Overview counts the app under Moving, and Promotion says Demoting, then Promoting.
 
-**Forced failover.** Tick Force. The target becomes the primary at once, without a handover and without
-checks. Writes the old primary had not archived are lost: about the last minute while its archiving worked,
-more if it had stalled. Every other site's database, the old primary's included when it returns, is rebuilt
-from the vault. Use it when the old primary is gone. Force only to a site that has the database: anywhere
-else the app stays stopped with `DatabaseMissing`. For an app with a database whose primary is not healthy,
-a new move without Force is refused.
+**Forced failover.** Independently power off or fully write-isolate the old history-bearing
+primary first; inability to contact it is not fencing. Tick Force, choose the isolation
+method, enter operator evidence and acknowledge the risk. The dialog obtains the current
+Git revision and ArchiveID; the backend rechecks both plus the source and records the
+authenticated actor and assertion. A stale preview or bare Force flag is refused.
+
+Force bypasses planned handover gates, not these confirmations. The target must already
+have a database or it remains stopped with `DatabaseMissing`. Unreplayed writes may be
+lost without a fixed bound, and restoring other sites waits for validated survivor backup
+and history evidence. The assertion is not automatic physical fencing. Local files stay
+where they were. Use the displayed recovery evidence and the
+[operator procedure](operations.md#apps), not a one-minute loss assumption.
 
 **An app without a database.** There is nothing to hand over and nothing is checked. The primary changes
 at once, and the Door sends people to the new site's copy, with that site's own volumes.
@@ -293,6 +329,13 @@ replaces the app's folder in the Fabric. The passwords and secrets generated the
 the admin password is not shown again. A site taken off the app deletes its database and its volumes once
 the primary proves it holds the data (an app without a database: at once). An app that is being deleted
 cannot be deployed again until it is gone.
+
+Deployment choices are keyboard-operable buttons with pressed/disabled state. Recipe-owned
+database and mesh-only controls cannot be silently toggled; clear the recipe for a custom
+configuration. Dialogs isolate the background, trap focus and restore their opener after
+close, including when polling recreated the button. Clipboard success appears only after
+the write completes. On rejection, the visible one-time secret is selected for manual copy;
+closing asks before clearing it and removes the secret from the DOM.
 
 ### Deleting an app
 

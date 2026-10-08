@@ -5,4 +5,5 @@ RUN apt-get update -qq && apt-get install -y -qq systemd systemd-sysv dbus curl 
       procps less vim-tiny && apt-get clean && rm -rf /var/lib/apt/lists/* \
  && systemctl mask systemd-logind getty.target console-getty.service systemd-udevd.service systemd-networkd-wait-online.service
 STOPSIGNAL SIGRTMIN+3
-CMD ["/sbin/init"]
+# Kubernetes bidirectional mounts require the guest's own mount namespace to be shared.
+CMD ["/bin/sh", "-ec", "mount --make-rshared /; exec /sbin/init"]

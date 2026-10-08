@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -89,7 +90,7 @@ type gitEntry struct {
 	Content string `json:"content"`
 }
 
-func contentsPath(p string) string {
+func contentsPath(p, ref string) string {
 	if !validPath(p) {
 		p = "invalid-path" // never reaches another folder; callers check validPath first
 	}
@@ -97,7 +98,7 @@ func contentsPath(p string) string {
 	for i := range parts {
 		parts[i] = url.PathEscape(parts[i])
 	}
-	return "/contents/" + strings.Join(parts, "/") + "?ref=main"
+	return "/contents/" + strings.Join(parts, "/") + "?ref=" + url.QueryEscape(ref)
 }
 
 // validPath is a path inside the repository: no empty, "." or ".." segment, no leading slash.
@@ -119,7 +120,7 @@ func (g *Git) Read(ctx context.Context, p string) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("bad path %q", p)
 	}
 	var e gitEntry
-	code, err := g.do(ctx, http.MethodGet, contentsPath(p), nil, &e)
+	code, err := g.do(ctx, http.MethodGet, contentsPath(p, "main"), nil, &e)
 	if err != nil || code == http.StatusNotFound {
 		return nil, false, err
 	}
@@ -130,7 +131,7 @@ func (g *Git) Read(ctx context.Context, p string) ([]byte, bool, error) {
 // List is the paths of the files in a folder on main (none when it does not exist).
 func (g *Git) List(ctx context.Context, dir string) ([]string, error) {
 	var es []gitEntry
-	code, err := g.do(ctx, http.MethodGet, contentsPath(dir), nil, &es)
+	code, err := g.do(ctx, http.MethodGet, contentsPath(dir, "main"), nil, &es)
 	if err != nil || code == http.StatusNotFound {
 		return nil, err
 	}
@@ -141,6 +142,51 @@ func (g *Git) List(ctx context.Context, dir string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// ReadAt reads a file from one immutable commit, not the moving main branch.
+func (g *Git) ReadAt(ctx context.Context, p, revision string) ([]byte, bool, error) {
+	if !validPath(p) || !validRevision(revision) {
+		return nil, false, fmt.Errorf("invalid Git path or revision")
+	}
+	var e gitEntry
+	code, err := g.do(ctx, http.MethodGet, contentsPath(p, revision), nil, &e)
+	if err != nil || code == http.StatusNotFound {
+		return nil, false, err
+	}
+	b, err := base64.StdEncoding.DecodeString(e.Content)
+	return b, true, err
+}
+
+// ListAt lists files in a directory at an immutable commit.
+func (g *Git) ListAt(ctx context.Context, dir, revision string) ([]string, error) {
+	if !validPath(dir) || !validRevision(revision) {
+		return nil, fmt.Errorf("invalid Git path or revision")
+	}
+	var es []gitEntry
+	code, err := g.do(ctx, http.MethodGet, contentsPath(dir, revision), nil, &es)
+	if err != nil || code == http.StatusNotFound {
+		return nil, err
+	}
+	out := []string{}
+	for _, e := range es {
+		if e.Type == "file" {
+			out = append(out, e.Path)
+		}
+	}
+	return out, nil
+}
+
+func validRevision(sha string) bool {
+	if len(sha) != 40 && len(sha) != 64 {
+		return false
+	}
+	for _, c := range sha {
+		if c < '0' || c > '9' && c < 'a' || c > 'f' {
+			return false
+		}
+	}
+	return true
 }
 
 // Snapshot is files of the Fabric as Edit read them, each with the hash it had then.
@@ -158,6 +204,9 @@ func (s *Snapshot) Get(p string) ([]byte, bool) {
 	return f.content, f.exists
 }
 
+// SHA is the exact Git blob identity observed by this snapshot.
+func (s *Snapshot) SHA(p string) string { return s.files[p].sha }
+
 // ErrConflict is an Edit that found the Fabric changed under it on every attempt.
 var ErrConflict = errors.New("the Fabric kept changing meanwhile; try again")
 
@@ -168,7 +217,7 @@ func (g *Git) snapshot(ctx context.Context, paths []string) (*Snapshot, error) {
 			return nil, fmt.Errorf("bad path %q", p)
 		}
 		var e gitEntry
-		code, err := g.do(ctx, http.MethodGet, contentsPath(p), nil, &e)
+		code, err := g.do(ctx, http.MethodGet, contentsPath(p, "main"), nil, &e)
 		if err != nil {
 			return nil, err
 		}
@@ -193,24 +242,44 @@ func WithRequest(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, requestKey{}, id)
 }
 
-// Edit reads paths from the Fabric, asks fn what to change, and commits that only if none of the files it
-// changes changed since they were read: Forgejo refuses an update or delete whose sha is not the file's
-// current one (409), a create where the file now exists (422), and a commit whose branch moved meanwhile.
-// On any of those it reads again and asks fn again, a few times, then gives up with ErrConflict. fn may
-// change only files it was given. A file read but left unchanged is not re-checked (the API cannot):
-// a decision that rests on one (a name unique across Site files) needs its callers serialised, as the
-// Console's joins are. fn returns no changes to commit nothing. The result is the new commit's hash, or
-// "" when nothing changed.
+// Edit reads paths from the Fabric and commits only the changed paths against
+// their observed SHAs. Schema-sensitive transactions also change the shared
+// placement revision so concurrent authority changes force a retry.
+// A migration must use EditMigration while the maintenance gate is active.
 func (g *Git) Edit(ctx context.Context, who Author, msg string, paths []string, fn func(*Snapshot) ([]FileChange, error)) (string, error) {
+	return g.edit(ctx, who, msg, paths, fn, false)
+}
+
+func (g *Git) edit(ctx context.Context, who Author, msg string, paths []string, fn func(*Snapshot) ([]FileChange, error), migration bool) (string, error) {
 	if id, _ := ctx.Value(requestKey{}).(string); id != "" {
 		msg += "\n\nRequest-Id: " + id
 	}
-	for attempt := 0; attempt < 5; attempt++ {
+	if !migration && slices.ContainsFunc(paths, protectedPath) {
+		paths = append(slices.Clone(paths), UpgradePath, PlacementRevisionPath, MigrationCompletePath)
+	}
+	for attempt := range 5 {
 		snap, err := g.snapshot(ctx, paths)
 		if err != nil {
 			return "", err
 		}
 		changes, err := fn(snap)
+		if err == nil && !migration && len(changes) > 0 {
+			protect, placement := false, false
+			for _, c := range changes {
+				protect = protect || protectedPath(c.Path)
+				placement = placement || placementPath(c.Path)
+			}
+			if protect {
+				err = upgradeAuthorized(snap)
+			}
+			if err == nil && placement {
+				var rev FileChange
+				rev, err = incrementPlacement(snap)
+				if err == nil {
+					changes = append(changes, rev)
+				}
+			}
+		}
 		if err != nil {
 			return "", err
 		}
@@ -250,11 +319,33 @@ func (g *Git) Edit(ctx context.Context, who Author, msg string, paths []string, 
 	return "", ErrConflict
 }
 
+// EditMigration is restricted to explicit staged migration commands. It cannot
+// silently override the maintenance gate in ordinary API/controller writes.
+func (g *Git) EditMigration(ctx context.Context, who Author, msg string, paths []string, fn func(*Snapshot) ([]FileChange, error)) (string, error) {
+	paths = append(slices.Clone(paths), UpgradePath)
+	return g.edit(ctx, who, msg, paths, func(s *Snapshot) ([]FileChange, error) {
+		b, ok := s.Get(UpgradePath)
+		if !ok {
+			return nil, fmt.Errorf("upgrade maintenance gate missing")
+		}
+		var r UpgradeReport
+		if err := json.Unmarshal(b, &r); err != nil {
+			return nil, err
+		}
+		if r.Phase != "maintenance" {
+			return nil, fmt.Errorf("migration requires maintenance")
+		}
+		return fn(s)
+	}, true)
+}
+
 // conflict is Forgejo saying the Fabric changed under a commit: a file's sha (409), a file that now
-// exists (422), or the branch moved between its clone and its push (500 "non-fast-forward").
+// exists (422), or the branch moved between its clone and its push (500 with a rejected stale ref).
 func conflict(code int, err error) bool {
 	return code == http.StatusConflict || code == http.StatusUnprocessableEntity ||
-		(code == http.StatusInternalServerError && (strings.Contains(err.Error(), "non-fast-forward") || strings.Contains(err.Error(), "out of date")))
+		(code == http.StatusInternalServerError && (strings.Contains(err.Error(), "non-fast-forward") ||
+			strings.Contains(err.Error(), "out of date") ||
+			strings.Contains(err.Error(), "PushRejected Error:") && strings.Contains(err.Error(), "(incorrect old value provided)")))
 }
 
 func (g *Git) post(ctx context.Context, who Author, msg string, files []map[string]any) (string, int, error) {

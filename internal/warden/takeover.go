@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	coordinationclient "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	"sigs.k8s.io/yaml"
 
 	"wecolab.io/wecolab/api/v1alpha1"
@@ -25,7 +26,25 @@ var (
 // follows. The copy is opened for the Console's commits first (Forgejo's branch protection) and closed
 // again if the commit fails. The Console's Settings page calls it, and so does `warden takeover` on a
 // steward's manager when no Console can be reached (docs/operations.md, "The writer").
-func TakeOver(ctx context.Context, g *fabric.Git, site string, peers *Peers, who fabric.Author) (int, error) {
+func TakeOver(ctx context.Context, g *fabric.Git, site string, peers *Peers, who fabric.Author, coordination coordinationclient.CoordinationV1Interface) (int, error) {
+	var epoch int
+	err := withWriterLock(ctx, coordination, func(ctx context.Context) error {
+		pending, err := readRecreation(ctx, coordination)
+		if err != nil {
+			return err
+		}
+		if pending != nil {
+			return errors.New("writer takeover refused: repository recreation journal pending")
+		}
+		epoch, err = takeOverLocked(ctx, g, site, peers, who)
+		return err
+	})
+	return epoch, err
+}
+
+// takeOverLocked reads authorization and the authoritative claim, changes protection, and
+// either commits the new writer or closes the copy again, all under the local lease.
+func takeOverLocked(ctx context.Context, g *fabric.Git, site string, peers *Peers, who fabric.Author) (int, error) {
 	b, ok, err := g.Read(ctx, SettingsPath)
 	if err != nil {
 		return 0, err
@@ -61,31 +80,26 @@ func TakeOver(ctx context.Context, g *fabric.Git, site string, peers *Peers, who
 		return 0, ErrNotSteward
 	}
 	epoch++
-	for try := 0; try < 2; try++ {
-		if err = g.Protect(ctx, []string{ForgejoMirror, ForgejoOwner}); err != nil {
-			return 0, fmt.Errorf("open this copy for commits: %w", err)
-		}
-		_, err = g.Edit(ctx, who, fmt.Sprintf("the writer is now %s (epoch %d)", site, epoch), []string{SettingsPath}, func(s *fabric.Snapshot) ([]fabric.FileChange, error) {
-			b, _ := s.Get(SettingsPath)
-			cm := &corev1.ConfigMap{}
-			if err := yaml.Unmarshal(b, cm); err != nil {
-				return nil, err
-			}
-			cur, err := ParseSettings(cm.Data)
-			if err != nil {
-				return nil, err
-			}
-			if cur.Writer == site || cur.Epoch >= epoch {
-				return nil, fabric.ErrConflict // the writer changed meanwhile
-			}
-			cm.Data["writer"], cm.Data["epoch"] = site, strconv.Itoa(epoch)
-			out, err := yaml.Marshal(cm)
-			return []fabric.FileChange{{Path: SettingsPath, Content: append([]byte("# The fabric's settings (docs/architecture.md). Changing the writer raises the epoch.\n"), out...)}}, err
-		})
-		if err == nil || !strings.Contains(err.Error(), " 403 ") { // protection can take a moment to apply
-			break
-		}
+	if err := g.Protect(ctx, []string{ForgejoMirror, ForgejoOwner}); err != nil {
+		return 0, fmt.Errorf("open this copy for commits: %w", err)
 	}
+	_, err = g.Edit(ctx, who, fmt.Sprintf("the writer is now %s (epoch %d)", site, epoch), []string{SettingsPath}, func(s *fabric.Snapshot) ([]fabric.FileChange, error) {
+		b, _ := s.Get(SettingsPath)
+		cm := &corev1.ConfigMap{}
+		if err := yaml.Unmarshal(b, cm); err != nil {
+			return nil, err
+		}
+		cur, err := ParseSettings(cm.Data)
+		if err != nil {
+			return nil, err
+		}
+		if cur.Writer == site || cur.Epoch >= epoch {
+			return nil, fabric.ErrConflict // the writer changed meanwhile
+		}
+		cm.Data["writer"], cm.Data["epoch"] = site, strconv.Itoa(epoch)
+		out, err := yaml.Marshal(cm)
+		return []fabric.FileChange{{Path: SettingsPath, Content: append([]byte("# The fabric's settings (docs/architecture.md). Changing the writer raises the epoch.\n"), out...)}}, err
+	})
 	if err != nil {
 		if perr := g.Protect(ctx, []string{ForgejoMirror}); perr != nil {
 			return 0, fmt.Errorf("%w (and this copy could not be closed again: %v)", err, perr)

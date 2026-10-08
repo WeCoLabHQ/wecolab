@@ -73,6 +73,7 @@ import WeCoLabCore
 
     private let vm = NodeVM()
     private var lock: Int32?
+    private var modeError = false
 
     init() {
         Task {
@@ -85,7 +86,14 @@ import WeCoLabCore
 
     func refresh() async {
         await vm.reserve(memoryGiB: config.memoryGiB)  // live: the balloon follows the Memory slider
-        await vm.tick()
+        do {
+            try await vm.tick()
+            let running = await vm.isRunning
+            if modeError && running { message = ""; modeError = false }
+        } catch {
+            message = "Mode publication failed: \(error.localizedDescription)"
+            modeError = true
+        }
         vmState = await vm.state
         mode = await vm.mode
         (guest, disk) = await Task.detached { (GuestStatus.read(), Provision.guest()) }.value  // the guest's files, off the main actor
@@ -109,8 +117,10 @@ import WeCoLabCore
             message = ""
         } catch {
             message = error.localizedDescription
-            if let lock { VMLock.release(lock) }
-            lock = nil
+            if !(await vm.isRunning) {
+                if let lock { VMLock.release(lock) }
+                lock = nil
+            }
         }
         await refresh()
     }

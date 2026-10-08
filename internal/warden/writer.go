@@ -2,7 +2,6 @@ package warden
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	coordinationclient "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
@@ -61,28 +61,24 @@ const settingsHeader = "# The fabric's settings (docs/architecture.md). Changing
 // that cannot recover to be rebuilt, makes the planned moves' steps (Handovers), and deletes vaults' old
 // keys once every site has the new one (retire).
 type Writer struct {
-	Client client.Client
-	Site   string
-	Git    *fabric.Git // this site's copy
-	Peers  *Peers
-	HTTP   *http.Client // to other sites' Warden; nil: a short timeout
+	Client       client.Client
+	APIReader    client.Reader // uncached lifecycle observations; nil uses Client
+	Site         string
+	Git          *fabric.Git // this site's copy
+	Peers        *Peers
+	Coordination coordinationclient.CoordinationV1Interface // local writer transition lease
+	HTTP         *http.Client                               // to other sites' Warden; nil: a short timeout
 
+	syncMu  sync.Mutex // only Run/Sync recovers an uncertain repository deletion
 	mu      sync.Mutex
 	reseeds map[string]time.Time
-	mirrors map[string]mirrorState // push mirrors this Warden set up, by remote
-	notes   map[string]string      // what each vault's old keys wait for, as last logged
-}
-
-// mirrorState is how this Warden last set up a push mirror: with which password, and when.
-type mirrorState struct {
-	password [32]byte
-	at       time.Time
+	notes   map[string]string // what each vault's old keys wait for, as last logged
 }
 
 // Claim is who a site follows as writer, and at which epoch.
 type Claim struct {
-	Writer string
-	Epoch  int
+	Writer string `json:"writer"`
+	Epoch  int    `json:"epoch"`
 }
 
 // Effective is the writer everyone should follow: the highest epoch claimed by a steward, then the
@@ -119,13 +115,30 @@ func (w *Writer) Run(ctx context.Context, every time.Duration) {
 
 // Sync does one pass.
 func (w *Writer) Sync(ctx context.Context) error {
-	// A Recreate cut short, or a Forgejo installed again, leaves a copy that answers 404 to everything
-	// below, which would pass for success.
-	if err := w.Git.Ensure(ctx, ForgejoMirror); err != nil {
-		return fmt.Errorf("this copy of the Fabric: %w", err)
-	}
-	own, err := GitClaim(ctx, w.Git)
-	if err != nil {
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	var own Claim
+	recovered := false
+	err := withWriterLock(ctx, w.Coordination, func(ctx context.Context) error {
+		journal, err := readRecreation(ctx, w.Coordination)
+		if err != nil {
+			return err
+		}
+		if journal != nil {
+			recovered = true
+			return w.recoverRecreation(ctx, *journal)
+		}
+		// Ensure must not race an uncertain DELETE or create a replacement
+		// while old Forgejo filesystem work may still be running.
+		if err := w.Git.Ensure(ctx, ForgejoMirror); err != nil {
+			return fmt.Errorf("this copy of the Fabric: %w", err)
+		}
+		own, err = GitClaim(ctx, w.Git)
+		return err
+	})
+	if err != nil || recovered {
 		return err
 	}
 	sites := &v1alpha1.SiteList{}
@@ -143,10 +156,34 @@ func (w *Writer) Sync(ctx context.Context) error {
 		}
 	}
 	eff := Effective(own, claims, stewards)
-	if eff.Writer == w.Site {
-		return w.lead(ctx, sites.Items, own)
+	lead := false
+	err = withWriterLock(ctx, w.Coordination, func(ctx context.Context) error {
+		if journal, err := readRecreation(ctx, w.Coordination); err != nil {
+			return err
+		} else if journal != nil {
+			return fmt.Errorf("repository recreation pending")
+		}
+		if err := w.quiesceMirrors(ctx); err != nil {
+			return err
+		}
+		// Discovery and the rollout barrier may outlive a takeover or push.
+		current, err := GitClaim(ctx, w.Git)
+		if err != nil || current != own {
+			return err
+		}
+		if eff.Writer == w.Site {
+			if err := w.admitLead(ctx, own); err != nil {
+				return err
+			}
+			lead = true
+			return nil
+		}
+		return w.follow(ctx, sites.Items, eff.Writer, stewards[w.Site], own.Writer == w.Site)
+	})
+	if err != nil || !lead {
+		return err
 	}
-	return w.follow(ctx, sites.Items, eff.Writer, stewards[w.Site], own.Writer == w.Site)
+	return w.lead(ctx, sites.Items, own)
 }
 
 // GitClaim is who a copy of the Fabric names as the writer; nothing while the copy is empty. It is what
@@ -169,10 +206,6 @@ func GitClaim(ctx context.Context, g *fabric.Git) (Claim, error) {
 	return c, nil
 }
 
-func forgejoURL(ip string) string {
-	return "http://" + net.JoinHostPort(ip, strconv.Itoa(nebula.PortForgejo)) + "/" + ForgejoOwner + "/fabric.git"
-}
-
 // mirrorPassword is a site's Forgejo mirroring password, "" until its secret has reached this site.
 func (w *Writer) mirrorPassword(ctx context.Context, site string) string {
 	s := &corev1.Secret{}
@@ -182,170 +215,45 @@ func (w *Writer) mirrorPassword(ctx context.Context, site string) string {
 	return string(s.Data[KeyMirror])
 }
 
-// fresh is whether a push mirror can stay: this Warden set it up with the site's password as it is
-// now, and it has not been failing for long. Anything else is set up again, which is what repairs a
-// mirror after a password change or a site's Forgejo installed anew.
-func (w *Writer) fresh(pm fabric.PushMirror, password string, now time.Time) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	st, ok := w.mirrors[pm.Remote]
-	return ok && st.password == sha256.Sum256([]byte(password)) && (pm.LastError == "" || now.Sub(st.at) < 10*time.Minute)
-}
-
-// lead: admit the Console, push to every other copy, revoke, ask for rebuilds, make the handovers'
-// steps, retire vaults' old keys. own is what this copy names the writer: empty while it lacks the
-// Fabric's settings.
-func (w *Writer) lead(ctx context.Context, sites []v1alpha1.Site, own Claim) error {
+// admitLead opens the copy for Console commits only when it holds the Fabric. Call under
+// the local writer transition lease, after re-reading the claim.
+func (w *Writer) admitLead(ctx context.Context, own Claim) error {
+	if journal, err := readRecreation(ctx, w.Coordination); err != nil {
+		return err
+	} else if journal != nil {
+		return fmt.Errorf("repository recreation pending")
+	}
 	head, err := w.Git.Head(ctx)
 	if err != nil {
 		return err
 	}
-	// Only a copy that holds the Fabric admits the Console and pushes: a commit into an emptied copy
-	// would be a new root that every other copy starts over from, and Flux would then prune everything.
-	holds := head != "" && own.Writer != ""
+	// An emptied copy cannot accept a new root: Flux would prune the Fabric.
 	pushers := []string{ForgejoMirror}
-	if holds {
+	if head != "" && own.Writer == w.Site {
 		pushers = append(pushers, ForgejoOwner)
 	}
 	if err := w.Git.Protect(ctx, pushers); err != nil {
 		return fmt.Errorf("protect main: %w", err)
 	}
-	// The planned moves' steps first, and whatever else fails: a move waits on neither a site's push
-	// mirror nor the stewards' certificate lists, and while it waits the app has no writable primary.
-	return errors.Join((&Handovers{Client: w.Client, Site: w.Site, Git: w.Git, Peers: w.Peers}).Steps(ctx),
-		w.mirror(ctx, sites, holds), w.revoke(ctx, sites), w.reseed(ctx), w.retire(ctx))
+	return nil
 }
 
-// mirror keeps a push mirror to every other site's copy while this copy holds the Fabric, and none
-// otherwise.
-func (w *Writer) mirror(ctx context.Context, sites []v1alpha1.Site, holds bool) error {
-	want := map[string]string{} // remote -> site
-	for _, site := range sites {
-		if m := site.Manager(); m != nil && site.Name != w.Site && holds {
-			want[forgejoURL(m.IP)] = site.Name
-		}
-	}
-	have, err := w.Git.PushMirrors(ctx)
-	if err != nil {
-		return err
-	}
-	now := time.Now()
-	for _, pm := range have {
-		if site, ok := want[pm.Remote]; ok && pm.Filter == "main" {
-			if pw := w.mirrorPassword(ctx, site); pw == "" || w.fresh(pm, pw, now) {
-				delete(want, pm.Remote)
-				continue
-			}
-		}
-		if err := w.Git.DeletePushMirror(ctx, pm.Name); err != nil {
-			return err
-		}
-	}
-	remotes := make([]string, 0, len(want))
-	for r := range want {
-		remotes = append(remotes, r)
-	}
-	sort.Strings(remotes)
-	added, errs := false, []error{}
-	for _, r := range remotes {
-		pw := w.mirrorPassword(ctx, want[r])
-		if pw == "" {
-			continue // the site's password has not reached this copy yet
-		}
-		if err := w.Git.AddPushMirror(ctx, r, ForgejoMirror, pw, "main"); err != nil {
-			errs = append(errs, fmt.Errorf("push to %s: %w", want[r], err)) // the other sites still get theirs
-			continue
-		}
-		w.mu.Lock()
-		if w.mirrors == nil {
-			w.mirrors = map[string]mirrorState{}
-		}
-		w.mirrors[r] = mirrorState{password: sha256.Sum256([]byte(pw)), at: now}
-		w.mu.Unlock()
-		log.FromContext(ctx).Info("pushing the Fabric to a site", "site", want[r])
-		added = true
-	}
-	if added { // a new or returning copy gets the history now, not at the next interval
-		errs = append(errs, w.Git.SyncPushMirrors(ctx))
-	}
-	return errors.Join(errs...)
-}
-
-const supersededFilter = "superseded-*"
-
-// follow: admit only the writer's pushes. A copy whose head is not on the writer's main cannot take
-// them (Forgejo refuses a force push to a protected branch), so it starts over from the writer's
-// history: a steward first keeps its commits on the writer as a branch; any other site's were never the
-// fabric's, since only stewards write. Nothing starts over from a writer whose copy is empty, nor, unless
-// the writer holds its head, a copy that names this site the writer (claimed): its history may be the
-// fabric's newest, whatever the steward flags say.
-func (w *Writer) follow(ctx context.Context, sites []v1alpha1.Site, writer string, steward, claimed bool) error {
-	if err := w.Git.Protect(ctx, []string{ForgejoMirror}); err != nil {
-		return fmt.Errorf("protect main: %w", err)
-	}
-	var wm *v1alpha1.Box
-	for i := range sites {
-		if sites[i].Name == writer {
-			wm = sites[i].Manager()
-		}
-	}
-	aside := "" // where a steward keeps its commits aside: the writer's copy
-	if wm != nil && steward {
-		aside = forgejoURL(wm.IP)
-	}
-	have, err := w.Git.PushMirrors(ctx)
-	if err != nil {
-		return err
-	}
-	kept := false
-	for _, pm := range have {
-		if pm.Remote == aside && pm.Filter == supersededFilter {
-			kept = true
-			continue
-		}
-		if err := w.Git.DeletePushMirror(ctx, pm.Name); err != nil {
-			return err
-		}
-	}
+// lead does maintenance outside the writer transition lease. It must not delay a takeover.
+func (w *Writer) lead(ctx context.Context, sites []v1alpha1.Site, own Claim) error {
 	head, err := w.Git.Head(ctx)
-	if err != nil || wm == nil || head == "" {
+	if err != nil {
 		return err
 	}
-	at, err := w.ask(ctx, wm.IP, head)
-	if err != nil || at.Head == "" || at.OnMain {
-		return err // on the writer's main, its pushes fast-forward this copy
-	}
-	if steward && !at.Has {
-		branch := "superseded-" + w.Site + "-" + head[:min(12, len(head))] // the same branch every pass
-		if err := w.Git.Branch(ctx, branch); err != nil || kept {
-			return err
-		}
-		pw := w.mirrorPassword(ctx, writer)
-		if pw == "" {
-			return nil
-		}
-		log.FromContext(ctx).Info("this copy went its own way; keeping its commits on the writer as a branch", "branch", branch, "writer", writer)
-		if err := w.Git.AddPushMirror(ctx, aside, ForgejoMirror, pw, supersededFilter); err != nil {
-			return err
-		}
-		return w.Git.SyncPushMirrors(ctx)
-	}
-	if claimed && !at.Has {
-		log.FromContext(ctx).Info("this copy names this site the writer, but a steward's claim wins and lacks its commits; keeping them until a person decides", "head", head, "writer", writer)
-		return nil
-	}
-	if now, err := w.Git.Head(ctx); err != nil || now != head {
-		return err // a push arrived meanwhile: look again next pass
-	}
-	log.FromContext(ctx).Info("this copy is not on the writer's history; starting over from it", "head", head, "writer", writer)
-	return w.Git.Recreate(ctx, ForgejoMirror)
+	// Moves wait on neither replication nor certificate lists.
+	return errors.Join((&Handovers{Client: w.Client, Site: w.Site, Git: w.Git, Peers: w.Peers}).Steps(ctx),
+		w.replicate(ctx, sites, head, own), w.revoke(ctx, sites), w.reseed(ctx), w.retire(ctx))
 }
 
-// CopyAnswer is what a site's Warden says about its copy of the Fabric, asked about a commit.
+// CopyAnswer is an ancestry observation, never a custody receipt.
 type CopyAnswer struct {
-	Head   string `json:"head"`   // main's commit, "" while the copy is empty
-	OnMain bool   `json:"onMain"` // the commit is one of main's (newest) commits
-	Has    bool   `json:"has"`    // the commit is anywhere in the copy, a kept-aside branch included
+	Head   string `json:"head"`
+	OnMain bool   `json:"onMain"`
+	Claim  Claim  `json:"claim"`
 }
 
 // onMainDepth is how far back a follower's head counts as merely behind.
@@ -356,10 +264,13 @@ var (
 	nebulaFingerprint = regexp.MustCompile(`^[0-9a-f]{64}$`) // a certificate's SHA-256
 )
 
-// ServeHTTP answers GET /fabric/commits/<sha> on the status port, from this site's copy: its head, and
-// whether the commit is on main or anywhere. Followers ask the writer this before they keep their
-// commits aside or start over; they need no account on the writer's Forgejo for it.
+// ServeHTTP exposes ancestry observations and receiver-serialized preservation
+// on the manager-only Nebula status surface.
 func (w *Writer) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/fabric/preserve" && r.Method == http.MethodPost {
+		w.servePreservation(rw, r)
+		return
+	}
 	sha, ok := strings.CutPrefix(r.URL.Path, "/fabric/commits/")
 	if !ok || r.Method != http.MethodGet || !commitID.MatchString(sha) {
 		http.NotFound(rw, r)
@@ -368,9 +279,9 @@ func (w *Writer) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var a CopyAnswer
 	var err error
-	if a.Head, err = w.Git.Head(ctx); err == nil {
-		if a.OnMain, err = w.Git.OnMain(ctx, sha, onMainDepth); err == nil {
-			a.Has, err = w.Git.HasCommit(ctx, sha)
+	if a.Head, err = w.Git.Head(ctx); err == nil && a.Head != "" {
+		if a.Claim, err = claimAt(ctx, w.Git, a.Head); err == nil {
+			a.OnMain, err = w.Git.OnMain(ctx, sha, onMainDepth)
 		}
 	}
 	if err != nil {

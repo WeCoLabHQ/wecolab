@@ -59,6 +59,16 @@ spec:
                   <db>-<site>-g<n> from generation 2. A new generation rebuilds that site's database from the
                   vault; Object Lock never empties the old one.
                 type: object
+              archiveID:
+                description: |-
+                  ArchiveID identifies this database incarnation. Legacy databases migrate to
+                  their existing Database prefix; new databases use id-<128 random bits>.
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+                x-kubernetes-validations:
+                - message: archiveID is immutable
+                  rule: self == oldSelf
               database:
                 description: Database is the CloudNativePG Cluster in the app's folder,
                   if any.
@@ -69,6 +79,39 @@ spec:
                   the writer then removes the App from the Fabric. An App that is merely missing from Git never
                   deletes data (R4); this is the only way a commit does.
                 type: boolean
+              force:
+                description: Force records the latest operator-asserted fencing decision,
+                  not physical proof.
+                properties:
+                  actor:
+                    type: string
+                  at:
+                    format: date-time
+                    type: string
+                  evidence:
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                  from:
+                    type: string
+                  id:
+                    type: string
+                  method:
+                    enum:
+                    - power-off
+                    - write-path-isolated
+                    type: string
+                  to:
+                    type: string
+                required:
+                - actor
+                - at
+                - evidence
+                - from
+                - id
+                - method
+                - to
+                type: object
               handover:
                 description: Handover is a planned primary change in progress (docs/plans/2026-09-29-hardening.md,
                   R1).
@@ -102,6 +145,43 @@ spec:
                 maxLength: 63
                 pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              restoreVerification:
+                description: |-
+                  RestoreVerification is operator-recorded evidence of an actual data readback.
+                  It is never inferred from a completed backup or recipe certification.
+                properties:
+                  actor:
+                    type: string
+                  archiveID:
+                    type: string
+                  backupID:
+                    type: string
+                  completedAt:
+                    format: date-time
+                    type: string
+                  evidenceSHA256:
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                  scope:
+                    enum:
+                    - database
+                    - database-and-files
+                    type: string
+                  systemID:
+                    type: string
+                  timeline:
+                    format: int32
+                    type: integer
+                required:
+                - actor
+                - archiveID
+                - backupID
+                - completedAt
+                - evidenceSHA256
+                - scope
+                - systemID
+                - timeline
+                type: object
               rpo:
                 description: RPO is the most data the owner accepts to lose; reported
                   against the vault's newest WAL.

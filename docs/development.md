@@ -27,11 +27,14 @@ website/               the public-facing Astro site and searchable source docume
 ## Build and test
 
 ```bash
-make test        # go vet, the join.sh copy, unit tests
-make build       # bin/warden and bin/console for this machine
-make dist        # Linux binaries of both for amd64 and arm64; install.sh turns them into images
-make crds        # regenerate api/'s deep copies and internal/bootstrap/template/crds
-cd mac && make test   # WeCoLab for Mac
+cmp install.sh cmd/console/join.sh  # non-mutating embed gate: run BEFORE make test/dist/join
+bash -n install.sh && bash -n cmd/console/join.sh && bash -n hack/release.sh
+go vet ./...
+go test -race -count=1 ./...
+make dist                         # Linux amd64 and arm64 binaries, mutates join.sh if stale
+python3 -m unittest discover -s hack -p 'test_catalog_import.py'
+cd mac && swift test               # arm64 macOS 14+ (CI uses macOS 15)
+make crds                          # regenerate api deep copies and bundled CRDs after API changes
 ```
 
 The decisions that must never go wrong are pure functions with table tests: an app's role at a site and
@@ -43,11 +46,12 @@ gets (`internal/nebula`, `CertService.Bundle`), and the files an app's folder ho
 an old copy of Git) through those functions and checks that no two sites may promote for one history, that
 nothing is destroyed without proof, and that every move completes once all sites are up.
 
-Contract tests hold the layers together: every `fetch` in the Console's page names a registered route
-(`cmd/console/page_test.go`); install.sh reads only fields the join response has, and its firewall, SSH-key,
-k3s and sync functions are run in bash against stubs (`cmd/console/join_test.go`); the Door's configuration
-is generated from hostile names (`internal/warden/entrance_test.go`); the Console's handlers run against an
-in-memory Forgejo that refuses stale hashes like the real one (`cmd/console/fabric_test.go`).
+Behavioral contracts exercise HTTP handlers, conditional Git writes, shell functions and
+data consumers. Installer firewall/SSH/k3s/sync functions run against disposable filesystem
+and command boundaries (`cmd/console/join_test.go`); the Door is generated from hostile
+names; Console handlers use a Forgejo fixture that refuses stale hashes. Browser flows
+must also be exercised on the actual embedded page. Source-text/wording assertions are
+not substitutes for executing these paths.
 
 ## The website
 
@@ -80,11 +84,13 @@ below.
 ## The catalog
 
 `cmd/console/web/catalog.json` is the Console's catalog ([console.md](console.md#the-catalog)), embedded in
-the binary. It is generated from a checkout of HomelabOS by `hack/catalog-import.py`, which puts WeCoLab's own
-entries, `hack/catalog-own.json` (the Workspace), first. With jinja2 and pyyaml installed:
+the binary. `hack/catalog-import.py` generates it from the pinned HomelabOS checkout,
+then applies `hack/catalog-own.json` and `hack/catalog-certifications.json`.
+Use Python 3.14 with Jinja2 3.1.6, PyYAML 6.0.3 and MarkupSafe 3.0.4:
 
 ```bash
 python3 hack/catalog-import.py /path/to/HomelabOS > cmd/console/web/catalog.json
+python3 -m unittest discover -s hack -p test_catalog_import.py
 ```
 
 It renders each role's `service.yml` and compose template with stubbed Ansible variables and translates the
@@ -93,28 +99,42 @@ data path, and what is host incompatible (`unsupported`, refused by the Console)
 `validated` and `limitations` come from HomelabOS's `docs/development/service-validation-results.json`. The
 file records `source` (the HomelabOS repository and branch, which the script names, and the commit it read),
 `generated` (when) and `failed` (roles the import could not render, with the error). The current file is
-from commit `411f2c6` of branch `feat/service-batch`, generated 2026-09-28: 226 entries, one failed.
+from commit `411f2c6802a73aaf5517ed3b3ff01a083312d5c9` of `feat/service-batch`:
+227 entries including Workspace, 183 import-deployable, 44 PostgreSQL entries, 201
+main-volume entries and one failed upstream role (`zammad`). Database URI identity is
+resolved before sidecar host localization; main/sidecar volume scope is retained.
+There are zero WeCoLab-passed lifecycle certifications. Importer tests do not certify
+upstream images, and modified image/architecture identities cannot inherit old evidence.
 
 ## A whole fabric on one laptop
 
 `hack/dev` runs a fabric in Docker: three boxes as privileged Ubuntu 24.04 containers running systemd,
 on a Docker network that stands in for the internet, plus S3-compatible object storage for the vault.
+The box entrypoint marks its own mount namespace shared before systemd starts, including
+after container restart, so the laptop node agent can use Kubernetes bidirectional mounts.
 
 | Container | Plays |
 |---|---|
-| `wcl-pub` | the first site: public, steward, writer |
-| `wcl-home` | a second site, a steward, behind "NAT" (it has no route in except through Nebula) |
-| `wcl-mac` | a node of `home`, joined as a laptop |
-| `wcl-vault` | object storage with Object Lock (SeaweedFS; bucket `wecolab-dev`, keys in `hack/dev/s3.json`) |
+| `<prefix>-pub` | the first site: public, steward, writer |
+| `<prefix>-home` | a second site, steward, behind "NAT" |
+| `<prefix>-mac` | a node of `home`, joined as a laptop |
+| `<prefix>-vault` | isolated emulator; not proof of real-provider compliance |
 
 ```bash
-make dev-up      # build binaries, start the containers, install pub, join home and mac
-make dev-test    # the end-to-end checks below; FROM=4 hack/dev/test.sh starts at step 4
-make dev-down    # remove everything
+export WECOLAB_DEV_PREFIX="a3-$(openssl rand -hex 6)"
+export WECOLAB_DEV_OWNER="$(openssl rand -hex 16)"
+export WECOLAB_DEV_SUBNET=198.19.44.0/24  # choose a /24 not used by any existing network
+make dev-up      # privileged disposable containers only
+make dev-test    # includes uninstall; FROM=4 hack/dev/test.sh resumes from step 4
+make dev-down    # removes only this prefix's matching owner-labelled resources
 hack/dev/fabric.sh reload       # rebuild Warden and the Console and restart them at every site
 hack/dev/fabric.sh shell home   # a root shell on a box
 hack/dev/fabric.sh console GET /api/state   # the Console's API as the owner, through the Door
 ```
+
+Keep the same owner/prefix/subnet for the whole run. Missing ownership or a conflicting
+resource is a hard refusal. Existing `wcl-*` resources are not disposable test targets.
+No runner is authorized to prune Docker to recover disk or adopt another owner's lab.
 
 The boxes run the same `install.sh` as real boxes. `WECOLAB_DEV=1` changes only what a
 laptop cannot provide:
@@ -131,7 +151,7 @@ laptop cannot provide:
 binaries instead of cloning WeCoLab and building it on the box. The other boxes download the images from its
 Console, as real boxes do (decision 13).
 
-The fabric needs about 15 GB free in Docker's disk.
+Full acceptance requires at least 30 GiB free in Docker's backing store; allow headroom beyond the initial fabric's footprint.
 
 `make dev-test` checks, in order:
 
@@ -140,14 +160,138 @@ The fabric needs about 15 GB free in Docker's disk.
    the Door;
 3. a planned switchover to `home` completes with the token handed over (while it is in flight `pub`
    replays its own archive and stays demoted at one token), the Door follows, and back again;
-4. a forced move, made during a planned one, rebuilds the old primary's database from the vault under a new
-   generation;
+4. a forced move after independently fencing the old database and powering off its site
+   rebuilds the old primary's database from the vault under a new generation;
 5. deleting the app removes it and its data at both sites;
 6. every box renews its certificate before it expires;
 7. `home` takes over as writer, commits, and `pub` follows; `pub` takes it back with `install.sh takeover`;
    then removing the laptop's box puts its certificate on the blocklist at every site;
 8. `install.sh uninstall` leaves every box as it was before WeCoLab (`hack/dev/snap.sh` records each box
    when it starts; the fabric is gone afterwards, so run `make dev-up` again).
+
+A takeover response confirms the local claim, not convergence of every site or the
+public Console. Before the next mutation, the suite waits for the expected writer
+and epoch at both sites and through the public Console. While the old site is
+deliberately powered off, it checks the survivor's private Console instead.
+Late writes to a former writer are retained as superseded history, not merged into
+the winning branch.
+
+### Recovery scenario evidence
+
+`hack/dev/recovery.sh --help` lists the A3 scenarios: `failed-backup`, `recreate`,
+`partition`, `replay-lag`, `rotation`, `remote-storage`, `name-race`, `host-failure`,
+`provider-contract`, `recipe-lifecycle` and `upgrade`. Run each against the separately
+created owner-labelled fabric **before** the uninstall-containing `make dev-test`.
+The JSON artifact records identity, component versions, operations and exact checksum
+readbacks; nonzero/failed is never a certification. A successful mock or emulator call is
+not a real provider retention result.
+
+Restore readbacks pin CNPG's `recoveryTarget.backupID` to the backup in the artifact;
+component versions come from the running Warden executable and restored PostgreSQL.
+The failed-backup drill temporarily denies S3 `PutObject` only for the run's current
+site archive at `dev/<app>/<archive>/base/*/*.tar*`. Barman must publish `FAILED`
+metadata and CNPG must report a failed Backup. The policy leaves `backup.info`,
+WAL and other apps' archives writable, and prevents queued backups from quietly
+replacing the failed-only archive before destructive-rebuild refusal is observed.
+The exact prior bucket policy is restored in `finally`, before a successful retry.
+This avoids long throttled uploads exhausting the pinned Barman sidecar's memory.
+Calls on `pub` use the public HTTPS Console. Calls inside the private `home` site use
+its Nebula-bound Console NodePort, not a nonexistent loopback HTTPS listener.
+
+The host-failure drill waits for the resumed box to appear in the Console's
+Flux-backed registration view before requiring exactly one new box. It does not
+replay enrollment when that view lags a successful installer exit. Use a separate
+owner-labelled guest with installer-generated firewall units and a pre-existing,
+loaded AppArmor profile; uninstall must restore both its bytes and load state.
+
+Before powering off the old primary, force drills set CNPG's persistent
+`cnpg.io/fencedInstances=["*"]` annotation on its exact old Cluster using
+`--field-manager=flux-client-side-apply`. Default kubectl annotations are removed
+by Flux reconciliation. The runner explicitly reconciles Flux, then verifies the
+annotation and that `pg_ctl status` reports no running server. The fence must survive
+pod/container startup; it is not cleared to rejoin. While the old Cluster remains, the
+rejoin wait checks its annotation and postmaster; an observed missing fence powers the
+old site off and fails the drill, even if a later replacement could have succeeded.
+The replacement needs a new UID and must be an unfenced standby. The failed-backup
+drill explicitly reconciles Flux three times after `RebuildWaiting`, checking the
+stopped old postmaster each time without reapplying its annotation. A lost fence after
+reconciliation fails immediately and powers off the old site; a later annotation
+reapplication cannot conceal it. Warden preserves the retained incarnation's existing
+replica settings so CNPG's demotion cleanup cannot remove the fence. Failed force
+recovery does not automatically restart the old primary.
+See [CNPG 1.30 fencing](https://cloudnative-pg.io/docs/1.30/fencing/).
+
+Forced-promotion readbacks compare every original sentinel row and marker, separately
+accounting for optional partition writes and required survivor writes. Replay-lag evidence
+requires a fresh measured `within-objective` baseline, `outside-objective` while paused,
+and a new `within-objective` observation after resume; exporter errors or `unknown`
+cannot pass this transition. After promotion, it checks the rebuilt standby's timeline
+and original rows, and records the automatically completed new-timeline backup before
+requesting a manual backup on the promoted primary.
+
+Safe local checks, requiring no Docker lab or credentials:
+
+```bash
+hack/dev/recovery.sh --help
+python3 -m unittest discover -s hack/dev -p test_recovery_runner.py
+env -u WECOLAB_DEV_PREFIX -u WECOLAB_DEV_OWNER hack/dev/recovery.sh recreate
+# Last command MUST refuse with nonzero status and a failed evidence artifact.
+```
+
+Full acceptance uses the CI prerequisite of at least **30 GiB free in Docker's backing
+store**, isolated privileged systemd containers and image pulls. `remote-storage`
+additionally needs an authorized amd64/KVM destination; `host-failure` needs a separately
+labelled disposable systemd guest.
+
+The three nested k3s processes also share the Docker VM's inotify instance limit.
+An isolated Colima guest with `fs.inotify.max_user_instances=128` exhausted it while
+starting the laptop's containerd CRI plugin (`failed to create fsnotify watcher:
+too many open files`), despite a 1,048,576 file-descriptor limit. Provision at least
+1,024 inotify instances in the explicitly disposable VM; do not silently tune a
+shared Docker host. The launcher waits for a read-only writer Console response
+before creating its first site, because an available Door is not Console readiness.
+
+`provider-contract` needs explicitly authorized bucket-scoped provider credentials and
+a deliberately denied credential; `rotation` needs a disposable B2 account key. `upgrade`
+requires offline snapshot/recovery material, a verified new binary, staged images, and
+revocation of old writer credentials. Read `--help` for required environment names; never
+supply these secrets to untrusted pull-request jobs or publish unsanitized output.
+
+Additional proof boundaries:
+
+- Provider retention needs a timezone-aware, future `RetainUntilDate` on the exact backup
+  version. An expired/missing deadline fails before the delete probe. `AccessDenied` from
+  the separate denied-delete key is credential-refusal evidence, not by itself proof of
+  an active retention lock.
+- Host recovery reads the steward's exact Kubernetes CA through the guest's `nebula1`
+  before reload injection and after retry, before uninstall. An active Nebula process is
+  insufficient. Workers use their own site's permitted Kubernetes port, not manager-only
+  Warden status.
+- Recipe acceptance also requires `WECOLAB_RECOVERY_RECIPE_PROBE`: an operator-reviewed
+  shell script using that candidate's installed database driver and rendered connection
+  settings. It runs through `sh -s -- <row-id> <marker>` inside every main/sidecar container.
+  Commit that pair to `public.wecolab_recovery(n, marker)` and print only the complete
+  `n|marker` rows ordered by `n`, without headers or credentials. The runner supplies a
+  fresh challenge, independently reads PostgreSQL, and compares both byte streams.
+  A no-op or fabricated stdout cannot satisfy the database write. The harness grants
+  the non-superuser application role SELECT/INSERT on this fixture table. The script's
+  SHA-256, actual container image identities and execution-node architecture are recorded;
+  a missing script or unsupported container fails rather than certifies.
+  The upgrade must advance the observed Deployment identity/generation even when images
+  are unchanged, with all updated replicas ready. The runner exercises the old/upgraded/moved
+  candidate, independently restores its data, then verifies source uninstall. Candidates
+  with unsupported local-only files remain refused.
+- Upgrade schema-report mismatch checks require the specific rejection reason; they are
+  not old-binary downgrade attempts. After completion, a Git mutation using the previously
+  working, now revoked old-writer credential must receive HTTP 401. This exercises the
+  documented credential fence; it does not claim old binaries understand the new schema.
+  The actual old-release/credential-revocation fixture remains required for full acceptance.
+
+The `warden record-restore` consumer validates the completed artifact against fresh
+primary evidence and the current conditional Git revision before recording its scope.
+Run it only after reviewing real restore readbacks, while the lab is still running and
+**before** `make dev-test` uninstalls it. The runner never records a restore automatically;
+arbitrary timestamps are not proof.
 
 ## Trying a fix on a real lab
 
@@ -158,9 +302,9 @@ runs and loads it on every site's manager, without a release:
 LAB_WRITER=root@203.0.113.7 LAB_SITES="me@192.0.2.10 me@192.0.2.11" hack/lab/reload.sh warden console
 ```
 
-The images keep their tag, so nothing else changes; a change to the Fabric's `system/` still needs
-`warden upgrade` (run it in the writer's Warden pod: `kubectl -n wecolab-system exec deploy/wecolab-warden
--- /warden upgrade --version <tag>`). The next release replaces what the script loaded.
+The images keep their tag for a developer-only lab reload; platform changes require an
+operator-staged, reviewable `warden upgrade --stage begin|schemas|migrate|platform|complete`,
+not the old unguarded `warden upgrade`. Do not use a same-tag reload to bypass a maintenance gate.
 
 ## Publishing
 
@@ -181,6 +325,133 @@ per line: the lab's zone and addresses, hostnames, personal names and emails) ap
 name, the message or the author; and no key file, `.env` file or file over 5 MB is present. The terms live
 outside the repository because they are private themselves. GitHub's secret scanning and push protection
 on the public repository are a second check, after the push.
+
+`.gitleaks.toml` retains the default secret rules and classifies one exact non-secret match:
+the credential-free Keycloak JDBC service address in `cmd/console/web/catalog.json`.
+The exception requires both that file and that exact match; it does not exempt the file,
+other values, commit history or publication metadata.
+
+## Candidate releases and upgrade preflight
+
+`.github/workflows/verification.yml` has independent Linux Go/race/shell/amd64+arm64,
+Python 3.14 importer fixture (Jinja2 3.1.6, PyYAML 6.0.3, MarkupSafe 3.0.4), ARM macOS
+Swift/NoCloud ISO and main-only disposable Docker fabric jobs. Importer upstream input is
+`../homelabos` commit `411f2c6802a73aaf5517ed3b3ff01a083312d5c9`; CI uses
+checked-in fixture tests, never a moving upstream branch. Website root/subpath checks stay
+in `website.yml`. The trusted-main integration job requires an **ephemeral, isolated**
+self-hosted Linux x64 runner labelled `wecolab-recovery`, privileged systemd containers,
+a local Docker engine, Python 3, and at least **30 GiB free in Docker's backing store**.
+The gate refuses insufficient space; it never prunes to make room. GitHub's
+[standard runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
+only guarantees 14 GB storage, below the fabric prerequisite, so the workflow does not
+pretend a standard runner is sufficient. Without the provisioned runner the integration
+gate is unavailable, not a pass. Success and failure `result.json` artifacts are retained
+for 30 days.
+
+The development vault is credential-free/emulated. Its presence alone proves neither an
+application-data restore nor B2 compliance retention, production S3 dial policy,
+identity-provider enforcement, physical fencing or native Virtualization.framework boot.
+Schedule real-provider retention and real seed/VM/restore drills separately; never give
+pull request jobs provider credentials. Production S3 guard rejects loopback redirect destinations;
+bounded B2 responses permit a later writer tick after a stalled read.
+
+After the private-to-public `hack/publish.sh` privacy gate produces a public snapshot,
+an authorized manual public-main `release.yml` run invokes
+`hack/release.sh build "<public 40-hex commit>" dist/release`: it produces a pinned
+source snapshot tarball, matching installer/VERSION and four Linux binary artifacts
+plus `release.json`, and attests the manifest
+with GitHub Actions OIDC and uploads a **candidate only**. It does not sign with an external
+credential, publish a GitHub Release, provision production, or claim an attestation for an
+unpublished run. `hack/release.sh verify DIR COMMIT` checks manifest completeness, exact
+artifact/platform digests and the GitHub signer workflow/main-ref/source commit before any
+root execution. Intentionally swap an artifact, omit a platform or reject the signer in a
+throwaway checkout to prove refusal. A public GitHub Release and native embedding/actual
+multiarch installs require separate authorization and disposable-system observation.
+
+For an existing fabric: use the **new verified release Warden binary**, invoked on the
+writer manager with a kubeconfig and Forgejo admin/write token; the old container binary
+cannot run this protocol. Snapshot the Fabric and recovery card offline, independently
+inspect each app's **completed** Barman metadata and recent WAL in its *old* archive,
+actually restore a copy into disposable storage and record a data-readback SHA-256.
+Do not treat the old Warden's `LatestBackup` (which could be FAILED) as proof.
+Stop **every old Console and old writer Warden** and revoke their Forgejo write permission
+before begin; keep them fenced until new schema-aware controllers are deployed. A marker
+in Git cannot stop a binary that does not know the marker. If you cannot establish this
+fence or a real restore readback, do not begin. The operator-controlled Forgejo
+credential authorizes the staged Git transaction; prepare a JSON receipt for **every
+existing database app** (empty `apps` only if there are none), listing exactly the
+Git site's inventory and current primary Barman archive namespace:
+
+```json
+{"snapshotSHA256":"<sha256 of offline Fabric snapshot>","recoverySHA256":"<sha256 of recovery card>",
+ "writerFencedAt":"2026-10-06T12:00:00Z","writerFenceMethod":"all old writers stopped; their Forgejo write grant revoked",
+ "sites":["home","public"],
+ "apps":[{"name":"project/app","archive":"legacy-db-home","backupID":"<completed backup ID>",
+          "systemID":"<PostgreSQL system ID>","backupCompletedAt":"2026-10-06T11:00:00Z",
+          "walObservedAt":"2026-10-06T11:55:00Z","restoredAt":"2026-10-06T11:55:00Z",
+          "restoreReadbackSHA256":"<64 lowercase hex from restored data readback>"}]}
+```
+
+Keep the snapshot, recovery card, receipt and environment tokens outside Git, under
+operator-only permissions. A handwritten receipt is an explicit accountable operator
+assertion, not independent evidence that a restoration actually succeeded. For apps
+whose primary is the writer's local site, preflight additionally inspects the live
+S3 archive directly using `VaultOf` and rejects missing/failed backup metadata or
+receipt mismatches; remote primary archives need independent operator readback.
+
+`warden upgrade --stage review` shows the durable gate. With
+`WECOLAB_GIT_URL`, `WECOLAB_GIT_TOKEN` and `KUBECONFIG` set in a private
+operator shell, run the **verified new** Warden on the writer manager:
+
+```bash
+WARDEN="$HOME/wecolab-release/warden-amd64"   # use warden-arm64 on arm64
+"$WARDEN" upgrade --stage begin --snapshot /path/to/offline-fabric-copy \
+  --recovery-material /path/to/offline-recovery-card --backup-proof /path/to/proof.json \
+  --local-site home
+"$WARDEN" upgrade --stage schemas
+"$WARDEN" upgrade --stage migrate --age-key /path/to/writer.agekey
+"$WARDEN" upgrade --stage platform
+"$WARDEN" upgrade --stage complete
+```
+
+`begin` checks the operator fence assertion, recovery-material hashes, exact old
+archive IDs, recent backup/WAL and restoration receipts against App/site inventory
+at one immutable Git commit; duplicate or malformed manifests are refused. It also
+inspects current vault metadata directly for local-primary apps, including exact
+completion time and restore-after-backup chronology. With the `git` executable
+available on the operator's manager, it commits the maintenance marker using a
+Git smart-HTTP expected-old ref update; any intervening inventory commit refuses
+the begin operation instead of admitting an unchecked app or site.
+The trusted operator must check observed
+backup/restore details rather than manufacturing plausible timestamps. Wait for additive
+CRD establishment on every site before `migrate`; stage both architecture images before
+`platform`; and wait for rollout everywhere before `complete`. A missing site report
+blocks completion rather than silently treating mixed versions as compatible.
+The restartable migration backfills old database names as ArchiveIDs, route claims,
+credential versions, coordination revisions and existing CNPG recovery-query manifests.
+Git-only records live under `coordination/`, outside Flux's `fabric/` discovery tree.
+`complete` checks *fresh* site-reported Warden schema versions before admitting
+protected mutations again. Verify post-upgrade authorization, unchanged old archive
+names and a disposable restore/readback before accepting routine new deployments.
+Old binaries cannot safely interpret new ArchiveIDs: after begin, **do not downgrade to an
+old Warden/Console**; restore the pre-migration snapshot and matching old controllers only
+under a fenced, isolated recovery operation if an actual rollback is required.
+
+The on-call release owner should record CNPG, k3s, Nebula, NetBird, Forgejo, Kata, Flux,
+cert-manager, Barman and certified-recipe advisory IDs with affected pinned versions;
+appoint a named human owner per publication, test candidate updates on a disposable
+fabric, notify operators of actionable upgrades and preserve observed outcome evidence.
+No response SLA is implied without a staffed owner.
+
+## Reviews and implementation plans
+
+- [October 5 codebase review](plans/2026-10-05-codebase-review.md): findings, evidence levels,
+  verification limits, and comparative research from September 5–October 5, 2026.
+- [October 6 remediation plan](plans/2026-10-06-review-remediation.md): priorities, dependency order,
+  a complete finding-to-task matrix, implementation status and exercised evidence for the
+  security, recovery, host/macOS and Console/catalog changes; unrun external gates remain explicit.
+- [September 29 hardening plan](plans/2026-09-29-hardening.md): earlier design context, preserved
+  as a historical record rather than overwritten by the later review.
 
 ## Conventions
 

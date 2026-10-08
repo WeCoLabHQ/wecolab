@@ -121,7 +121,8 @@ type sim struct {
 func newSim(t *testing.T, seed int64) *sim {
 	s := &sim{t: t, rng: rand.New(rand.NewSource(seed)), names: []string{"a", "b", "c"}, sites: map[string]*simSite{},
 		vault: map[string]*folder{}, tokens: map[string][]int{}, writer: true}
-	s.git = []v1alpha1.AppSpec{{Sites: s.names, Primary: "a", Workload: "docs", Database: "docs-db"}}
+	s.git = []v1alpha1.AppSpec{{Sites: s.names, Primary: "a", Workload: "docs", Database: "docs-db", ArchiveID: "docs-db"}}
+	s.git[0].RPO.Duration = 5 * time.Minute
 	for _, n := range s.names {
 		s.sites[n] = &simSite{up: true}
 	}
@@ -167,16 +168,25 @@ func (s *sim) report(x string) *SiteStatus {
 		return nil
 	}
 	view := s.git[site.view]
-	st := &SiteStatus{Site: x, DB: map[string]map[string]any{}, Apps: map[string]AppState{}}
+	now := time.Now()
+	st := &SiteStatus{Site: x, Time: now, ReceivedAt: now, DB: map[string]map[string]any{}, Apps: map[string]AppState{}}
 	db, built := site.db.status(), ""
 	if site.db != nil {
 		st.DB["vince/docs-db"], built = db, site.db.server
 	}
 	a := ReportApp(s.app(view, site.status), x, db, built)
+	if site.db != nil && !site.db.stuck {
+		role := "replica"
+		if site.db.primary {
+			role = "primary"
+		}
+		a.Recovery = &RecoveryReport{Samples: []RecoverySample{{ArchiveID: view.ArchiveID, SystemID: "simulation-system", Timeline: 1, Pod: "db-1", Role: role, LSNLow: uint32(len(site.db.hist)), ObservedAt: now}}}
+	}
 	if Serving(view) == x { // its look at its own current archive
 		a.Vault = &VaultStatus{}
 		if s.folder(ArchiveName(s.app(view, site.status), x)).backup {
 			a.Vault.LatestBackup = time.Unix(1, 0)
+			a.Vault.BackupEvidence = &BackupEvidence{Archive: ArchiveName(s.app(view, site.status), x), ID: "20261006T090000", SystemID: "simulation-system", Timeline: 1, BeginWAL: "000000010000000000000001", EndWAL: "000000010000000000000002", CompletedAt: a.Vault.LatestBackup, ObservedAt: now}
 		}
 	}
 	st.Apps["vince/docs"] = a
@@ -215,6 +225,7 @@ func (s *sim) warden(x string, seen map[string]int) {
 	here := Here{Exists: site.db != nil, Created: site.created}
 	if site.db != nil {
 		here.Archive = site.db.server
+		here.Role = site.role
 	}
 	var primary *SiteStatus
 	if here.Exists && here.Archive != ArchiveName(a, x) {

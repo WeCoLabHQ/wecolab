@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -191,6 +192,55 @@ func TestEditRetriesOnConflict(t *testing.T) {
 		if _, err := g.Edit(context.Background(), Author{}, "m", []string{bad}, func(*Snapshot) ([]FileChange, error) { return nil, nil }); err == nil {
 			t.Errorf("path %q accepted", bad)
 		}
+	}
+}
+
+func TestEditRechecksOwnershipAfterForgejoCompareAndSwapRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		message  string
+		conflict bool
+	}{
+		{"compare-and-swap", "PushRejected Error: exit status 1 - ! [remote rejected] commit -> main (incorrect old value provided)", true},
+		{"permission", "PushRejected Error: protected branch permission denied", false},
+		{"repository failure", "repository unavailable", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			posts := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					owner := "unclaimed"
+					if posts != 0 {
+						owner = "winner"
+					}
+					_ = json.NewEncoder(w).Encode(map[string]string{"type": "file", "sha": owner, "content": base64.StdEncoding.EncodeToString([]byte(owner))})
+					return
+				}
+				posts++
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": tc.message})
+			}))
+			defer srv.Close()
+			g := &Git{URL: srv.URL, Token: "t", Repo: "fabric/fabric", HTTP: srv.Client()}
+			claimed := errors.New("route is owned by the concurrent winner")
+			_, err := g.Edit(context.Background(), Author{}, "claim", []string{"route.yaml"}, func(s *Snapshot) ([]FileChange, error) {
+				owner, _ := s.Get("route.yaml")
+				if string(owner) == "winner" {
+					return nil, claimed
+				}
+				return []FileChange{{Path: "route.yaml", Content: []byte("loser")}}, nil
+			})
+			if tc.conflict {
+				if !errors.Is(err, claimed) {
+					t.Fatalf("concurrent ownership was not rechecked: %v", err)
+				}
+			} else if err == nil || errors.Is(err, claimed) || !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("unrelated server failure was not preserved: %v", err)
+			}
+			if posts != 1 {
+				t.Fatalf("attempted to overwrite concurrent owner: %d writes", posts)
+			}
+		})
 	}
 }
 

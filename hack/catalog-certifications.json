@@ -1,0 +1,38 @@
+{
+ "workspace": {
+  "status": "not-tested",
+  "testedImage": "ghcr.io/selkies-project/selkies/desktop:2.0.0-ubuntu26.04",
+  "architecture": "amd64",
+  "testedAt": null,
+  "evidence": "Local amd64/KVM desktop and home volume validation only; cross-site volume recovery not demonstrated.",
+  "databaseRestore": "not-applicable",
+  "volumeRestore": "not-tested",
+  "maintainer": "WeCoLab maintainers",
+  "securityNotices": [],
+  "updateCadence": {"interval": "quarterly", "lastReviewed": null}
+ },
+ "miniflux": {
+  "status": "not-tested",
+  "testedImage": "",
+  "architecture": "",
+  "testedAt": null,
+  "evidence": "Not certified: the imported database URL carries extra semantics that need a reviewed translation; image/deploy/use and database recovery have not been drilled.",
+  "databaseRestore": "not-tested",
+  "volumeRestore": "not-tested",
+  "maintainer": "WeCoLab maintainers",
+  "securityNotices": [],
+  "updateCadence": {"interval": "quarterly", "lastReviewed": null}
+ },
+ "listmonk": {
+  "status": "not-tested",
+  "testedImage": "listmonk/listmonk:v6.2.0",
+  "architecture": "",
+  "testedAt": null,
+  "evidence": "Candidate: imported image has direct CNPG host/port/user/password/name fields and no declared mounts or sidecars. Image architecture, live deploy/use and database restore still require a disposable-fabric drill.",
+  "databaseRestore": "not-tested",
+  "volumeRestore": "not-applicable",
+  "maintainer": "WeCoLab maintainers",
+  "securityNotices": [],
+  "updateCadence": {"interval": "quarterly", "lastReviewed": null}
+ }
+}

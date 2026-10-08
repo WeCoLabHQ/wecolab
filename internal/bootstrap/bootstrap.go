@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -46,8 +48,16 @@ var template_ embed.FS
 var Vendored = map[string]string{
 	"flux":         "https://github.com/fluxcd/flux2/releases/download/v2.9.5/install.yaml",
 	"cert-manager": "https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml",
-	"cnpg":         "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml",
+	"cnpg":         "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/2a35abb4628f209d149825ef3c38011e0701ff2f/releases/cnpg-1.30.1.yaml",
 	"barman":       "https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.15.0/manifest.yaml",
+}
+
+// VendorSHA256 is checked before a fetched manifest becomes deployable platform state.
+var VendorSHA256 = map[string]string{
+	"flux":         "cc3dcd743af16215838b6937e1fce83745bf24c0dcc6c59737c59df15429caaf",
+	"cert-manager": "e03b668ec8675214af6b0a671699d088f2601fa3878e0dbe1b41d3feafd1879f",
+	"cnpg":         "37237f145d8138256ea25ae830f87759255665ff08f8d552fdd8224a5ec032fb",
+	"barman":       "1c483eae12a7424ad28ac66bdfee771b510ee8e234cb8756c3ade7254cef2fad",
 }
 
 // Options are what the install step knows.
@@ -60,6 +70,7 @@ type Options struct {
 	BoxKey                     []byte // the first box's Nebula public key, PEM
 	Dev                        bool
 	LockFlux                   bool // Upgrade: lock down the Flux of a fabric made before the lockdown (keepFlux)
+	SchemaOnly                 bool // Upgrade: first commit additive CRDs without changing running controllers
 	Now                        time.Time
 	Fetch                      func(url string) ([]byte, error) // nil: HTTP
 }
@@ -113,6 +124,18 @@ func Create(o Options, dir string) (*Result, error) {
 	}
 	for p, b := range files {
 		if err := write(filepath.Join(dir, filepath.FromSlash(p)), b); err != nil {
+			return nil, err
+		}
+	}
+	// Fresh fabrics start schema-aware. Legacy fabrics must use the gated staged migration;
+	// an absent gate never silently authorizes old writers.
+	ready, _ := json.Marshal(fabric.UpgradeReport{Phase: "ready", Sites: []string{o.Site}})
+	for name, content := range map[string][]byte{
+		fabric.UpgradePath:           ready,
+		fabric.PlacementRevisionPath: []byte(`{"revision":"0"}`),
+		fabric.MigrationCompletePath: []byte(`{"archiveIDs":true,"routeClaims":true,"keyVersions":true}`),
+	} {
+		if err := write(filepath.Join(dir, filepath.FromSlash(name)), content); err != nil {
 			return nil, err
 		}
 	}
@@ -274,10 +297,23 @@ func Platform(o Options) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if o.SchemaOnly {
+		for name := range files {
+			if !strings.HasPrefix(name, "crds/") {
+				delete(files, name)
+			}
+		}
+		return files, nil
+	}
 	for name, url := range Vendored {
 		b, err := o.Fetch(url)
 		if err != nil {
 			return nil, fmt.Errorf("vendor %s: %w", name, err)
+		}
+		if !o.Dev {
+			if got := fmt.Sprintf("%x", sha256.Sum256(b)); got != VendorSHA256[name] {
+				return nil, fmt.Errorf("vendor %s: SHA-256 mismatch", name)
+			}
 		}
 		if name == "flux" {
 			if b, err = Lockdown(OnlyControllers(b, "source-controller", "kustomize-controller")); err != nil {
@@ -306,11 +342,14 @@ func Upgrade(ctx context.Context, g *fabric.Git, o Options, who fabric.Author) (
 	if err != nil {
 		return "", false, err
 	}
-	flux, _, err := g.Read(ctx, fluxFile)
-	if err != nil {
-		return "", false, err
+	keptFlux = false
+	if !o.SchemaOnly {
+		flux, _, err := g.Read(ctx, fluxFile)
+		if err != nil {
+			return "", false, err
+		}
+		keptFlux = keepFlux(want, flux, o.LockFlux)
 	}
-	keptFlux = keepFlux(want, flux, o.LockFlux)
 	have := []string{}
 	for _, d := range folders(want) {
 		l, err := g.List(ctx, d)
@@ -319,8 +358,15 @@ func Upgrade(ctx context.Context, g *fabric.Git, o Options, who fabric.Author) (
 		}
 		have = append(have, l...)
 	}
-	paths := append(slices.Sorted(maps.Keys(want)), stale(want, have)...)
-	sha, err = g.Edit(ctx, who, fmt.Sprintf("upgrade %s to WeCoLab %s: system/ and crds/", cm.Data["zone"], o.Version), paths,
+	paths := slices.Sorted(maps.Keys(want))
+	if !o.SchemaOnly {
+		paths = append(paths, stale(want, have)...)
+	}
+	action := "system/ and crds/"
+	if o.SchemaOnly {
+		action = "additive crds/"
+	}
+	sha, err = g.Edit(ctx, who, fmt.Sprintf("upgrade %s to WeCoLab %s: %s", cm.Data["zone"], o.Version, action), paths,
 		func(*fabric.Snapshot) ([]fabric.FileChange, error) {
 			out := make([]fabric.FileChange, len(paths))
 			for i, p := range paths {

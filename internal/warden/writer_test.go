@@ -15,13 +15,22 @@ import (
 	"testing"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
 
 	"wecolab.io/wecolab/api/v1alpha1"
 	"wecolab.io/wecolab/internal/fabric"
 )
+
+func testWriterCoordination() *kubefake.Clientset {
+	return kubefake.NewClientset(&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{
+		Name: "wecolab-writer-transition", Namespace: SystemNS,
+	}})
+}
 
 func TestEffectiveIgnoresNonStewards(t *testing.T) {
 	stewards := map[string]bool{"pub": true}
@@ -57,8 +66,8 @@ func TestRevoke(t *testing.T) {
 	}
 }
 
-// fakeCopy is a site's Forgejo as the Writer uses it: branch protection, push mirrors, main's head,
-// branches, files on main and commits to them, and deleting and creating the repository.
+// fakeCopy covers Forgejo REST administration and edits. Smart-HTTP custody
+// tests use real bare Git repositories instead.
 type fakeCopy struct {
 	mu        sync.Mutex
 	head      string
@@ -66,10 +75,8 @@ type fakeCopy struct {
 	collab    bool
 	pushers   []string
 	mirrors   []fabric.PushMirror
-	branches  []string
 	files     map[string]string
 	recreated int
-	syncs     int
 	commits   int
 }
 
@@ -83,19 +90,22 @@ func (f *fakeCopy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case !f.exists:
 		http.NotFound(w, r)
 	case p == "" && r.Method == http.MethodDelete:
-		f.exists, f.collab, f.head, f.mirrors, f.branches, f.pushers = false, false, "", nil, nil, nil
+		f.exists, f.collab, f.head, f.mirrors, f.pushers = false, false, "", nil, nil
 		f.recreated++
 	case p == "":
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
 	case p == "/collaborators/mirror" && r.Method == http.MethodPut:
 		f.collab = true
 	case p == "/collaborators/mirror" && !f.collab:
 		http.NotFound(w, r)
 	case p == "/collaborators/mirror":
 		w.WriteHeader(http.StatusNoContent)
+	case p == "/branch_protections/superseded-**" && r.Method == http.MethodGet:
+		_ = json.NewEncoder(w).Encode(map[string]any{"push_whitelist_usernames": []string{ForgejoOwner}, "enable_push": true, "enable_push_whitelist": true})
 	case p == "/branch_protections/main" && r.Method == http.MethodGet && f.pushers == nil:
 		http.NotFound(w, r)
 	case p == "/branch_protections/main" && r.Method == http.MethodGet:
-		_ = json.NewEncoder(w).Encode(map[string]any{"push_whitelist_usernames": f.pushers})
+		_ = json.NewEncoder(w).Encode(map[string]any{"push_whitelist_usernames": f.pushers, "enable_push": true, "enable_push_whitelist": true})
 	case strings.HasPrefix(p, "/branch_protections"):
 		var b struct {
 			Pushers []string `json:"push_whitelist_usernames"`
@@ -106,29 +116,10 @@ func (f *fakeCopy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	case p == "/branches/main":
 		_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]string{"id": f.head}})
-	case p == "/branches" && r.Method == http.MethodPost:
-		var b struct {
-			Name string `json:"new_branch_name"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&b)
-		if slices.Contains(f.branches, b.Name) {
-			w.WriteHeader(http.StatusConflict)
-			return
-		}
-		f.branches = append(f.branches, b.Name)
 	case p == "/push_mirrors" && r.Method == http.MethodGet:
 		_ = json.NewEncoder(w).Encode(append([]fabric.PushMirror{}, f.mirrors...))
-	case p == "/push_mirrors" && r.Method == http.MethodPost:
-		var b struct {
-			Remote string `json:"remote_address"`
-			Filter string `json:"branch_filter"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&b)
-		f.mirrors = append(f.mirrors, fabric.PushMirror{Name: "m" + b.Filter, Remote: b.Remote, Filter: b.Filter})
 	case strings.HasPrefix(p, "/push_mirrors/") && r.Method == http.MethodDelete:
 		f.mirrors = slices.DeleteFunc(f.mirrors, func(m fabric.PushMirror) bool { return m.Name == strings.TrimPrefix(p, "/push_mirrors/") })
-	case p == "/push_mirrors-sync":
-		f.syncs++
 	case strings.HasPrefix(p, "/contents/") && r.Method == http.MethodGet:
 		f.contents(w, r, strings.TrimPrefix(p, "/contents/"))
 	case p == "/contents" && r.Method == http.MethodPost:
@@ -184,77 +175,6 @@ func (s toServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-func TestFollow(t *testing.T) {
-	const head = "1111111111111111111111111111111111111111"
-	sites := []v1alpha1.Site{{Spec: v1alpha1.SiteSpec{Steward: true, Boxes: []v1alpha1.Box{{Name: "pub-a", IP: "10.77.0.1", Role: "manager"}}}}}
-	sites[0].Name = "pub"
-	const other = "2222222222222222222222222222222222222222"
-	cases := []struct {
-		name      string
-		steward   bool
-		claimed   bool // this copy names this site the writer
-		pushed    bool // a push reaches this copy while the writer is asked
-		answer    CopyAnswer
-		recreated bool
-		aside     bool
-	}{
-		{"behind the writer", false, false, false, CopyAnswer{Head: other, OnMain: true, Has: true}, false, false},
-		{"a non-steward that went its own way", false, false, false, CopyAnswer{Head: other}, true, false},
-		{"never from an empty writer", false, false, false, CopyAnswer{}, false, false},
-		{"not when a push arrived meanwhile", false, false, true, CopyAnswer{Head: other}, false, false},
-		{"not a copy naming itself the writer", false, true, false, CopyAnswer{Head: other}, false, false},
-		{"a copy naming itself the writer, once the writer holds it", false, true, false, CopyAnswer{Head: other, Has: true}, true, false},
-		{"a steward keeps its commits aside first", true, true, false, CopyAnswer{Head: other}, false, true},
-		{"a steward whose commits the writer holds", true, true, false, CopyAnswer{Head: other, Has: true}, true, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			cp := &fakeCopy{head: head, exists: true, collab: true, pushers: []string{"mirror", "fabric"},
-				mirrors: []fabric.PushMirror{{Name: "old", Remote: "http://10.77.1.1:30300/fabric/fabric.git", Filter: "main"}}}
-			fj := httptest.NewServer(cp)
-			defer fj.Close()
-			writer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/fabric/commits/"+head {
-					t.Errorf("asked %s", r.URL.Path)
-				}
-				if c.pushed {
-					cp.mu.Lock()
-					cp.head = "3333333333333333333333333333333333333333"
-					cp.mu.Unlock()
-				}
-				_ = json.NewEncoder(w).Encode(c.answer)
-			}))
-			defer writer.Close()
-			w := &Writer{Site: "home", Git: &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: fj.Client()},
-				HTTP: &http.Client{Transport: toServer{writer.URL}}}
-			w.mirrors = map[string]mirrorState{}
-			if c.steward { // a steward has the writer's mirroring password
-				w.Client = fakeWithSecret(t, "pub", "pw")
-			}
-			if err := w.follow(context.Background(), sites, "pub", c.steward, c.claimed); err != nil {
-				t.Fatal(err)
-			}
-			if !slices.Equal(cp.pushers, []string{"mirror"}) {
-				t.Fatalf("main takes the writer's pushes only: %v", cp.pushers)
-			}
-			if (cp.recreated > 0) != c.recreated || !cp.exists || !cp.collab {
-				t.Fatalf("recreated %d, want %v; the copy is whole: %v %v", cp.recreated, c.recreated, cp.exists, cp.collab)
-			}
-			aside := len(cp.branches) == 1 && strings.HasPrefix(cp.branches[0], "superseded-home-111111111111") &&
-				len(cp.mirrors) == 1 && cp.mirrors[0].Filter == supersededFilter && cp.mirrors[0].Remote == "http://10.77.0.1:30300/fabric/fabric.git"
-			if aside != c.aside || !c.aside && len(cp.mirrors) != 0 {
-				t.Fatalf("aside %v, want %v: %v %v", aside, c.aside, cp.branches, cp.mirrors)
-			}
-			if c.aside { // the next pass pushes nothing new while the branch is on its way
-				syncs := cp.syncs
-				if err := w.follow(context.Background(), sites, "pub", true, true); err != nil || cp.syncs != syncs || len(cp.branches) != 1 {
-					t.Fatalf("the same branch and mirror stay: %v %d %v", err, cp.syncs, cp.branches)
-				}
-			}
-		})
-	}
-}
-
 func TestEnsureFinishesAHalfDoneRecreate(t *testing.T) {
 	cp := &fakeCopy{}
 	fj := httptest.NewServer(cp)
@@ -269,35 +189,33 @@ func TestEnsureFinishesAHalfDoneRecreate(t *testing.T) {
 	}
 }
 
-func TestLeadNeverPushesAnEmptyCopy(t *testing.T) {
-	cp := &fakeCopy{exists: true, collab: true, mirrors: []fabric.PushMirror{{Name: "m", Remote: forgejoURL("10.77.1.1"), Filter: "main"}}}
-	fj := httptest.NewServer(cp)
-	defer fj.Close()
-	sites := []v1alpha1.Site{{Spec: v1alpha1.SiteSpec{Boxes: []v1alpha1.Box{{Name: "home-a", IP: "10.77.1.1", Role: "manager"}}}}}
-	sites[0].Name = "home"
-	w := &Writer{Site: "pub", Git: &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: fj.Client()}, Client: fakeWithSecret(t, "home", "pw")}
-	holds := Claim{Writer: "pub", Epoch: 1}          // what a copy holding the Fabric's settings names
-	_ = w.lead(context.Background(), sites, Claim{}) // revoke and reseed need more than this fake has
-	if len(cp.mirrors) != 0 || !slices.Equal(cp.pushers, []string{"mirror"}) {
-		t.Fatalf("an empty writer's copy pushes to nobody and admits no Console: %v %v", cp.mirrors, cp.pushers)
-	}
-	cp.head = "1111111111111111111111111111111111111111"
-	_ = w.lead(context.Background(), sites, Claim{})
-	if len(cp.mirrors) != 0 || !slices.Equal(cp.pushers, []string{"mirror"}) {
-		t.Fatalf("a copy without the Fabric's settings pushes to nobody and admits no Console: %v %v", cp.mirrors, cp.pushers)
-	}
-	_ = w.lead(context.Background(), sites, holds)
-	if len(cp.mirrors) != 1 || cp.syncs != 1 || !slices.Equal(cp.pushers, []string{"mirror", "fabric"}) {
-		t.Fatalf("with the Fabric, it pushes and admits the Console: %v %v", cp.mirrors, cp.pushers)
-	}
-	_ = w.lead(context.Background(), sites, holds)
-	if cp.syncs != 1 {
-		t.Fatal("a mirror set up with the current password stays")
-	}
-	w.Client = fakeWithSecret(t, "home", "changed")
-	_ = w.lead(context.Background(), sites, holds)
-	if len(cp.mirrors) != 1 || cp.syncs != 2 {
-		t.Fatalf("a changed password sets the mirror up again: %v %d", cp.mirrors, cp.syncs)
+func TestLeadAdmissionRequiresFabric(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		head  string
+		claim Claim
+		open  bool
+	}{
+		{"empty repository", "", Claim{Writer: "pub", Epoch: 1}, false},
+		{"missing settings", strings.Repeat("1", 40), Claim{}, false},
+		{"another writer", strings.Repeat("1", 40), Claim{Writer: "home", Epoch: 2}, false},
+		{"owns populated repository", strings.Repeat("1", 40), Claim{Writer: "pub", Epoch: 1}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := &fakeCopy{head: tc.head, exists: true, collab: true}
+			fj := httptest.NewServer(cp)
+			defer fj.Close()
+			w := &Writer{Site: "pub", Git: &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: fj.Client()},
+				Coordination: testWriterCoordination().CoordinationV1()}
+			if err := withWriterLock(context.Background(), w.Coordination, func(ctx context.Context) error {
+				return w.admitLead(ctx, tc.claim)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(cp.pushers, ForgejoOwner) != tc.open {
+				t.Fatalf("Console admission: pushers=%v, want open=%v", cp.pushers, tc.open)
+			}
+		})
 	}
 }
 
@@ -355,15 +273,76 @@ func TestSyncLeadsByItsOwnCopy(t *testing.T) {
 	cluster := &corev1.ConfigMap{Data: map[string]string{"zone": "fab.example.org", "network": "10.77.0.0/16", "writer": "pub", "epoch": "1"}}
 	cluster.Name, cluster.Namespace = SettingsName, SystemNS
 	home, pub := testSite("home", true, "10.77.1.1"), testSite("pub", true, "10.77.0.1")
-	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(cluster, &home, &pub).Build()
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(cluster, &home, &pub).WithObjects(testReadyForgejo(t)...).Build()
 	hc := &http.Client{Transport: toServer{pr.URL}}
 	w := &Writer{Client: c, Site: "home", Git: &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: fj.Client()},
-		Peers: &Peers{Client: c, HTTP: hc}, HTTP: hc}
+		Peers: &Peers{Client: c, HTTP: hc}, HTTP: hc, Coordination: testWriterCoordination().CoordinationV1()}
 	if err := w.Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(cp.pushers, []string{"mirror", "fabric"}) {
 		t.Fatalf("home leads by its own copy of the Fabric, not by what Flux has applied: %v", cp.pushers)
+	}
+}
+
+func TestStaleFollowerPassCannotCloseSuccessfulTakeover(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	home, pub := testSite("home", true, "10.77.1.1"), testSite("pub", true, "10.77.0.1")
+	cp := &fakeCopy{head: strings.Repeat("1", 40), exists: true, collab: true,
+		pushers: []string{ForgejoMirror}, files: map[string]string{
+			SettingsPath:             settingsFile(t, "pub", 1, ""),
+			"fabric/sites/home.yaml": siteFile(t, home),
+			"fabric/sites/pub.yaml":  siteFile(t, pub),
+		}}
+	fj := httptest.NewServer(cp)
+	t.Cleanup(fj.Close)
+	g := &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: fj.Client()}
+	paused, resume := make(chan struct{}), make(chan struct{})
+	var pauseOnce, resumeOnce sync.Once
+	release := func() { resumeOnce.Do(func() { close(resume) }) }
+	pr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/status" {
+			pauseOnce.Do(func() {
+				close(paused)
+				select {
+				case <-resume:
+				case <-ctx.Done():
+				}
+			})
+			_ = json.NewEncoder(w).Encode(SiteStatus{Site: "pub", Writer: "pub", Epoch: 1})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(CopyAnswer{Head: strings.Repeat("1", 40), OnMain: true, Claim: Claim{Writer: "pub", Epoch: 1}})
+	}))
+	t.Cleanup(pr.Close)
+	t.Cleanup(release)
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(&home, &pub).WithObjects(testReadyForgejo(t)...).Build()
+	hc := &http.Client{Transport: toServer{pr.URL}}
+	w := &Writer{Client: c, Site: "home", Git: g, Peers: &Peers{Client: c, HTTP: hc}, HTTP: hc,
+		Coordination: testWriterCoordination().CoordinationV1()}
+	synced := make(chan error, 1)
+	go func() { synced <- w.Sync(ctx) }()
+	select {
+	case <-paused:
+	case <-ctx.Done():
+		t.Fatal("follower did not reach peer observation")
+	}
+	if epoch, err := TakeOver(ctx, g, "home", nil, fabric.Author{Name: "operator"}, w.Coordination); err != nil || epoch != 2 {
+		t.Fatalf("takeover: epoch=%d err=%v", epoch, err)
+	}
+	release()
+	if err := <-synced; err != nil {
+		t.Fatal(err)
+	}
+	claim, err := GitClaim(ctx, g)
+	if err != nil || claim != (Claim{Writer: "home", Epoch: 2}) {
+		t.Fatalf("successful takeover was lost: %+v %v", claim, err)
+	}
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	if !slices.Contains(cp.pushers, ForgejoOwner) || cp.recreated != 0 {
+		t.Fatalf("stale follower revoked the new writer or recreated its repository: pushers=%v recreated=%d", cp.pushers, cp.recreated)
 	}
 }
 
@@ -414,14 +393,9 @@ func TestLeadMakesHandoverSteps(t *testing.T) {
 	}
 	p, _ := fabric.Path(gvk, app.Namespace, app.Name)
 	cp := &fakeCopy{head: "1111111111111111111111111111111111111111", exists: true, collab: true,
-		files: map[string]string{SettingsPath: settingsFile(t, "pub", 1, ""), p: string(b)}}
-	fj := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/push_mirrors") && r.Method == http.MethodPost {
-			http.Error(w, "vince's copy is unreachable", http.StatusInternalServerError)
-			return
-		}
-		cp.ServeHTTP(w, r)
-	}))
+		files: map[string]string{SettingsPath: settingsFile(t, "pub", 1, ""), p: string(b),
+			fabric.UpgradePath: `{"phase":"ready"}`, fabric.MigrationCompletePath: `{}`, fabric.PlacementRevisionPath: `{"revision":"0"}`}}
+	fj := httptest.NewServer(cp)
 	defer fj.Close()
 	pr := peer(SiteStatus{Site: "vince", Apps: map[string]AppState{"vince/docs": {Demoted: &Demotion{Handover: "m1", Token: "tok"}}}}, nil)
 	defer pr.Close()
@@ -432,10 +406,18 @@ func TestLeadMakesHandoverSteps(t *testing.T) {
 	vince, pub := testSite("vince", false, "10.77.2.1"), testSite("pub", true, "10.77.0.1")
 	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(app, cluster, sec, &vince, &pub).Build()
 	hc := &http.Client{Transport: toServer{pr.URL}}
-	w := &Writer{Client: c, Site: "pub", Git: &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: fj.Client()},
+	replicationAttempted := false
+	gitHTTP := &http.Client{Transport: custodyRoute(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "10.77.2.1:30300" {
+			replicationAttempted = true
+			return nil, fmt.Errorf("unreachable fixture")
+		}
+		return http.DefaultTransport.RoundTrip(req)
+	})}
+	w := &Writer{Client: c, Site: "pub", Git: &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: gitHTTP},
 		Peers: &Peers{Client: c, HTTP: hc}, HTTP: hc}
-	if err := w.lead(context.Background(), []v1alpha1.Site{vince, pub}, Claim{Writer: "pub", Epoch: 1}); err == nil || !strings.Contains(err.Error(), "push to vince") {
-		t.Fatalf("the mirror's failure is reported: %v", err)
+	if err := w.lead(context.Background(), []v1alpha1.Site{vince, pub}, Claim{Writer: "pub", Epoch: 1}); err == nil || !replicationAttempted {
+		t.Fatalf("replication failure did not surface: attempted=%v err=%v", replicationAttempted, err)
 	}
 	got := &v1alpha1.App{}
 	if err := yaml.Unmarshal([]byte(cp.file(p)), got); err != nil || got.Spec.Handover == nil || got.Spec.Handover.Token != "tok" {

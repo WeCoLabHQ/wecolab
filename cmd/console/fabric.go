@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -182,7 +184,84 @@ func (s *server) appsInGit(ctx context.Context) ([]v1alpha1.App, error) {
 // edit commits what fn decides from the files it was given as Git holds them, only if none of them
 // changed meanwhile (fabric.Edit), and asks Flux here to fetch the commit.
 func (s *server) edit(ctx context.Context, msg string, paths []string, fn func(*fabric.Snapshot) ([]fabric.FileChange, error)) error {
-	sha, err := s.git.Edit(ctx, author(ctx), msg, paths, fn)
+	// App mutations across handlers must share the vault's changed-path CAS.
+	// The deploy handler writes its own vault revision; all other App writers
+	// are covered here rather than relying on an unprotected read-only check.
+	for _, p := range paths {
+		if !strings.HasPrefix(p, "fabric/apps/") || !strings.HasSuffix(p, ".yaml") {
+			continue
+		}
+		parts := strings.Split(p, "/")
+		if len(parts) != 4 {
+			continue
+		}
+		vp := "secrets/vault-" + parts[2] + ".sops.yaml"
+		paths = append(paths, vp)
+		paths = append(paths, fabric.MeshClaimPath(strings.TrimSuffix(parts[3], ".yaml")+"-"+parts[2]))
+	}
+	sha, err := s.git.Edit(ctx, author(ctx), msg, paths, func(snap *fabric.Snapshot) ([]fabric.FileChange, error) {
+		changes, err := fn(snap)
+		if err != nil || len(changes) == 0 {
+			return changes, err
+		}
+		for _, c := range changes {
+			if !strings.HasPrefix(c.Path, "fabric/apps/") || !strings.HasSuffix(c.Path, ".yaml") || c.Content == nil {
+				continue
+			}
+			var old, next v1alpha1.App
+			b, exists := snap.Get(c.Path)
+			if exists {
+				if err := yaml.Unmarshal(b, &old); err != nil {
+					return nil, err
+				}
+			}
+			if err := yaml.Unmarshal(c.Content, &next); err != nil {
+				return nil, err
+			}
+			claimPath := fabric.MeshClaimPath(next.Name + "-" + next.Namespace)
+			if old.Spec.Mesh != next.Spec.Mesh && !slices.ContainsFunc(changes, func(f fabric.FileChange) bool { return f.Path == claimPath }) {
+				label := next.Name + "-" + next.Namespace
+				var claim fabric.FileChange
+				if next.Spec.Mesh {
+					claim, err = fabric.ClaimRoute(snap, claimPath, label, next.Namespace+"/"+next.Name)
+				} else {
+					claim, err = fabric.ReleaseRoute(snap, claimPath, label, next.Namespace+"/"+next.Name)
+				}
+				if err != nil {
+					return nil, fail(409, "%v", err)
+				}
+				changes = append(changes, claim)
+			}
+			if old.Spec.Database == "" && next.Spec.Database == "" {
+				continue
+			}
+			vp := "secrets/vault-" + next.Namespace + ".sops.yaml"
+			if slices.ContainsFunc(changes, func(f fabric.FileChange) bool { return f.Path == vp }) {
+				continue
+			}
+			enc, ok := snap.Get(vp)
+			if !ok {
+				return nil, fail(409, "database vault missing for %s", next.Namespace)
+			}
+			v, err := s.openSecret(ctx, enc, vp)
+			if err != nil {
+				return nil, err
+			}
+			if err := fabric.BumpVault(v); err != nil {
+				return nil, fail(409, "%v", err)
+			}
+			ageKey, err := s.siteKey(ctx)
+			if err != nil {
+				return nil, err
+			}
+			sealed, err := warden.ResealSecret(enc, path.Base(vp), ageKey, func(values map[string]string) error { values["mutation-revision"] = v["mutation-revision"]; return nil })
+			if err != nil {
+				return nil, err
+			}
+			changes = append(changes, fabric.FileChange{Path: vp, Content: sealed})
+		}
+		return changes, nil
+	})
 	if err == nil && sha != "" {
 		s.fetch(ctx)
 	}

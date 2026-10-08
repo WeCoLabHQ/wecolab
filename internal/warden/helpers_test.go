@@ -9,7 +9,7 @@ import (
 func sampleApp() *v1alpha1.App {
 	a := &v1alpha1.App{}
 	a.Name, a.Namespace = "docs", "vince"
-	a.Spec = v1alpha1.AppSpec{Sites: []string{"vince", "friend"}, Primary: "vince", Workload: "docs", Database: "docs-db"}
+	a.Spec = v1alpha1.AppSpec{Sites: []string{"vince", "friend"}, Primary: "vince", Workload: "docs", Database: "docs-db", ArchiveID: "docs-db"}
 	return a
 }
 

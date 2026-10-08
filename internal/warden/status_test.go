@@ -17,6 +17,8 @@ func healthyDB(primary bool, backupAge time.Duration, now time.Time) map[string]
 	}
 	if primary {
 		m["currentPrimary"] = "docs-db-1"
+		m["systemIdentifier"] = "system"
+		m["timelineID"] = uint32(1)
 		m["lastSuccessfulBackup"] = now.Add(-backupAge).Format(time.RFC3339)
 	}
 	return m
@@ -31,21 +33,24 @@ func status(conds []metav1.Condition, typ string) metav1.ConditionStatus {
 	return "missing"
 }
 
-func TestComputeAllGreen(t *testing.T) {
+func TestComputeHealthyButUnmeasuredRecovery(t *testing.T) {
 	now := time.Now()
 	app := sampleApp()
 	in := Inputs{Now: now, MaxBackupAge: 24 * time.Hour, RPO: 5 * time.Minute,
 		ClusterReady: map[string]bool{"vince": true, "friend": true},
 		DB:           map[string]map[string]any{"vince": healthyDB(true, time.Hour, now), "friend": healthyDB(false, 0, now)},
-		Vault:        &VaultStatus{LatestBackup: now.Add(-time.Hour), LatestWAL: now.Add(-40 * time.Second), ObjectLock: "compliance 30 days"}}
+		Vault:        &VaultStatus{LatestBackup: now.Add(-time.Hour), BackupEvidence: &BackupEvidence{Archive: ArchiveName(app, "vince"), ID: "backup", SystemID: "system", Timeline: 1, BeginWAL: "0/1", EndWAL: "0/2", CompletedAt: now.Add(-time.Hour), ObservedAt: now}, LatestWAL: now.Add(-40 * time.Second), ObjectLock: "compliance 30 days"}}
 	conds := Compute(app, "vince", in)
-	for _, typ := range []string{v1alpha1.CondPrimaryHealthy, v1alpha1.CondStandbyStaged, v1alpha1.CondWithinRPO, v1alpha1.CondVaultFresh, v1alpha1.CondRouted} {
+	for _, typ := range []string{v1alpha1.CondPrimaryHealthy, v1alpha1.CondStandbyStaged, v1alpha1.CondVaultFresh, v1alpha1.CondRouted} {
 		if status(conds, typ) != metav1.ConditionTrue {
 			t.Errorf("%s should be True", typ)
 		}
 	}
+	if status(conds, v1alpha1.CondWithinRPO) != metav1.ConditionUnknown {
+		t.Fatal("healthy archive and WAL freshness cannot prove replay position")
+	}
 	if r := Ready(conds); r.Status != metav1.ConditionTrue {
-		t.Errorf("Ready should be True, got %s (%s)", r.Status, r.Message)
+		t.Errorf("operational availability must be separate from recovery: %s (%s)", r.Status, r.Message)
 	}
 }
 
@@ -56,7 +61,7 @@ func TestComputeGates(t *testing.T) {
 		return Inputs{Now: now, MaxBackupAge: 24 * time.Hour, RPO: 5 * time.Minute,
 			ClusterReady: map[string]bool{"vince": true, "friend": true},
 			DB:           map[string]map[string]any{"vince": healthyDB(true, time.Hour, now), "friend": healthyDB(false, 0, now)},
-			Vault:        &VaultStatus{LatestBackup: now.Add(-time.Hour), LatestWAL: now.Add(-40 * time.Second), ObjectLock: "compliance 30 days"}}
+			Vault:        &VaultStatus{LatestBackup: now.Add(-time.Hour), BackupEvidence: &BackupEvidence{Archive: ArchiveName(app, "vince"), ID: "backup", SystemID: "system", Timeline: 1, BeginWAL: "0/1", EndWAL: "0/2", CompletedAt: now.Add(-time.Hour), ObservedAt: now}, LatestWAL: now.Add(-40 * time.Second), ObjectLock: "compliance 30 days"}}
 	}
 	cases := []struct {
 		name   string
@@ -66,7 +71,10 @@ func TestComputeGates(t *testing.T) {
 		{"standby site down", func(i *Inputs) { i.ClusterReady["friend"] = false }, v1alpha1.CondStandbyStaged},
 		{"replica unhealthy", func(i *Inputs) { i.DB["friend"]["phase"] = "Setting up primary" }, v1alpha1.CondWithinRPO},
 		{"archive stalled", func(i *Inputs) { i.DB["vince"]["conditions"] = []any{} }, v1alpha1.CondWithinRPO},
-		{"backup stale", func(i *Inputs) { i.Vault.LatestBackup = now.Add(-48 * time.Hour) }, v1alpha1.CondVaultFresh},
+		{"backup stale", func(i *Inputs) {
+			i.Vault.LatestBackup = now.Add(-48 * time.Hour)
+			i.Vault.BackupEvidence.CompletedAt = i.Vault.LatestBackup
+		}, v1alpha1.CondVaultFresh},
 		{"no object lock", func(i *Inputs) { i.Vault.ObjectLock = "" }, v1alpha1.CondVaultFresh},
 		{"vault unreachable", func(i *Inputs) { i.Vault.Err = "401" }, v1alpha1.CondVaultFresh},
 		{"primary site down", func(i *Inputs) { i.ClusterReady["vince"] = false }, v1alpha1.CondPrimaryHealthy},
@@ -79,9 +87,31 @@ func TestComputeGates(t *testing.T) {
 		if status(conds, c.fails) != metav1.ConditionFalse {
 			t.Errorf("%s: %s should be False", c.name, c.fails)
 		}
-		if Ready(conds).Status != metav1.ConditionFalse {
-			t.Errorf("%s: Ready should be False", c.name)
+		wantReady := metav1.ConditionTrue
+		if c.fails == v1alpha1.CondPrimaryHealthy || c.fails == v1alpha1.CondRouted {
+			wantReady = metav1.ConditionFalse
 		}
+		if Ready(conds).Status != wantReady {
+			t.Errorf("%s: operational Ready should be %s", c.name, wantReady)
+		}
+	}
+}
+
+func TestComputeRecoveryEvidenceUnknown(t *testing.T) {
+	now := time.Now()
+	app := sampleApp()
+	app.Spec.ArchiveID = "archive"
+	db := healthyDB(true, time.Hour, now)
+	in := Inputs{Now: now, MaxBackupAge: 24 * time.Hour, RPO: time.Minute,
+		ClusterReady: map[string]bool{"vince": true, "friend": true},
+		DB:           map[string]map[string]any{"vince": db, "friend": healthyDB(false, 0, now)},
+		Vault:        &VaultStatus{LatestBackup: now.Add(-time.Hour), LatestWAL: now, ObjectLock: "compliance 30 days"}}
+	if got := status(Compute(app, "vince", in), v1alpha1.CondVaultFresh); got != metav1.ConditionUnknown {
+		t.Fatalf("timestamp alone is not a validated backup: %s", got)
+	}
+	in.Vault.BackupEvidence = &BackupEvidence{Archive: ArchiveName(app, "vince"), ID: "backup", SystemID: "system", Timeline: 2, BeginWAL: "0/1", EndWAL: "0/2", CompletedAt: in.Vault.LatestBackup, ObservedAt: now}
+	if got := status(Compute(app, "vince", in), v1alpha1.CondVaultFresh); got != metav1.ConditionUnknown {
+		t.Fatalf("backup from a different timeline is not current-history: %s", got)
 	}
 }
 
@@ -109,8 +139,8 @@ func TestGatesForTheMovesTarget(t *testing.T) {
 		t.Fatalf("a target waiting to be rebuilt is not staged: %+v", conds)
 	}
 	sites["third"].Apps["vince/docs"] = AppState{Archive: ArchiveName(app, "third")}
-	if _, conds = AppView(app, sites, now, 24*time.Hour); status(conds, v1alpha1.CondStandbyStaged) != metav1.ConditionTrue || status(conds, v1alpha1.CondWithinRPO) != metav1.ConditionTrue {
-		t.Fatalf("staged target: %+v", conds)
+	if _, conds = AppView(app, sites, now, 24*time.Hour); status(conds, v1alpha1.CondStandbyStaged) != metav1.ConditionTrue || status(conds, v1alpha1.CondWithinRPO) != metav1.ConditionUnknown {
+		t.Fatalf("staged target without measured replay remains unknown: %+v", conds)
 	}
 	if status(conds, v1alpha1.CondPromotion) != metav1.ConditionFalse {
 		t.Fatal("a move in flight shows in Promotion")
@@ -130,9 +160,16 @@ func TestMoveGates(t *testing.T) {
 	now := time.Now()
 	app := sampleApp()
 	app.Spec.Sites = []string{"vince", "friend", "third"}
+	app.Spec.ArchiveID = "archive"
+	app.Spec.RPO = metav1.Duration{Duration: 5 * time.Minute}
 	rep := func(site string, db map[string]any) *SiteStatus {
-		return &SiteStatus{Site: site, DB: map[string]map[string]any{"vince/docs-db": db},
-			Apps: map[string]AppState{"vince/docs": {Archive: ArchiveName(app, site)}}}
+		role := "replica"
+		if site == "vince" {
+			role = "primary"
+		}
+		sample := RecoverySample{ArchiveID: "archive", SystemID: "system", Timeline: 1, Pod: "docs-db-1", Role: role, LSNLow: 42, ObservedAt: now}
+		return &SiteStatus{Site: site, ReceivedAt: now, DB: map[string]map[string]any{"vince/docs-db": db},
+			Apps: map[string]AppState{"vince/docs": {Archive: ArchiveName(app, site), Recovery: &RecoveryReport{Samples: []RecoverySample{sample}}}}}
 	}
 	primary := func() *SiteStatus {
 		db := healthyDB(true, time.Hour, now)
@@ -140,9 +177,26 @@ func TestMoveGates(t *testing.T) {
 		return rep("vince", db)
 	}
 	sites := map[string]*SiteStatus{"vince": primary(), "friend": rep("friend", healthyDB(false, 0, now)), "third": rep("third", map[string]any{"phase": "Setting up primary"})}
-	if err := MoveGates(app, sites, "friend", now); err != nil {
-		t.Fatal(err)
+	saved := sites["friend"].Apps["vince/docs"]
+	saved.Recovery = nil
+	sites["friend"].Apps["vince/docs"] = saved
+	if err := MoveGates(app, sites, "friend", now); err == nil {
+		t.Fatal("unmeasured replica must not pass move gates")
 	}
+	sites["friend"] = rep("friend", healthyDB(false, 0, now))
+	if err := MoveGates(app, sites, "friend", now); err != nil {
+		t.Fatalf("measured replay should pass: %v", err)
+	}
+	sites["friend"].ReceivedAt = now.Add(-recoveryDeliveryAllowance - time.Second)
+	if err := MoveGates(app, sites, "friend", now); err == nil {
+		t.Fatal("expired replica receipt must block a move")
+	}
+	sites["friend"] = rep("friend", healthyDB(false, 0, now))
+	sites["vince"].ReceivedAt = now.Add(-recoveryDeliveryAllowance - time.Second)
+	if err := MoveGates(app, sites, "friend", now); err == nil {
+		t.Fatal("expired primary receipt must block a move")
+	}
+	sites["vince"] = primary()
 	for name, change := range map[string]func(){
 		"the target's replica is not ready":   func() { sites["friend"] = rep("friend", map[string]any{"phase": "Setting up primary"}) },
 		"the target waits to be rebuilt":      func() { sites["friend"].Apps["vince/docs"] = AppState{Archive: "docs-db-friend-old"} },

@@ -20,6 +20,18 @@ NEBULA_VERSION=v1.11.2
 K3S_VERSION=v1.36.4+k3s1
 SOPS_VERSION=v3.13.3
 GO_VERSION=1.26.3
+NETBIRD_VERSION=v0.80.0
+# Release payload hashes are independent of remote checksum files and are checked even for cached bytes.
+NEBULA_SHA256_amd64=6140d33f2ec21ce7f6b655b5bc820e93a684d97e51d0ddcf907324b5b28aac1e
+NEBULA_SHA256_arm64=85d10e7bc2d121193c1392a1a919172ded7c413f46e602138281cfa9fa1b0231
+SOPS_SHA256_amd64=e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
+SOPS_SHA256_arm64=53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77
+K3S_SHA256_amd64=835873f37245fc615f547a2fe2af9402a347875f13fa64a1f136de644955ea3f
+K3S_SHA256_arm64=c920706346d5ad4e5cd3c7bf1bb09ce71ebe07fec829e513e40f1caf98aed8bb
+K3S_INSTALL_COMMIT=4dedb15be78017a8ddd5b9e81acd44f3481078ed
+K3S_INSTALL_SHA256=46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad
+NETBIRD_SHA256_amd64=47ffaba4fc3929f31795bd6c5232d6c29744d3169e2c93e6d9c84624f0ef6405
+NETBIRD_SHA256_arm64=8cbd99fa068a7b0f3968b2d31dc341acc17dd1e97c3053e61ed5905dbdae7341
 GO_SHA256_amd64=2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556  # go.dev/dl sums for GO_VERSION: change them with it
 GO_SHA256_arm64=9d89a3ea57d141c2b22d70083f2c8459ba3890f2d9e818e7e933b75614936565
 NETWORK=10.77.0.0/16
@@ -75,7 +87,8 @@ preflight() {
 }
 
 # The first box's NetBird client is the Door's: one that WeCoLab did not install is someone else's.
-netbird_ours() { ! command -v netbird >/dev/null || has netbird || die "this box already has a NetBird client; the fabric's first box needs its own"; }
+netbird_ours() { ! command -v netbird >/dev/null && [ ! -e /usr/local/bin/netbird ] && [ ! -L /usr/local/bin/netbird ] || has netbird || has netbird-direct || die "this box already has a NetBird client; the fabric's first box needs its own"; }
+remove_netbird_binary() { ! has netbird-direct || rm -f /usr/local/bin/netbird; }
 
 # ports_free: a public box serves the Door (80, 443, 53), NetBird (3478/udp, 127.0.0.1:8081) and a Nebula
 # lighthouse (4242/udp). DNS on loopback (the box's own resolver) is no obstacle.
@@ -107,22 +120,46 @@ packages() {
   for p in $missing; do mark "pkg $p"; done
 }
 
-# fetch URL FILE: from the development cache when there is one.
+# fetch URL FILE: cache is only a transport, never a trust anchor; callers verify bytes before using them.
 fetch() {
-  if [ -n "$CACHE" ] && [ -f "$CACHE/$(basename "$1")" ]; then cp "$CACHE/$(basename "$1")" "$2"; return; fi
-  curl -fsSL --retry 3 ${DEV:+-k} -o "$2" "$1" || return 1
-  case "$1" in https://github.com/*|https://go.dev/*) [ -z "$CACHE" ] || cp "$2" "$CACHE/" 2>/dev/null || true ;; esac
+  local url=$1 dest=$2 tmp key=${3:-$(basename "$1")}
+  if [ -n "$CACHE" ] && [ -f "$CACHE/$key" ]; then
+    cp "$CACHE/$key" "$dest"
+    return
+  fi
+  tmp=$(mktemp "${dest}.XXXXXXXX") || return 1
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 ${DEV:+-k} -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$dest"
+}
+
+verify_payload() {
+  local file=$1 expected=$2 actual
+  actual=$(sha256sum "$file") || return 1
+  [ "${actual%% *}" = "$expected" ] || die "pinned SHA-256 mismatch for $(basename "$file")"
+}
+
+# Only verified bytes are promoted to the offline cache. An interrupted download never replaces them.
+cache_verified() {
+  [ -z "$CACHE" ] || { mkdir -p "$CACHE" && cp "$1" "$CACHE/$(basename "$2")"; }
 }
 
 install_nebula() {
-  command -v nebula >/dev/null && nebula -version 2>/dev/null | grep -q "${NEBULA_VERSION#v}" && return 0
+  if command -v nebula >/dev/null && nebula -version 2>/dev/null | grep -q "${NEBULA_VERSION#v}"; then
+    has nebula || die "Nebula was installed outside WeCoLab"
+    return 0
+  fi
   local t; t=$(mktemp -d)
   local b=https://github.com/slackhq/nebula/releases/download/$NEBULA_VERSION
-  fetch "$b/nebula-linux-$ARCH.tar.gz" "$t/nebula-linux-$ARCH.tar.gz"
-  fetch "$b/SHASUM256.txt" "$t/SHASUM256.txt"
-  (cd "$t" && grep " nebula-linux-$ARCH.tar.gz\$" SHASUM256.txt | sha256sum -c - >/dev/null) || die "nebula checksum mismatch"
+  fetch "$b/nebula-linux-$ARCH.tar.gz" "$t/nebula-linux-$ARCH.tar.gz" || die "could not fetch Nebula"
+  local expected=NEBULA_SHA256_$ARCH
+  verify_payload "$t/nebula-linux-$ARCH.tar.gz" "${!expected}"
+  cache_verified "$t/nebula-linux-$ARCH.tar.gz" "$b/nebula-linux-$ARCH.tar.gz"
+  tar -xzf "$t/nebula-linux-$ARCH.tar.gz" -C "$t" || die "invalid Nebula archive"
   mark nebula
-  tar -xzf "$t/nebula-linux-$ARCH.tar.gz" -C "$t" && install -m 0755 "$t/nebula" "$t/nebula-cert" /usr/local/bin/ && rm -rf "$t"
+  install -m 0755 "$t/nebula" "$t/nebula-cert" /usr/local/bin/ && rm -rf "$t"
   NEBULA_NEW=1
 }
 
@@ -131,13 +168,16 @@ install_nebula() {
 install_sops() {
   local b=https://github.com/getsops/sops/releases/download/$SOPS_VERSION t
   mkdir -p "$STATE/bin"
-  if [ ! -f "$STATE/bin/sops-$SOPS_VERSION.linux.amd64" ] || [ ! -f "$STATE/bin/sops-$SOPS_VERSION.linux.arm64" ]; then
+  local a expected
+  for a in amd64 arm64; do
+    local name=sops-$SOPS_VERSION.linux.$a
     t=$(mktemp -d)
-    for a in amd64 arm64; do fetch "$b/sops-$SOPS_VERSION.linux.$a" "$t/sops-$SOPS_VERSION.linux.$a"; done
-    fetch "$b/sops-$SOPS_VERSION.checksums.txt" "$t/sums"
-    (cd "$t" && grep -E " sops-$SOPS_VERSION.linux.(amd64|arm64)\$" sums | sha256sum -c - >/dev/null) || die "sops checksum mismatch"
-    chmod 755 "$t"/sops-$SOPS_VERSION.linux.* && mv "$t"/sops-$SOPS_VERSION.linux.* "$STATE/bin/" && rm -rf "$t"
-  fi
+    fetch "$b/$name" "$t/$name" || die "could not fetch SOPS for $a"
+    expected=SOPS_SHA256_$a
+    verify_payload "$t/$name" "${!expected}"
+    cache_verified "$t/$name" "$b/$name"
+    install -m 0755 "$t/$name" "$STATE/bin/$name" && rm -rf "$t"
+  done
   command -v sops >/dev/null && return 0
   mark sops
   install -m 0755 "$STATE/bin/sops-$SOPS_VERSION.linux.$ARCH" /usr/local/bin/sops
@@ -264,24 +304,66 @@ stage() {
   sed -e "s#$N/ca.crt#$t/new/ca.crt#" -e "s#$N/host.crt#$t/new/host.crt#" "$t/new/20-fabric.yml" > "$t/test/20-fabric.yml"
   nebula -test -config "$t/test" >/dev/null 2>&1
 }
-for s in $(cat $N/stewards); do
+pending=$N/.wecolab-reload-pending
+rollback=$N/.wecolab-sync-rollback
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"' EXIT
+restore_old() {
+  local f
+  for f in ca.crt host.crt config.d/20-fabric.yml stewards; do
+    [ -f "$rollback/$f" ] && cp -p "$rollback/$f" "$N/$f" ||
+      { echo "could not restore $f; recover from $rollback manually" >&2; return 1; }
+  done
+  if ! systemctl reload nebula; then
+    echo "old Nebula settings could not be reloaded; recover from $rollback manually" >&2
+    return 1
+  fi
+  rm -rf "$rollback"
+  rm -f "$pending"
+}
+# A killed sync can leave changed files on disk; restore its private snapshot before fetching again.
+if [ -d "$rollback" ]; then
+  restore_old || exit 1
+fi
+for s in $(cat "$N/stewards"); do
   t=$(mktemp -d)
   if stage "$s" "$t"; then
     changed=""
     for f in ca.crt host.crt config.d/20-fabric.yml stewards; do
       new=$t/new/${f#config.d/}
-      cmp -s "$new" "$N/$f" && continue
-      cp -p "$N/$f" "$N/${f#config.d/}.bak"
-      install -m 0644 "$new" "$N/$f"
-      changed=1
+      cmp -s "$new" "$N/$f" || changed=1
     done
-    # Nebula first: a file swapped but not loaded would look current to the next run.
-    [ -z "$changed" ] || systemctl reload nebula
-    ssh_keys "$t/out" || echo "SSH keys not updated" >&2
-    rm -rf "$t"
+    if [ -n "$changed" ]; then
+      mkdir -p "$t/old/config.d"
+      for f in ca.crt host.crt config.d/20-fabric.yml stewards; do
+        cp -p "$N/$f" "$t/old/$f" || exit 1
+      done
+      mv "$t/old" "$rollback" || exit 1
+      touch "$pending" || exit 1
+      for f in ca.crt host.crt config.d/20-fabric.yml stewards; do
+        new=$t/new/${f#config.d/}
+        cmp -s "$new" "$N/$f" && continue
+        if ! cp -p "$N/$f" "$N/${f#config.d/}.bak" ||
+           ! install -m 0644 "$new" "$N/$f"; then
+          echo "could not install Nebula $f; restoring old settings" >&2
+          restore_old || exit 1
+          exit 1
+        fi
+      done
+    fi
+    if [ -n "$changed" ] || [ -e "$pending" ]; then
+      if ! systemctl reload nebula; then
+        echo "Nebula reload failed; restoring old settings" >&2
+        [ ! -d "$rollback" ] || restore_old
+        exit 1
+      fi
+      rm -rf "$rollback"
+      rm -f "$pending"
+    fi
+    ssh_keys "$t/out" || { echo "SSH keys not updated" >&2; exit 1; }
     exit 0
   fi
-  rm -rf "$t"
+  rm -rf "$t"; t=""
 done
 echo "no steward answered with settings Nebula accepts" >&2; exit 1
 SH
@@ -339,8 +421,11 @@ YAML
 # Replacing the loaded profile reaches running containers at once.
 apparmor() {
   [ -r /sys/kernel/security/apparmor/profiles ] && command -v apparmor_parser >/dev/null || return 0
-  local p=/etc/apparmor.d/cri-containerd.apparmor.d
-  mark apparmor
+  local p=/etc/apparmor.d/cri-containerd.apparmor.d s=$STATE/apparmor tmp digest
+  [ ! -L "$p" ] && [ ! -L "$s" ] || die "AppArmor profile or recovery state is a symlink; refusing replacement"
+  [ ! -d "$s" ] || [ -f "$s/digest" ] || die "incomplete AppArmor recovery state at $s; restore it manually"
+  ! has apparmor || [ -d "$s" ] || die "AppArmor ownership predates recovery state; refusing replacement"
+  tmp=$(mktemp /etc/apparmor.d/.wecolab-profile.XXXXXX)
   { [ ! -f /etc/apparmor.d/abi/3.0 ] || echo 'abi <abi/3.0>,'
     cat <<'AA'
 #include <tunables/global>
@@ -381,16 +466,118 @@ profile cri-containerd.apparmor.d flags=(attach_disconnected,mediate_deleted) {
   ptrace (trace,tracedby,read,readby) peer=cri-containerd.apparmor.d//&*,
 }
 AA
-  } > "$p.new"
-  apparmor_parser -r "$p.new" && mv "$p.new" "$p" || { rm -f "$p.new"; die "AppArmor refused containerd's profile ($p.new)"; }
+  } > "$tmp"
+  chmod 644 "$tmp"
+  digest=$(sha256sum "$tmp"); digest=${digest%% *}
+  if [ -d "$s" ]; then
+    [ ! -L "$s/digest" ] && [ ! -L "$s/original" ] && [ ! -L "$s/next-digest" ] ||
+      { rm -f "$tmp"; die "AppArmor recovery state contains a symlink"; }
+    local current; current=$(sha256sum "$p" 2>/dev/null); current=${current%% *}
+    [ -f "$p" ] && { [ "$current" = "$(cat "$s/digest")" ] ||
+      { [ -f "$s/next-digest" ] && [ "$current" = "$(cat "$s/next-digest")" ]; }; } ||
+      { rm -f "$tmp"; die "AppArmor profile changed outside WeCoLab; original retained at $s"; }
+  else
+    local snapshot
+    snapshot=$(mktemp -d "$STATE/.apparmor.XXXXXX")
+    if [ -e "$p" ]; then cp -p "$p" "$snapshot/original"; else touch "$snapshot/original-absent"; fi
+    if grep -q '^cri-containerd.apparmor.d ' /sys/kernel/security/apparmor/profiles; then
+      touch "$snapshot/original-loaded"
+    else
+      touch "$snapshot/original-unloaded"
+    fi
+    printf '%s\n' "$digest" > "$snapshot/digest"
+    mv "$snapshot" "$s"
+  fi
+  printf '%s\n' "$digest" > "$s/next-digest"
+  if ! apparmor_parser -r "$tmp" || ! mv "$tmp" "$p"; then
+    rm -f "$tmp"
+    apparmor_restore || die "AppArmor refused profile; original retained at $s"
+    die "AppArmor refused containerd's profile"
+  fi
+  touch "$s/committed"
+  mv "$s/next-digest" "$s/digest"
+  mark apparmor
+}
+
+apparmor_restore() {
+  local p=/etc/apparmor.d/cri-containerd.apparmor.d s=$STATE/apparmor
+  [ ! -L "$p" ] && [ ! -L "$s" ] || { echo "AppArmor symlink conflict: $p or $s" >&2; return 1; }
+  [ -d "$s" ] && [ -f "$s/digest" ] || { echo "missing AppArmor recovery state at $s" >&2; return 1; }
+  for part in original original-absent original-loaded original-unloaded digest next-digest committed; do
+    [ ! -L "$s/$part" ] || { echo "AppArmor recovery symlink conflict: $s/$part" >&2; return 1; }
+  done
+  [ -f "$p" ] || [ ! -f "$s/committed" ] ||
+    { echo "AppArmor profile removed externally: $p; original retained at $s" >&2; return 1; }
+  if [ -f "$p" ]; then
+    local digest; digest=$(sha256sum "$p"); digest=${digest%% *}
+    if [ "$digest" != "$(cat "$s/digest")" ] &&
+       { [ ! -f "$s/next-digest" ] || [ "$digest" != "$(cat "$s/next-digest")" ]; }; then
+      # A parser rejection leaves the original file on disk, not our generated one.
+      [ -f "$s/original" ] && cmp -s "$s/original" "$p" ||
+        { echo "AppArmor profile modified externally: $p; original retained at $s" >&2; return 1; }
+    fi
+  fi
+  if [ -f "$s/original" ]; then
+    [ ! -L "$s/original" ] || return 1
+    cp -p "$s/original" "$p" || return 1
+    if [ -f "$s/original-loaded" ]; then
+      apparmor_parser -r "$p" || return 1
+    else
+      apparmor_parser -R "$p" || return 1
+    fi
+  elif [ -f "$s/original-absent" ]; then
+    [ ! -f "$p" ] || { apparmor_parser -R "$p" && rm -f "$p"; } || return 1
+  else
+    echo "missing original AppArmor profile metadata at $s" >&2; return 1
+  fi
+  rm -rf "$s"
+}
+
+k3s_dependencies() {
+  mkdir -p /etc/systemd/system/k3s.service.d /etc/systemd/system/k3s-agent.service.d
+  printf '[Unit]\nWants=nebula.service\nAfter=nebula.service wecolab-pod-isolation.service\nRequires=wecolab-pod-isolation.service\n' |
+    tee /etc/systemd/system/k3s.service.d/10-nebula.conf > /etc/systemd/system/k3s-agent.service.d/10-nebula.conf
+  systemctl daemon-reload
+}
+
+# An interrupted install can have its binary but not its unit. Never replace an existing identity.
+k3s_identity() {
+  local config=/etc/rancher/k3s/config.yaml role=$1 name=$2 ip=$3 key value expected
+  [ -f "$config" ] || return 0
+  [ ! -L "$config" ] || die "k3s configuration is a symlink; refusing to replace its identity"
+  for key in node-name node-ip bind-address; do
+    case "$key" in node-name) expected=$name ;; *) expected=$ip ;; esac
+    value=$(sed -n "s/^$key: //p" "$config")
+    [ "$value" = "$expected" ] || die "existing k3s $key differs from the join identity; refusing to overwrite it"
+  done
+  if [ "$role" = manager ]; then
+    ! grep -q '^server:' "$config" || die "existing k3s config is an agent, not a manager"
+    [ "$(sed -n 's/^agent-token: //p' "$config")" = "$(bundle k3sAgentToken)" ] ||
+      die "existing k3s agent token differs from the join identity"
+  else
+    [ "$(sed -n 's/^server: //p' "$config")" = "$(bundle k3sServer)" ] ||
+      die "existing k3s server differs from the join identity"
+  fi
+  [ "$(sed -n 's/^token: //p' "$config")" = "$(bundle k3sToken)" ] ||
+    die "existing k3s token differs from the join identity"
 }
 
 # install_k3s: k3s as k3s_config says, with the firewall up first.
 install_k3s() {
-  local role name
+  local role name unit skip="" t
   role=$(bundle role) name=$(bundle box)
-  mkdir -p /etc/rancher/k3s /etc/systemd/system/k3s.service.d /etc/systemd/system/k3s-agent.service.d
-  printf '[Unit]\nWants=nebula.service\nAfter=nebula.service\n' | tee /etc/systemd/system/k3s.service.d/10-nebula.conf > /etc/systemd/system/k3s-agent.service.d/10-nebula.conf
+  unit=k3s-agent.service; [ "$role" != manager ] || unit=k3s.service
+  has k3s || { [ ! -e /etc/rancher/k3s/config.yaml ] &&
+    ! command -v k3s >/dev/null && ! systemctl cat k3s.service k3s-agent.service >/dev/null 2>&1; } ||
+    die "existing k3s is not owned by WeCoLab"
+  local other=k3s.service
+  [ "$role" != manager ] || other=k3s-agent.service
+  ! systemctl cat "$other" >/dev/null 2>&1 || die "existing k3s unit has a different role"
+  k3s_identity "$role" "$name" "$(bundle ip)"
+  mkdir -p /etc/rancher/k3s
+  k3s_dependencies
+  # Own the incomplete setup before writing its config or copying its cached binary.
+  mark k3s
   if [ "$role" = manager ]; then
     # Pod Security is "restricted" everywhere but the site's own infrastructure namespaces.
     cat > /etc/rancher/k3s/psa.yaml <<YAML
@@ -405,20 +592,44 @@ plugins:
       exemptions: { usernames: [], runtimeClasses: [], namespaces: [kube-system, kube-public, kube-node-lease, flux-system, cert-manager, cnpg-system, wecolab-system] }
 YAML
   fi
-  (umask 077; k3s_config > /etc/rancher/k3s/config.yaml)
-  chmod 600 /etc/rancher/k3s/config.yaml
+  if [ ! -f /etc/rancher/k3s/config.yaml ]; then
+    local config_tmp
+    config_tmp=$(mktemp /etc/rancher/k3s/.config.XXXXXX)
+    (umask 077; k3s_config > "$config_tmp") || { rm -f "$config_tmp"; return 1; }
+    chmod 600 "$config_tmp" && mv "$config_tmp" /etc/rancher/k3s/config.yaml
+  fi
   firewall "$(bundle public)"
   apparmor
-  if ! command -v k3s >/dev/null; then
-    mark k3s
-    local skip="" t; t=$(mktemp -d)
-    if [ -n "$CACHE" ] && [ -f "$CACHE/k3s-$ARCH" ]; then install -m 0755 "$CACHE/k3s-$ARCH" /usr/local/bin/k3s; skip=1; fi
-    # The installer as released with the k3s we pin, not whatever get.k3s.io serves today.
-    fetch "https://raw.githubusercontent.com/k3s-io/k3s/${K3S_VERSION/+/%2B}/install.sh" "$t/k3s-install.sh"
-    INSTALL_K3S_VERSION="$K3S_VERSION" INSTALL_K3S_SKIP_DOWNLOAD="${skip:+true}" INSTALL_K3S_EXEC="$([ "$role" = manager ] && echo server || echo agent)" sh "$t/k3s-install.sh" >/dev/null
+  if ! systemctl cat "$unit" >/dev/null 2>&1; then
+    t=$(mktemp -d)
+    local expected=K3S_SHA256_$ARCH binary=k3s
+    [ "$ARCH" != arm64 ] || binary=k3s-arm64
+    if [ -n "$CACHE" ] && [ -f "$CACHE/k3s-$ARCH" ]; then
+      verify_payload "$CACHE/k3s-$ARCH" "${!expected}"
+      install -m 0755 "$CACHE/k3s-$ARCH" /usr/local/bin/k3s
+    fi
+    if command -v k3s >/dev/null && [ -n "$CACHE" ] && [ -f "$CACHE/k3s-$ARCH" ]; then
+      skip=true
+    elif command -v k3s >/dev/null && has k3s && verify_payload "$(command -v k3s)" "${!expected}"; then
+      skip=true
+    else
+      fetch "https://github.com/k3s-io/k3s/releases/download/$K3S_VERSION/$binary" "$t/k3s-$ARCH" "k3s-$ARCH" ||
+        die "could not fetch pinned k3s binary"
+      verify_payload "$t/k3s-$ARCH" "${!expected}"
+      cache_verified "$t/k3s-$ARCH" "k3s-$ARCH"
+      install -m 0755 "$t/k3s-$ARCH" /usr/local/bin/k3s
+      skip=true
+    fi
+    fetch "https://raw.githubusercontent.com/k3s-io/k3s/$K3S_INSTALL_COMMIT/install.sh" "$t/k3s-install.sh" k3s-install.sh ||
+      die "could not fetch pinned k3s installer"
+    verify_payload "$t/k3s-install.sh" "$K3S_INSTALL_SHA256"
+    cache_verified "$t/k3s-install.sh" "k3s-install.sh"
+    INSTALL_K3S_VERSION="$K3S_VERSION" INSTALL_K3S_SKIP_DOWNLOAD="$skip" INSTALL_K3S_EXEC="$([ "$role" = manager ] && echo server || echo agent)" sh "$t/k3s-install.sh" >/dev/null ||
+      { rm -rf "$t"; return 1; }
     rm -rf "$t"
-    [ -z "$CACHE" ] || [ -f "$CACHE/k3s-$ARCH" ] || cp /usr/local/bin/k3s "$CACHE/k3s-$ARCH" 2>/dev/null || true
   fi
+  systemctl enable "$unit" >/dev/null 2>&1
+  systemctl start "$unit"
   if [ "$role" = manager ]; then
     for _ in $(seq 60); do kubectl get nodes >/dev/null 2>&1 && break; sleep 2; done
     kubectl wait --for=condition=Ready "node/$name" --timeout=300s >/dev/null
@@ -748,20 +959,21 @@ ask() {
 build() { # WeCoLab's binaries and images, before a registry holds them (decision 13)
   local src=${WECOLAB_SRC:-} bin=${WECOLAB_BIN:-}
   if [ -z "$bin" ]; then
-    [ -n "$src" ] || { packages git; src=$STATE/src; [ -d "$src/.git" ] || git clone -q https://github.com/wecolabhq/wecolab "$src"; }
+    [ -n "$src" ] || die "no verified release binaries: supply WECOLAB_BIN from an authenticated release (developer source builds require explicit WECOLAB_SRC)"
     # Go for the build lives under $STATE and goes with it: never /usr/local/go, which may be the box's own.
     if ! command -v go >/dev/null; then
       if [ ! -x "$STATE/go/bin/go" ]; then
         local t sum; t=$(mktemp -d)
-        fetch "https://go.dev/dl/go$GO_VERSION.linux-$ARCH.tar.gz" "$t/go.tgz"
+        fetch "https://go.dev/dl/go$GO_VERSION.linux-$ARCH.tar.gz" "$t/go.tgz" || die "could not fetch Go"
         case $ARCH in amd64) sum=$GO_SHA256_amd64 ;; arm64) sum=$GO_SHA256_arm64 ;; esac
-        echo "$sum  $t/go.tgz" | sha256sum -c - >/dev/null || die "the Go download does not match the pinned checksum"
+        verify_payload "$t/go.tgz" "$sum"
+        cache_verified "$t/go.tgz" "go$GO_VERSION.linux-$ARCH.tar.gz"
         rm -rf "$STATE/go" && tar -C "$STATE" -xzf "$t/go.tgz" && rm -rf "$t"
       fi
       export PATH=$PATH:$STATE/go/bin
     fi
     bin=$STATE/bin && mkdir -p "$bin"
-    VERSION=$(cd "$src" && git describe --tags --always --dirty 2>/dev/null || date -u +dev-%Y%m%d%H%M)
+    VERSION=$(cd "$src" && git describe --tags --always --dirty) || die "developer source must be a named Git checkout"
     for a in amd64 arm64; do
       for c in warden console; do
         (cd "$src" && CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags "-s -w -X main.Version=$VERSION" -o "$bin/$c-$a" "./cmd/$c")
@@ -871,7 +1083,7 @@ The fabric $ZONE is up.
                   Copy it somewhere offline, then:  shred -u $card
 Next: in the Console, add your object storage key (Settings), then add a second site (Add a site).
 MSG
-  local me; me=$(readlink -f "$0" 2>/dev/null) && [ -f "$me" ] && me="sudo bash $me people" || me="curl -fsSL https://console.$ZONE/join.sh | sudo bash -s people"
+  local me; me=$(readlink -f "$0" 2>/dev/null) && [ -f "$me" ] && me="sudo bash $me people" || me="run the verified local release installer with people (docs/install.md)"
   [ -z "$later" ] || printf '\nNo terminal to ask for your password in. In a terminal on this box, run\n  %s\nto set it and start the people mesh; the Console signs in through it.\n' "$me"
 }
 
@@ -882,7 +1094,25 @@ people() {
   say "the people mesh: NetBird at https://mesh.$ZONE"
   netbird_ours
   wait_ready people 900 || die "NetBird has not started; re-run to keep waiting"
-  command -v netbird >/dev/null || { mark netbird; curl -fsSL https://pkgs.netbird.io/install.sh | sh >/dev/null; }
+  if ! command -v netbird >/dev/null; then
+    local t expected=NETBIRD_SHA256_$ARCH netbird_tmp="/usr/local/bin/.netbird-wecolab.$$"
+    t=$(mktemp -d)
+    fetch "https://github.com/netbirdio/netbird/releases/download/$NETBIRD_VERSION/netbird_${NETBIRD_VERSION#v}_linux_$ARCH.tar.gz" "$t/netbird-$ARCH.tar.gz" "netbird-$ARCH.tar.gz" ||
+      die "could not fetch pinned NetBird"
+    verify_payload "$t/netbird-$ARCH.tar.gz" "${!expected}"
+    cache_verified "$t/netbird-$ARCH.tar.gz" "netbird-$ARCH.tar.gz"
+    tar -xzf "$t/netbird-$ARCH.tar.gz" -C "$t" || die "invalid NetBird archive"
+    install -m 0755 "$t/netbird" "$netbird_tmp" || { rm -f "$netbird_tmp"; die "could not install NetBird binary"; }
+    mv "$netbird_tmp" /usr/local/bin/netbird || { rm -f "$netbird_tmp"; die "could not activate NetBird binary"; }
+    mark netbird-direct
+    mark netbird
+    rm -rf "$t"
+  fi
+  if has netbird-direct; then mark netbird; fi
+  if has netbird-direct && ! has netbird-service; then
+    netbird service install || { netbird service uninstall >/dev/null 2>&1 || true; die "could not install NetBird service"; }
+    mark netbird-service
+  fi
   WECOLAB_GIT_URL=${FJ%/api/v1} WECOLAB_GIT_TOKEN=$TOKEN warden people --zone "$ZONE" --email "$WECOLAB_EMAIL" --people-net "$PEOPLE_NET" \
     --age-key "$STATE/site.agekey" --state "$STATE/people.json"
 }
@@ -925,8 +1155,14 @@ converge() {
   nebula_unit
   [ -z "$NEBULA_NEW" ] || systemctl try-restart nebula
   sync_timer
+  if has k3s; then k3s_dependencies; fi
   firewall "$PUBLIC"
   apparmor
+  if has k3s; then
+    local unit=k3s-agent.service
+    [ "$ROLE" != manager ] || unit=k3s.service
+    systemctl cat "$unit" >/dev/null 2>&1 && systemctl start "$unit"
+  fi
   kvm_label
   [ ! -f "$STATE/install.json" ] || install_sops
   ssh_unappend
@@ -943,6 +1179,7 @@ converge() {
 # is best-effort: a step that finds nothing to remove must not stop the others.
 
 uninstall() {
+  local apparmor_conflict="" recovery=""
   [ -f "$STATE/installed" ] || die "WeCoLab did not install anything here ($STATE/installed is missing)"
   say "removing WeCoLab from $(hostname -s)"
   systemctl disable --now wecolab-nebula-sync.timer wecolab-pod-isolation >/dev/null 2>&1 || true
@@ -964,18 +1201,27 @@ uninstall() {
   fi
   rm -f /etc/systemd/system/k3s.service.d/10-nebula.conf /etc/systemd/system/k3s-agent.service.d/10-nebula.conf
   ! has kata || rm -rf /opt/kata   # Kata's files; its containerd settings went with k3s
-  if has apparmor; then   # after k3s: nothing runs under it now
-    apparmor_parser -R /etc/apparmor.d/cri-containerd.apparmor.d >/dev/null 2>&1 || true
-    rm -f /etc/apparmor.d/cri-containerd.apparmor.d
+  if has apparmor || [ -d "$STATE/apparmor" ]; then   # after k3s: nothing runs under it now
+    if ! apparmor_restore; then
+      recovery=$(mktemp -d /var/lib/wecolab-apparmor-recovery.XXXXXX) ||
+        die "cannot preserve AppArmor recovery state; $STATE has been left intact"
+      cp -a "$STATE/apparmor" "$STATE/installed" "$recovery/" ||
+        die "cannot preserve AppArmor recovery state; $STATE has been left intact"
+      apparmor_conflict="AppArmor requires manual recovery: $recovery"
+      echo "$apparmor_conflict" >&2
+    fi
   fi
   rmdir /etc/systemd/system/k3s.service.d /etc/systemd/system/k3s-agent.service.d /etc/rancher /var/lib/rancher /wecolab 2>/dev/null || true
-  if has netbird && command -v netbird >/dev/null; then
-    netbird down >/dev/null 2>&1 || true
-    netbird service stop >/dev/null 2>&1 || true
-    netbird service uninstall >/dev/null 2>&1 || true
+  if has netbird; then
+    if command -v netbird >/dev/null; then
+      netbird down >/dev/null 2>&1 || true
+      netbird service stop >/dev/null 2>&1 || true
+      netbird service uninstall >/dev/null 2>&1 || true
+    fi
     DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq netbird >/dev/null 2>&1 || true
     rm -rf /etc/apt/sources.list.d/netbird.list /usr/share/keyrings/netbird-archive-keyring.gpg /etc/netbird /var/lib/netbird
   fi
+  remove_netbird_binary
   if has nebula-host; then
     systemctl disable --now nebula >/dev/null 2>&1 || true
     rm -rf /etc/nebula /etc/systemd/system/nebula.service
@@ -1000,6 +1246,7 @@ uninstall() {
   [ -z "$pkgs" ] || echo "   Left in place, since other software may use them now: $pkgs(installed by WeCoLab; apt-get purge them if unused)"
   [ ! -f /root/wecolab-recovery-card.txt ] || echo "   Left in place: /root/wecolab-recovery-card.txt. Once it is copied offline: shred -u /root/wecolab-recovery-card.txt"
   echo "   Remove the box from the fabric too, in the Console: Sites, the site, the box, Remove."
+  [ -z "$apparmor_conflict" ] || die "$apparmor_conflict"
 }
 
 # ---------------------------------------------------------------------------------------------------

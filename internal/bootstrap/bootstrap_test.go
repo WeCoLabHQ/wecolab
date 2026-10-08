@@ -65,7 +65,7 @@ func TestLockdown(t *testing.T) {
 }
 
 func platform(t *testing.T) map[string][]byte {
-	files, err := Platform(Options{Version: "v9.9.9", Fetch: func(url string) ([]byte, error) {
+	files, err := Platform(Options{Version: "v9.9.9", Dev: true, Fetch: func(url string) ([]byte, error) {
 		if strings.Contains(url, "flux") {
 			return []byte(fluxManifest), nil
 		}
@@ -75,6 +75,33 @@ func platform(t *testing.T) map[string][]byte {
 		t.Fatal(err)
 	}
 	return files
+}
+
+func TestPlatformRejectsChangedUpstreamManifest(t *testing.T) {
+	_, err := Platform(Options{Version: "v9.9.9", Fetch: func(string) ([]byte, error) {
+		return []byte("apiVersion: v1\nkind: Namespace\nmetadata: {name: malicious}\n"), nil
+	}})
+	if err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
+		t.Fatalf("unverified manifest accepted: %v", err)
+	}
+}
+
+func TestAdditiveSchemasExcludeControllerRollout(t *testing.T) {
+	files, err := Platform(Options{Version: "v9.9.9", SchemaOnly: true, Fetch: func(string) ([]byte, error) {
+		t.Fatal("additive schema staging must not fetch operator controllers")
+		return nil, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no bundled CRDs")
+	}
+	for path := range files {
+		if !strings.HasPrefix(path, "crds/") {
+			t.Errorf("schema staging rolls a controller: %s", path)
+		}
+	}
 }
 
 func TestPlatform(t *testing.T) {

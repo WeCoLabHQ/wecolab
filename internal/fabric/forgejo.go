@@ -25,10 +25,20 @@ func (g *Git) Head(ctx context.Context) (string, error) {
 	return b.Commit.ID, err
 }
 
-// HasCommit is whether this copy has a commit, on any branch.
-func (g *Git) HasCommit(ctx context.Context, sha string) (bool, error) {
-	code, err := g.do(ctx, http.MethodGet, "/git/commits/"+url.PathEscape(sha)+"?stat=false&verification=false&files=false", nil, nil)
-	return err == nil && code != http.StatusNotFound, err
+// RepositoryID identifies the repository independently of its reusable name.
+// Zero means absent, never an API failure or an invalid identity.
+func (g *Git) RepositoryID(ctx context.Context) (int64, error) {
+	var repo struct {
+		ID int64 `json:"id"`
+	}
+	code, err := g.do(ctx, http.MethodGet, "", nil, &repo)
+	if err != nil || code == http.StatusNotFound {
+		return 0, err
+	}
+	if repo.ID <= 0 {
+		return 0, fmt.Errorf("Forgejo returned no repository identity")
+	}
+	return repo.ID, nil
 }
 
 // OnMain is whether a commit is one of main's newest n: a copy whose head it is only lags behind this
@@ -55,37 +65,67 @@ func (g *Git) OnMain(ctx context.Context, sha string, n int) (bool, error) {
 	return false, nil
 }
 
-// Protect sets who may push to main: the mirroring account always, the Console's account only at the
-// writer. Never by force, never deleted.
+// Protect sets who may push to main. Never by force, never deleted.
 func (g *Git) Protect(ctx context.Context, pushers []string) error {
-	var cur struct {
-		Whitelist []string `json:"push_whitelist_usernames"`
-	}
-	code, err := g.do(ctx, http.MethodGet, "/branch_protections/main", nil, &cur)
+	return g.protect(ctx, "main", pushers)
+}
+
+const preservationRule = "superseded-**"
+
+type branchProtection struct {
+	Whitelist  []string `json:"push_whitelist_usernames"`
+	Enabled    bool     `json:"enable_push"`
+	Restricted bool     `json:"enable_push_whitelist"`
+	Force      bool     `json:"enable_force_push"`
+	DeployKeys bool     `json:"push_whitelist_deploy_keys"`
+	Teams      []string `json:"push_whitelist_teams"`
+}
+
+func (p branchProtection) allowsOnly(pushers []string) bool {
+	a, b := slices.Clone(p.Whitelist), slices.Clone(pushers)
+	slices.Sort(a)
+	slices.Sort(b)
+	return p.Enabled && p.Restricted && !p.Force && !p.DeployKeys && len(p.Teams) == 0 && slices.Equal(a, b)
+}
+
+// PreservationProtected reports whether inbound mirrors are fenced. The caller
+// must durably mark an unfinished cutover before changing this protection.
+func (g *Git) PreservationProtected(ctx context.Context, owner string) (bool, error) {
+	var cur branchProtection
+	code, err := g.do(ctx, http.MethodGet, "/branch_protections/"+url.PathEscape(preservationRule), nil, &cur)
+	return err == nil && code != http.StatusNotFound && cur.allowsOnly([]string{owner}), err
+}
+
+// ProtectPreserved admits only the local receiver's owner credential, not the
+// mirror collaborator used by remote sites' legacy scheduled mirrors.
+func (g *Git) ProtectPreserved(ctx context.Context, owner string) error {
+	return g.protect(ctx, preservationRule, []string{owner})
+}
+
+func (g *Git) protect(ctx context.Context, rule string, pushers []string) error {
+	var cur branchProtection
+	path := "/branch_protections/" + url.PathEscape(rule)
+	code, err := g.do(ctx, http.MethodGet, path, nil, &cur)
 	if err != nil {
 		return err
 	}
-	body := map[string]any{"rule_name": "main", "enable_push": true, "enable_push_whitelist": true, "push_whitelist_usernames": pushers}
-	if code == http.StatusNotFound {
-		_, err = g.do(ctx, http.MethodPost, "/branch_protections", body, nil)
-		return err
-	}
-	a, b := slices.Clone(cur.Whitelist), slices.Clone(pushers)
-	slices.Sort(a)
-	slices.Sort(b)
-	if slices.Equal(a, b) {
+	if code != http.StatusNotFound && cur.allowsOnly(pushers) {
 		return nil
 	}
-	_, err = g.do(ctx, http.MethodPatch, "/branch_protections/main", body, nil)
+	body := map[string]any{"rule_name": rule, "enable_push": true, "enable_push_whitelist": true,
+		"push_whitelist_usernames": pushers, "push_whitelist_teams": []string{},
+		"push_whitelist_deploy_keys": false, "enable_force_push": false}
+	if code == http.StatusNotFound {
+		_, err = g.do(ctx, http.MethodPost, "/branch_protections", body, nil)
+	} else {
+		_, err = g.do(ctx, http.MethodPatch, path, body, nil)
+	}
 	return err
 }
 
-// PushMirror is one other copy the writer pushes to.
+// PushMirror is legacy scheduled state, read only to quiesce it before exact-ref replication.
 type PushMirror struct {
-	Name      string `json:"remote_name"`
-	Remote    string `json:"remote_address"`
-	Filter    string `json:"branch_filter"`
-	LastError string `json:"last_error"`
+	Name string `json:"remote_name"`
 }
 
 func (g *Git) PushMirrors(ctx context.Context) ([]PushMirror, error) {
@@ -94,30 +134,8 @@ func (g *Git) PushMirrors(ctx context.Context) ([]PushMirror, error) {
 	return out, err
 }
 
-// AddPushMirror pushes branches matching filter to remote on every commit and every two minutes.
-func (g *Git) AddPushMirror(ctx context.Context, remote, user, password, filter string) error {
-	_, err := g.do(ctx, http.MethodPost, "/push_mirrors", map[string]any{"remote_address": remote, "remote_username": user, "remote_password": password,
-		"branch_filter": filter, "sync_on_commit": true, "interval": "2m"}, nil)
-	return err
-}
-
 func (g *Git) DeletePushMirror(ctx context.Context, name string) error {
 	_, err := g.do(ctx, http.MethodDelete, "/push_mirrors/"+name, nil, nil)
-	return err
-}
-
-// SyncPushMirrors pushes now.
-func (g *Git) SyncPushMirrors(ctx context.Context) error {
-	_, err := g.do(ctx, http.MethodPost, "/push_mirrors-sync", nil, nil)
-	return err
-}
-
-// Branch creates a branch at main's head; one that exists already is left as it is.
-func (g *Git) Branch(ctx context.Context, name string) error {
-	code, err := g.do(ctx, http.MethodPost, "/branches", map[string]any{"new_branch_name": name, "old_ref_name": "main"}, nil)
-	if code == http.StatusConflict {
-		return nil
-	}
 	return err
 }
 

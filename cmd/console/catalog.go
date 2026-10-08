@@ -91,7 +91,7 @@ func fillEnv(items []catalogEnv, app, db string, vars map[string]string, generat
 			if key == "user" {
 				key = "username"
 			}
-			out = append(out, map[string]any{"name": it.Name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": db + "-app", "key": key, "optional": true}}})
+			out = append(out, map[string]any{"name": it.Name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": db + "-app", "key": key}}})
 			continue
 		}
 		v := placeholder.ReplaceAllStringFunc(it.Value, func(m string) string {
@@ -121,6 +121,18 @@ func fillEnv(items []catalogEnv, app, db string, vars map[string]string, generat
 func catalogPod(e catalogEntry, app, db string, vars map[string]string, generated, secrets map[string]string) (containers, volumes []any, claims []map[string]any, err error) {
 	if len(e.Unsupported) > 0 {
 		return nil, nil, nil, fmt.Errorf("%s is host incompatible, so the fabric refuses it: %s", e.Title, strings.Join(e.Unsupported, "; "))
+	}
+	for _, field := range e.Env {
+		if field.DB != "" && db == "" {
+			return nil, nil, nil, fmt.Errorf("%s requires a database for %s", e.Title, field.Name)
+		}
+	}
+	for _, sidecar := range e.Sidecars {
+		for _, field := range sidecar.Env {
+			if field.DB != "" && db == "" {
+				return nil, nil, nil, fmt.Errorf("%s sidecar %s requires a database for %s", e.Title, sidecar.Name, field.Name)
+			}
+		}
 	}
 	mount := func(prefix string, vols []catalogVolume) []any {
 		mounts := []any{}
@@ -154,7 +166,7 @@ func catalogPod(e catalogEntry, app, db string, vars map[string]string, generate
 		if strings.Contains(s.Image, "${") {
 			return nil, nil, nil, fmt.Errorf("sidecar %s has an unresolved image %s", s.Name, s.Image)
 		}
-		c := map[string]any{"name": s.Name, "image": s.Image, "env": fillEnv(s.Env, app, "", vars, generated, secrets), "volumeMounts": mount(s.Name+"-", s.Volumes), "securityContext": sc,
+		c := map[string]any{"name": s.Name, "image": s.Image, "env": fillEnv(s.Env, app, db, vars, generated, secrets), "volumeMounts": mount(s.Name+"-", s.Volumes), "securityContext": sc,
 			"resources": map[string]any{"requests": map[string]any{"cpu": "50m", "memory": "64Mi"}, "limits": map[string]any{"memory": "1Gi"}}}
 		if s.Command != nil {
 			c["args"] = toList(s.Command)

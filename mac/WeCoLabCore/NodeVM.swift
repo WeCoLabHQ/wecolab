@@ -2,6 +2,49 @@ import CoreGraphics
 import Foundation
 import Virtualization
 
+/// Publication state belongs to the share, not to the requested input state. An absent mode is
+/// non-idle to the node agent. The writer/remover seams allow filesystem failures to be tested
+/// without starting a VM or modifying a user's share.
+enum ModePublicationError: Error {
+    case unsafeIdle(Error)
+}
+
+final class ModePublication {
+    private let url: URL
+    private let write: (Data, URL) throws -> Void
+    private let remove: (URL) throws -> Void
+    private(set) var mode = ""
+
+    init(url: URL, write: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) },
+         remove: @escaping (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) {
+        self.url = url
+        self.write = write
+        self.remove = remove
+    }
+
+    func reset() { mode = "" }
+
+    func publish(_ next: String) throws {
+        guard next != mode else { return }
+        if next == "active" {
+            // A previous process may have left idle behind. Attempt removal even if a
+            // permissions error would make a file-existence check report false.
+            mode = ""
+            do {
+                try remove(url)
+            } catch {
+                if let cocoa = error as? CocoaError, cocoa.code == .fileNoSuchFile {
+                    // Missing mode is the guest agent's existing non-idle backstop.
+                } else {
+                    throw ModePublicationError.unsafeIdle(error)
+                }
+            }
+        }
+        try write(Data(next.utf8), url)
+        mode = next
+    }
+}
+
 /// The node VM. The actor runs on the VM's own serial queue, so every Virtualization call
 /// happens on the queue the VM was created with.
 public actor NodeVM {
@@ -10,7 +53,8 @@ public actor NodeVM {
 
     private var vm: VZVirtualMachine?
     private var config = NodeConfig()  // as started; only memoryGiB follows the app while running
-    public private(set) var mode = ""  // "active" or "idle", once running
+    private let publication = ModePublication(url: Paths.user.share.appending(path: "mode"))
+    public var mode: String { publication.mode }
 
     public init() {}
 
@@ -33,8 +77,13 @@ public actor NodeVM {
         try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in vm.start { done.resume(with: $0) } }
         self.vm = vm
         self.config = config
-        mode = ""
-        tick()
+        publication.reset()
+        do {
+            try await tick()
+        } catch {
+            try await stopImmediately()  // retain a running VM if the hypervisor refuses to stop it
+            throw error
+        }
     }
 
     /// Asks the guest to power off, and pulls the plug only if it has not after a minute.
@@ -44,6 +93,23 @@ public actor NodeVM {
         for _ in 0..<60 where isRunning { try? await Task.sleep(for: .seconds(1)) }
         if vm.canStop {
             await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in vm.stop { _ in done.resume() } }
+        }
+        self.vm = nil
+    }
+
+    /// A stale idle file is unsafe when invalidation fails. Stop rather than leave the node
+    /// workload-eligible while reporting that the Mac is active.
+    private func stopImmediately() async throws {
+        guard let vm else { return }
+        guard vm.canStop else {
+            if vm.state == .stopped || vm.state == .error { self.vm = nil; return }
+            throw NodeError("mode invalidation failed and the VM cannot be stopped; keeping its lock")
+        }
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
+            vm.stop { error in
+                if let error { done.resume(throwing: error) }
+                else { done.resume(returning: ()) }
+            }
         }
         self.vm = nil
     }
@@ -60,16 +126,17 @@ public actor NodeVM {
     /// not reach the node.
     /// Applied on every tick, not only on change: a target set before the guest's balloon driver
     /// loads is lost, and the guest must see it again once it can act on it.
-    public func tick() {
+    public func tick() async throws {
         guard let vm, vm.state == .running else { return }
         // kCGAnyInputEventType (~0): keyboard, mouse or tablet. `.null` does not measure input.
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         let active = idle < Double(config.idleMinutes * 60)
         (vm.memoryBalloonDevices.first as? VZVirtioTraditionalMemoryBalloonDevice)?.targetVirtualMachineMemorySize = Self.balloonTarget(active: active, config: config)
-        let next = active ? "active" : "idle"
-        if next != mode {
-            mode = next
-            try? Data(next.utf8).write(to: Paths.user.share.appending(path: "mode"), options: .atomic)
+        do {
+            try publication.publish(active ? "active" : "idle")
+        } catch ModePublicationError.unsafeIdle(let error) {
+            try await stopImmediately()
+            throw error
         }
     }
 

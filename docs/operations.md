@@ -4,11 +4,12 @@ What a person does, and what the fabric does in answer. Everything here starts i
 says otherwise; every change it makes is a commit you can read in the Fabric's history. WeCoLab's own
 words (site, box, steward, writer, handover, vault, Door) are explained in the [glossary](glossary.md).
 
-Commands on a box use WeCoLab's install script. Only the first box keeps a copy, as of its install
-(`/var/lib/wecolab/src/install.sh`), so run it from GitHub as root with its argument:
+Commands on a box use a **verified local release**, never a moving branch or an unverified
+`/join.sh` response. Follow [install.md](install.md#2-install-the-first-site) to authenticate
+the source commit, manifest and payload digests before root execution. Keep that directory:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wecolabhq/wecolab/main/install.sh | sudo bash -s <argument>
+sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh" <argument>
 ```
 
 ## Apps
@@ -40,13 +41,41 @@ elsewhere is refused: move again when this one is done, or force.
 the primary changes at once and the Door sends people to the new primary. Such an app runs at every one
 of its sites, each on its own volumes, so people then see the new primary's files, not the old one's.
 
-**Forced move (the old primary is gone).** The same, with Force ticked. The new primary promotes without
-a token, so writes the old primary had not archived are lost: at most the archive timeout, one minute.
-The same commit gives every other site a new archive generation. Each other site rebuilds its database
-from the vault as a standby once the new primary is writable, healthy and has a base backup in its vault.
-The old primary's site does the same when it comes back. Force only to a site that has the database:
-WeCoLab never replaces a lost database with an empty one, so at a site without one the app stays stopped
-with `DatabaseMissing`. As with a planned move, files on the app's volumes stay at the old primary.
+**Forced move (independently fence the old primary first).** Loss of contact does not prove
+that a primary has stopped writing. Physically power it off, or isolate **all** its write paths
+and disable automatic restart, before ticking Force. The dialog fetches the current Git App
+revision and history-bearing primary. Select the fencing method, enter operator evidence,
+and acknowledge isolation. The API rejects a bare Force flag, stale revision, wrong archive
+identity or wrong source; the commit records the authenticated actor, time and assertion.
+That record is not physical fencing and does not make an unsafe partition safe.
+
+The target promotes without a token. Writes it has not replayed may be lost; neither
+`archive_timeout=60s` nor a recently uploaded object bounds the loss. Check measured recovery
+evidence; unknown means no bounded claim. Every other site gets a new archive generation,
+but rebuild waits for a healthy writable survivor with a validated DONE backup matching its
+current database history. Force only to a site that already has the database; otherwise it
+stays stopped with `DatabaseMissing`. Site-local files do not follow the move.
+
+Do not simply restart the powered-off old database to rejoin: its persisted primary
+can start before Git and role reconciliation catch up. Keep an independent database/write
+fence across startup until the old Cluster is replaced by a verified standby. When the old
+site is accessible before power-off, CNPG's
+[`cnpg.io/fencedInstances=["*"]`](https://cloudnative-pg.io/docs/1.30/fencing/) annotation
+stops its postmaster and persists across pod recreation. Set it with
+`kubectl annotate ... --field-manager=flux-client-side-apply`: Flux removes annotations
+written with the default kubectl manager. Reconcile the app's Flux Kustomization and
+verify that both the annotation and stopped postmaster remain before power-off.
+Do not clear that annotation on the old Cluster. Field-manager selection alone is not
+continuous-fence proof: verify it again after role reconciliation and throughout rejoin.
+Warden includes the fence in Flux's desired state and preserves the retained Cluster's
+existing primary/source/promotion-token settings until guarded deletion. This matters:
+CNPG 1.30.1's [replica-transition cleanup](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/pkg/reconciler/replicaclusterswitch/reconciler.go)
+removes its all-instance fence. Changing the old incarnation into a replica before
+deletion can therefore undo the operator's fence. The replacement must have a new UID,
+remain in recovery, and replay the survivor's history. If the old
+fence disappears, stop the old site. If no persistent fence was established, keep it
+powered off until an operator can establish a safe rejoin boundary.
+See [Flux's field ownership guidance](https://fluxcd.io/flux/faq/#why-are-kubectl-edits-rolled-back-by-flux).
 
 **A primary lost its database.** When the site holding an app's history has no database (a lost disk, a
 reinstalled site), its Warden does not make an empty one: Flux stops applying the app at that site
@@ -125,16 +154,19 @@ sites that remain report the new one. What the site already holds stays there: i
 to that commit, its databases and volumes, and anything it could decrypt. Nothing in WeCoLab can reach
 into a site that has left.
 
-**Rotate a vault key.** Storage → the vault → Rotate key. The Console makes a new key restricted to the
-bucket with the account key in Settings and writes it into the project's vault, marking the old key
-`retiring` in the same commit, then into every database app's Secret. A database app deployed meanwhile
-is refused, to be deployed again with the new key. The old key stays valid at B2 until every site of every
-database app of the project reports the new one in its status; then the writer's Warden deletes it at B2
-and takes it out of the vault. A site that does not answer is waited for, so no site still archiving with
-the old key is cut off; Storage shows which sites are awaited, and the writer's Warden logs them. Rotating
-again before then retires both old keys. Without the account key in Settings, or with one of an account
-that does not hold the bucket, the old keys stay valid and the writer's Warden logs that it could not
-delete them. Vaults entered by hand are rotated by hand, at the storage provider.
+**Rotate a vault key.** Storage → Rotate key commits a strictly increasing `key-version`
+and `mutation-revision` with the new bucket-scoped key and the retiring key IDs. The writer
+repairs every current Git database App Secret to that exact version, preserving its other
+secrets and SOPS recipients. Interrupted repairs resume; stale repairs cannot overwrite a
+newer rotation. Deployment, placement, deletion and repair change the same encrypted vault
+file, so concurrent mutations conflict rather than escape the inventory.
+
+Retirement checks every current App Secret and fresh direct reports from every intended
+site for the exact key ID **and** version. Pending App deletion blocks a new retirement
+claim. A durable `retirement-phase` then prevents affected mutations while the provider
+deletion is in flight or uncertain. A timeout is not success: restore connectivity and let
+the writer retry; never clear this claim by hand. Missing credentials, sites or versions
+keep old keys valid. Hand-entered vaults still require provider-side manual rotation.
 
 **When a collaborator leaves.** Everything above, in order, as the fabric's admin:
 
@@ -153,17 +185,24 @@ delete them. Vaults entered by hand are rotated by hand, at the storage provider
 **Remove WeCoLab from a box.** Run the install script with `uninstall` on the box:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wecolabhq/wecolab/main/install.sh | sudo bash -s uninstall
+sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh" uninstall
 ```
 
-It removes what WeCoLab added and nothing else: k3s with everything it ran (this box's databases, volumes
-and copy of the Fabric), Nebula, the certificate sync, its iptables chains (`WECOLAB-HOST`,
-`WECOLAB-POD`), the ufw rules it added, its marked block of SSH keys, and NetBird on the Door's box. Every
-step is best-effort, so one that finds nothing to remove does not stop the others. The install records
-each of these as it adds it (`/var/lib/wecolab/installed`), and refuses a box that already runs its own
-k3s or Nebula, so a box's other services, containers and settings are never touched. Packages it had to
-install (such as `jq`) are listed and left, since other software may use them by then. Remove the box in
-the Console as well, so its certificate is blocked.
+Uninstall deletes this box's k3s databases, volumes and Fabric copy: remove or evacuate the
+box deliberately first. Its ownership ledger controls removal of Nebula, firewall chains,
+SSH-key blocks, NetBird and their units. Shared packages are left installed.
+Pre-existing AppArmor files are backed up and restored only if the installed file still
+matches WeCoLab's recorded digest. An operator edit is preserved, reported as a conflict,
+and original recovery material is retained under `/var/lib/wecolab-apparmor-recovery.*`.
+Remove the box in the Console too, so its certificate is blocked.
+
+Both k3s roles require the firewall unit and successful setup before startup. A failed
+firewall is a boot failure, not permission to start unguarded. Nebula sync validates the
+candidate before installation, propagates failed apply/reload, and leaves failed work
+retryable. Interrupted k3s installs retain ownership and the installation mode until the
+service is verified; rerun the same verified installer instead of removing the pending
+state. Developer lab reload builds for each manager's actual architecture and never
+records a failed reload as successful.
 
 **A box was off too long.** A box whose certificate expired cannot rejoin by itself. Remove it in the
 Console and wait for its site's Warden to delete its node (Remove a box, above; k3s refuses a box that
@@ -179,7 +218,7 @@ The writer is the steward whose Fabric copy takes commits. Normally it never cha
 install script with `takeover`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wecolabhq/wecolab/main/install.sh | sudo bash -s takeover
+sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh" takeover
 ```
 
 This is the way for a planned change and when the writer's site is gone alike. Root on a steward's
@@ -190,17 +229,47 @@ manager is trusted with the whole fabric already. That site's Warden, from its o
    claim), and starts pushing every commit to every other copy;
 3. publishes the claim in its status at once, from its own copy; the Door routes `console.<zone>` to it.
 
+The CLI, Console and Warden serialize local writer-role changes with the Kubernetes Lease
+`wecolab-system/wecolab-writer-transition`. Warden rechecks its Git claim after acquiring it,
+so a reconciliation started before takeover cannot subsequently close the new writer's copy.
+The local Kubernetes API and lease permissions are required; there is no unlocked fallback.
+This coordinates processes at one site, not a quorum between sites, and does not fence
+database primaries.
+
 It needs no Console: with the writer's site gone, `console.<zone>` may lead nowhere (the Door routes it to
 the writer named in Git, and with one public site the Door itself may be gone). Settings has the same
 button, **Take over as writer here**, but it shows only on a steward's own Console, and the Door routes
 people only to the writer's.
 
-Every other steward's Warden, seeing a steward claim a higher epoch, stops its own Console from committing
-and stops pushing; a claim by a site that is not a steward counts for nothing. If the old writer comes back
-after committing things nobody else received, its copy has gone its own way and the new writer's pushes are
-refused; its Warden then pushes those commits to the new writer as a branch named
-`superseded-<site>-<commit>` for a person to read, and takes the new writer's history. A site that is not a
-steward simply takes the writer's history.
+Every other steward's Warden, seeing a stronger claim, closes its own Console's write access.
+For a divergent copy it first drains Forgejo, then asks the winning Warden to retain the losing
+main and **all earlier preservation branches** under its writer-transition Lease. New branch names
+are `superseded-<site>-<full commit ID>`. A receipt covers exact refs and repository identity;
+object existence or an ancestry response alone never authorizes deletion. Conflicting branch names,
+changed source refs, missing credentials or an incomplete receipt retain the source copy.
+A non-steward that still holds former-writer or unmanaged history requires operator custody.
+
+Warden removes legacy scheduled mirrors. Before accepting custody, the receiver protects
+`superseded-**` against remote mirroring accounts and observes a fresh Recreate rollout after
+changing that protection. A repository-bound completion marker avoids repeated restarts.
+Do not manually remove these protections or marker/journal annotations to bypass a refusal.
+An uncertain DELETE leaves `wecolab.io/git-recreation` on the writer-transition Lease: custody,
+takeover and ordinary repository creation stay blocked. Warden's sequential recovery drains
+Forgejo, Ensures the repository and restores protection without retrying DELETE. An orphan-directory
+failure remains blocked for operator recovery; do not erase either history.
+
+The pure-Go transfer preflights an 8 MiB compressed and aggregate expanded-history budget,
+including reconstructed delta targets, and at most 16,384 objects. A larger history is refused
+with the source retained. Increasing a container memory limit alone does not change these limits.
+Preserve/export the complete histories before addressing that capacity boundary; do not truncate,
+force-overwrite or delete them to make convergence appear successful.
+
+The exact-ref custody path passed deployed successive/overlapping transfers, a complete
+fresh-fabric run and uninstall verification; see the
+[convergence evidence](plans/2026-10-08-writer-convergence.md).
+During any transition, verify all sites and the public Console report the expected writer
+and epoch before issuing the next mutation. A successful takeover command only records
+the claim; it does not mean every site or the public Console has converged.
 
 Take over only when the old writer is really gone or you are moving it on purpose. Two people taking over
 at once is settled by the higher epoch, then by the lower site name.
@@ -226,12 +295,64 @@ old CA leaves the bundle thirty days later.
 
 ## Backups and restore
 
-**The vault** holds every database's WAL and base backups under Object Lock. The Storage page shows each
-database's newest backup and WAL, as the app's primary sees them. Volumes are never in the vault.
+**Backup evidence.** The vault inspector reads bounded Barman `backup.info` metadata.
+Only DONE records with valid completion time, database system/timeline and WAL range,
+under the exact current archive, count as completed backups. FAILED, incomplete, malformed,
+unreadable or cross-history objects are not proof; an S3 modification timestamp is not a
+backup completion time. This evidence permits neither an unbounded data-loss promise nor
+the claim that a restore was tested. General point-in-time restoration remains an
+operator procedure; the Console does not provide a restore button.
 
-**Restore a database from the vault by hand.** *Not built yet.* Nothing in the Console or Warden restores
-an app's database to a point in time, after a mistake or after the app is deleted. An app's archive is at
-`s3://<bucket>/<project>/<app>/` in its project's vault, and stays there after the app is deleted.
+Automatic base-backup requests require a fresh, healthy, writable primary-history
+measurement. A completed backup of an earlier system, timeline or archive does not
+suppress the current-history request. Scheduled backups remain suspended until the
+local database is actually writable and healthy in its desired archive, not merely
+named primary in Git. Existing in-flight and hourly failure cooldowns still apply;
+rebuild remains blocked until matching completed evidence is observed.
+
+New databases receive immutable random `spec.archiveID` values. Archive folders beneath
+`s3://<bucket>/<project>/<app>/` include that identity, site and generation. Recreating an
+App name cannot discover its previous incarnation's retained backup as current evidence.
+The gated migration preserves legacy `<database>-<site>[-g<n>]` names exactly; it does
+not rename or copy retained objects. Never erase `archiveID` or revert to a binary that
+infers identity from the App name.
+
+**Measured recovery.** CNPG 1.30.1 exports the configured read-only recovery query through
+its owned instance's port 9187 `/metrics`, using the exporter `pg_monitor` role. Warden
+samples database system ID, timeline, role and WAL position; no tenant database password
+is added. Same-history primary/replica positions plus bounded observation ages can prove
+`within-objective`. An upper bound larger than the objective alone proves neither success
+nor failure: `outside-objective` requires older uncovered WAL with a sufficient lower
+bound. Stale, missing, regressed or incomparable samples are `unknown`.
+
+Each site report carries a receiver-local, non-serialized monotonic receipt timestamp.
+Cached reads do not renew it; missing or older-than-15-second receipts cannot authorize a
+recovery claim. Wall clocks from different sites are not compared to infer replay lag.
+Database prerequisites, local files, measured recovery and operational readiness remain
+separate. Persistent volumes are site-local and have no general WeCoLab backup.
+
+**Record a verified drill.** After an isolated runner has actually restored and read back
+data, retain its sanitized result and run the verified binary:
+
+```bash
+warden record-restore --namespace <project> --app <app> --evidence /private/drill-result.json
+```
+
+The operator's kubeconfig authenticates the actor and App update permission. Writer Git
+credentials must be supplied separately; the command checks the expected App blob SHA,
+archive/system/timeline, matching current completed backup, passed checksum readbacks and
+explicit `database` or `database-and-files` scope before a conditional commit. Failed or
+stale evidence cannot update `spec.restoreVerification`. This is an authenticated operator
+assertion about the recorded drill, not independent certification or proof of future
+recoverability. With no matching record, the Console says **Never verified**.
+
+**Vault network policy.** Production endpoints require HTTPS and public addresses. Each
+new socket resolves once, rejects mixed public/private results and special-use addresses,
+and dials a validated IP while retaining TLS hostname verification. Redirects and proxy
+environment variables are not followed. Only the Fabric's explicit development setting
+permits local HTTP fixtures; do not use it to bypass a production private-endpoint refusal.
+S3 and native B2 exchanges and response reads have bounded deadlines; a stalled provider
+is an error and a retry on a later writer tick, never evidence of success.
 
 **NetBird's data** (people, devices, its identity provider). *Not built yet.* It is to be backed up
 nightly by the site running it, encrypted to the stewards and the recovery key, to the fabric's own
@@ -255,25 +376,25 @@ servers as `NS` records at your DNS host.
 
 ## Upgrades
 
-Versions live in the Fabric (`system/` and `crds/`) and in the install script. An upgrade is a commit, and
-Flux rolls it out at every site. `warden upgrade`, from the version being installed, makes that commit: it
-renders that version's `system/` and `crds/` (the vendored upstream manifests included) and commits the
-difference to the writer's copy as one conditional commit, removing files the version no longer has and
-never touching the fabric's settings.
+Upgrade only from an authenticated release and only after an actual disposable restore
+has read back the existing databases. [Development: staged upgrade
+preflight](development.md#candidate-releases-and-upgrade-preflight) defines the exact
+receipt and commands. Stop all old Console/Warden writers and revoke their Forgejo write
+grant before beginning: a new Git maintenance marker cannot fence an old binary.
 
-*Not built yet: getting a version's images to every box.* `warden upgrade` moves no images. Until a
-registry holds them (decision 13), every box needs the new Warden and Console images before the commit; a
-box without them cannot start the new pods. For version `<tag>`:
+The installer and Git manifests do not distribute upgrade images automatically. Before
+the platform stage, prepare both architecture images and import the matching pair on
+every box. Use the immutable version from the verified release's `VERSION`:
 
-1. Build the version's binaries in a WeCoLab checkout at that tag: `make dist VERSION=<tag>`. They land in
-   `dist/bin/` (`warden-amd64`, `console-arm64`, ...).
-2. Make the images with `warden image`, once for each machine type the fabric has (`amd64`, `arm64`).
-   They carry SOPS, which the first box keeps in `/var/lib/wecolab/bin/` (the version install.sh pins):
+1. Use the verified release's four Linux binaries, not an unreviewed source build. Set
+   `<tag>` below to its `VERSION` value (the source snapshot's short commit).
+2. Make images with the verified `warden image`, once for each machine type (`amd64`,
+   `arm64`), and the matching verified SOPS payload:
 
    ```bash
    a=amd64 v=<tag> sops=/var/lib/wecolab/bin/sops-v3.13.3.linux.$a
-   warden image --name ghcr.io/wecolabhq/warden:$v --arch $a --out warden-$v-$a.tar dist/bin/warden-$a=/warden $sops=/usr/local/bin/sops
-   warden image --name ghcr.io/wecolabhq/console:$v --arch $a --out console-$v-$a.tar dist/bin/console-$a=/console $sops=/usr/local/bin/sops
+   warden image --name ghcr.io/wecolabhq/warden:$v --arch $a --out warden-$v-$a.tar "$HOME/wecolab-release/warden-$a"=/warden $sops=/usr/local/bin/sops
+   warden image --name ghcr.io/wecolabhq/console:$v --arch $a --out console-$v-$a.tar "$HOME/wecolab-release/console-$a"=/console $sops=/usr/local/bin/sops
    ```
 
 3. On every box, copy the two tarballs for its machine type to `/var/lib/rancher/k3s/agent/images/`,
@@ -287,30 +408,33 @@ box without them cannot start the new pods. For version `<tag>`:
    and the same for the Console's. On each steward's manager, also copy all four tarballs to
    `/var/lib/wecolab/dist/`: its Console hands them to boxes that join later, and a join without them
    stops.
-4. On the writer's manager, with the new version's `warden` (`dist/bin/warden-<arch>`), make the commit:
+4. On the writer manager, follow the documented `begin → schemas → migrate → platform →
+   complete` sequence with the verified new binary, operator kubeconfig and private
+   Forgejo credentials. `begin` checks the exact writer-Git App/site inventory, offline
+   snapshot/recovery hashes and per-database restore receipts; local primary metadata is
+   also inspected directly. Wait for additive schemas at every site before migration.
+5. Migration preserves legacy archive names, initializes credential versions, backfills
+   route claims and placement revision, and adds CNPG recovery-exporter queries to
+   existing database manifests. Colliding legacy route owners block migration; resolve
+   them explicitly, never select a winner by iteration order.
+6. Wait for every site's new schema-aware controller report before `complete` reopens
+   protected mutations. Repeat the restore/readback and authorization checks on the
+   upgraded disposable copy before accepting a production rollout.
 
-   ```bash
-   export WECOLAB_GIT_URL=http://$(kubectl -n wecolab-system get svc forgejo -o jsonpath='{.spec.clusterIP}'):3000
-   export WECOLAB_GIT_TOKEN=$(kubectl -n wecolab-system get secret git -o jsonpath='{.data.token}' | base64 -d)
-   warden upgrade --version <tag>
-   ```
+Coordination records live under `coordination/`, outside Flux's recursively discovered
+`fabric/` manifests. Claims are released only with final App removal after site cleanup;
+placement and vault revisions are changed by the same conditional Git transaction as
+the decision they protect. Reading a file's SHA without changing it is not a lock.
 
-**Images named `ghcr.io/wecolab/…`.** Fabrics made before 2026-09-30 name their images under
-`ghcr.io/wecolab`, a GitHub namespace WeCoLab does not own: a box missing an image would pull it from
-there. Moving to `ghcr.io/wecolabhq` is an upgrade like any other. Import and pin the images under the new
-names on every box first (steps 1 to 3, Macs included), then `warden upgrade`. Pods keep their old
-images until the commit, so the order is safe.
+Do not downgrade after migration to controllers that ignore these contracts. Rollback
+requires the offline pre-migration snapshot and matching binaries in a fenced isolated
+recovery operation; never rewrite the live Fabric or retained object namespaces.
 
-A fabric made before Flux was locked down keeps its Flux as it was, and the command says so: run
-`warden upgrade --lock-flux` once every site runs the new Warden, which names the platform's service
-account on the Kustomizations install.sh made.
-
-Nebula and the box's own setup are upgraded by running the install script with no argument on the box
-(`curl ... | sudo bash`). On a box that belongs to a fabric it only re-applies its packages, the pinned
-Nebula, the certificate sync and the firewall, and touches none of the fabric's keys, tokens or
-certificates. *Not built yet: upgrading k3s.* A box whose k3s predates `bind-address` and the agent token
-runs without them, its ports guarded by `WECOLAB-HOST`, until it leaves (the script's `uninstall`) and
-joins again; the re-run says so.
+Reapply host setup with the verified local installer, not `curl | sudo bash`. On an
+enrolled box it reapplies pinned host packages, certificate sync and firewall without
+changing Fabric secrets. An existing k3s version is not automatically upgraded by this
+operation; older binding/token settings remain guarded by the host firewall until a
+deliberate evacuate/uninstall/rejoin.
 
 ## Looking closer
 

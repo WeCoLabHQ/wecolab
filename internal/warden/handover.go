@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"path"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
@@ -190,7 +191,32 @@ func (h *Handovers) forget(ctx context.Context, ns, name string) error {
 		return err
 	}
 	msg := fmt.Sprintf("%s/%s: removed from the Fabric; every site deleted its part", ns, name)
-	sha, err := h.Git.Edit(ctx, fabric.Author{Name: "Warden", Email: "warden@" + h.Site}, msg, append([]string{p}, folder...), func(s *fabric.Snapshot) ([]fabric.FileChange, error) {
+	claims := []string{}
+	// Inventory the current desired App before entering the conditional edit;
+	// its path is rechecked inside the edit before releasing any claim.
+	ageKey := ""
+	if b, ok, err := h.Git.Read(ctx, p); err != nil {
+		return err
+	} else if ok {
+		var app v1alpha1.App
+		if err := yaml.Unmarshal(b, &app); err != nil {
+			return err
+		}
+		if app.Spec.Database != "" {
+			ageKey, err = siteAgeKey(ctx, h.Client, h.Site)
+			if err != nil {
+				return err
+			}
+		}
+		if app.Spec.Hostname != "" {
+			claims = append(claims, fabric.PublicClaimPath(app.Spec.Hostname))
+		}
+		if app.Spec.Mesh {
+			claims = append(claims, fabric.MeshClaimPath(name+"-"+ns))
+		}
+	}
+	vaultPath := "secrets/vault-" + ns + ".sops.yaml"
+	sha, err := h.Git.Edit(ctx, fabric.Author{Name: "Warden", Email: "warden@" + h.Site}, msg, append(append([]string{p, vaultPath}, folder...), claims...), func(s *fabric.Snapshot) ([]fabric.FileChange, error) {
 		b, ok := s.Get(p)
 		if !ok {
 			return nil, nil
@@ -200,6 +226,37 @@ func (h *Handovers) forget(ctx context.Context, ns, name string) error {
 			return nil, err
 		}
 		out := []fabric.FileChange{{Path: p}}
+		for _, claim := range []struct{ p, n string }{{fabric.PublicClaimPath(a.Spec.Hostname), a.Spec.Hostname}, {fabric.MeshClaimPath(name + "-" + ns), name + "-" + ns}} {
+			if claim.n == "" || claim.p == fabric.MeshClaimPath(name+"-"+ns) && !a.Spec.Mesh {
+				continue
+			}
+			if !slices.Contains(claims, claim.p) {
+				return nil, fabric.ErrConflict
+			}
+			release, err := fabric.ReleaseRoute(s, claim.p, claim.n, ns+"/"+name)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, release)
+		}
+		if a.Spec.Database != "" {
+			enc, ok := s.Get(vaultPath)
+			if !ok {
+				return nil, fmt.Errorf("vault missing during database deletion")
+			}
+			v, err := openVaultFile(enc, path.Base(vaultPath), ageKey)
+			if err != nil {
+				return nil, err
+			}
+			if err := fabric.BumpVault(v); err != nil {
+				return nil, err
+			}
+			updated, err := reseal(enc, path.Base(vaultPath), ageKey, func(data map[string]string) error { data["mutation-revision"] = v["mutation-revision"]; return nil })
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, fabric.FileChange{Path: vaultPath, Content: updated})
+		}
 		for _, f := range folder {
 			out = append(out, fabric.FileChange{Path: f})
 		}

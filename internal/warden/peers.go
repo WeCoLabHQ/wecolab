@@ -84,6 +84,7 @@ func (p *Peers) fetch(ctx context.Context, site string) (*SiteStatus, error) {
 	if st.Site != site {
 		return nil, fmt.Errorf("%s answered as %q", site, st.Site)
 	}
+	st.ReceivedAt = time.Now()
 	return st, nil
 }
 

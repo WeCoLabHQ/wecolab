@@ -37,10 +37,47 @@ type AppSpec struct {
 	Workload string `json:"workload"`
 	// Database is the CloudNativePG Cluster in the app's folder, if any.
 	Database string `json:"database,omitempty"`
+	// ArchiveID identifies this database incarnation. Legacy databases migrate to
+	// their existing Database prefix; new databases use id-<128 random bits>.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="archiveID is immutable"
+	ArchiveID string `json:"archiveID,omitempty"`
+	// Force records the latest operator-asserted fencing decision, not physical proof.
+	Force               *ForceRecord         `json:"force,omitempty"`
+	RestoreVerification *RestoreVerification `json:"restoreVerification,omitempty"`
 	// Archive is each site's archive generation: its database archives to <db>-<site>, or
 	// <db>-<site>-g<n> from generation 2. A new generation rebuilds that site's database from the
 	// vault; Object Lock never empties the old one.
 	Archive map[string]int `json:"archive,omitempty"`
+}
+
+type ForceRecord struct {
+	ID    string      `json:"id"`
+	Actor string      `json:"actor"`
+	From  string      `json:"from"`
+	To    string      `json:"to"`
+	At    metav1.Time `json:"at"`
+	// +kubebuilder:validation:Enum=power-off;write-path-isolated
+	Method string `json:"method"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Evidence string `json:"evidence"`
+}
+
+// RestoreVerification is operator-recorded evidence of an actual data readback.
+// It is never inferred from a completed backup or recipe certification.
+type RestoreVerification struct {
+	ArchiveID   string      `json:"archiveID"`
+	SystemID    string      `json:"systemID"`
+	BackupID    string      `json:"backupID"`
+	Timeline    uint32      `json:"timeline"`
+	CompletedAt metav1.Time `json:"completedAt"`
+	Actor       string      `json:"actor"`
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	EvidenceSHA256 string `json:"evidenceSHA256"`
+	// +kubebuilder:validation:Enum=database;database-and-files
+	Scope string `json:"scope"`
 }
 
 // Handover is a planned primary change: the old primary (From) demotes, the writer copies its demotion

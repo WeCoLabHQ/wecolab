@@ -33,6 +33,9 @@ import re, sys
 p = sys.argv[1]; s = open(p).read()
 s, n = re.subn(r"(?:#[^\n]*\n)*- apiGroups: \[\"\"\]\n  resources: \[\"nodes/proxy\"\]\n  verbs: \[\"get\"\]\n", "", s)
 assert n == 1, "the nodes/proxy rule moved: read the chart again"
+s, n = re.subn(r"image: quay.io/kata-containers/kata-deploy:4\.2\.0\b",
+               "image: quay.io/kata-containers/kata-deploy:4.2.0@sha256:8878e275eeb611f5ed1613009db195f4034b25fea461aef61d407fead58872d3", s)
+assert n == 1, "the Kata image tag moved: inspect and pin the new multiarch digest before rendering"
 open(p, "w").write(s)' "$out"
 ! grep -q -e '{{' -e '${' "$out" || { echo "$out has {{ or \${: bootstrap and Flux would both read it as a template" >&2; exit 1; }
 echo "wrote $out"

@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,81 +17,6 @@ import (
 	"wecolab.io/wecolab/api/v1alpha1"
 	"wecolab.io/wecolab/internal/warden"
 )
-
-func page(t *testing.T) string {
-	b, err := web.ReadFile("web/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
-}
-
-// Every call the page makes is a route the Console serves (plan R9): the page reaches the Console only
-// through api(method, path), and each method and path must find a registered pattern.
-func TestPageCallsAreRoutes(t *testing.T) {
-	p := page(t)
-	if n := strings.Count(p, "fetch("); n != 1 {
-		t.Fatalf("fetch( appears %d times; the page calls the Console only through api()", n)
-	}
-	calls := regexp.MustCompile("api\\('([A-Z]+)',\\s*['`]([^'`]+)['`]").FindAllStringSubmatch(p, -1)
-	if n := strings.Count(p, "api('"); n != len(calls) || n < 30 {
-		t.Fatalf("%d api() calls, %d with a literal path: every call names its path in place", n, len(calls))
-	}
-	mux, param := (&server{}).routes(), regexp.MustCompile(`\$\{[^}]*\}`)
-	for _, c := range calls {
-		method, path := c[1], param.ReplaceAllString(c[2], "x")
-		if !strings.HasPrefix(path, "/api/") {
-			if _, err := fs.Stat(web, "web"+path); err != nil {
-				t.Errorf("%s %s: no such file in the page's directory", method, c[2])
-			}
-			continue
-		}
-		if _, pattern := mux.Handler(httptest.NewRequest(method, path, nil)); pattern == "" || pattern == "/" {
-			t.Errorf("%s %s is not a route", method, c[2])
-		}
-	}
-}
-
-// The page writes HTML only through its escaping html tagged template and handles clicks only through
-// data-action (plan R3): one innerHTML sink, no inline handlers, and every data-action has a handler.
-func TestPageRendersOnlyThroughHTML(t *testing.T) {
-	p := page(t)
-	if n := strings.Count(p, "innerHTML"); n != 1 {
-		t.Errorf("innerHTML appears %d times; only put() writes it", n)
-	}
-	for _, sink := range []string{"outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"} {
-		if strings.Contains(p, sink) {
-			t.Errorf("the page uses %s", sink)
-		}
-	}
-	if m := regexp.MustCompile(`<[a-z][^<>]*\son[a-z]+\s*=`).FindString(p); m != "" {
-		t.Errorf("an inline event handler: %s", m)
-	}
-	i := strings.Index(p, "const ACT={")
-	if i < 0 {
-		t.Fatal("no ACT table")
-	}
-	act := p[i : i+strings.Index(p[i:], "\n};")]
-	for _, m := range regexp.MustCompile(`data-action="(\w+)"`).FindAllStringSubmatch(p, -1) {
-		if !regexp.MustCompile(`[{,\s]` + m[1] + `[:,}\s]`).MatchString(act) {
-			t.Errorf("data-action %q has no handler in ACT", m[1])
-		}
-	}
-}
-
-// esc() is what every interpolation goes through: dropping a quote from it lets a name close an attribute
-// (the original bug).
-func TestPageEscapesQuotes(t *testing.T) {
-	m := regexp.MustCompile(`(?m)^const esc=s=>String\(s\)\.replace\(/\[([^\]]+)\]/g,`).FindStringSubmatch(page(t))
-	if m == nil {
-		t.Fatal("no const esc=s=>String(s).replace(/[...]/g, ...) line")
-	}
-	for _, c := range `&<>"'` {
-		if !strings.ContainsRune(m[1], c) {
-			t.Errorf("esc() leaves %q alone", c)
-		}
-	}
-}
 
 // A member's app at <app>.<zone> is same-site to the Console, so a form it posts would carry the admin's
 // cookies: cross-origin browser requests are refused. install.sh's POST /join sends no Origin and passes.

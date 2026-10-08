@@ -6,10 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -21,15 +19,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"wecolab.io/wecolab/api/v1alpha1"
-	"wecolab.io/wecolab/internal/fabric"
 )
 
 // VaultStatus is what the vault itself says, independent of the primary.
 type VaultStatus struct {
-	LatestBackup time.Time `json:"latestBackup"`         // newest base backup (backup.info written at completion)
-	LatestWAL    time.Time `json:"latestWAL"`            // newest archived WAL segment
-	ObjectLock   string    `json:"objectLock,omitempty"` // e.g. "compliance 30 days", "" when not enabled
-	Err          string    `json:"error,omitempty"`
+	LatestBackup   time.Time       `json:"latestBackup"` // actual completion time of validated metadata
+	BackupEvidence *BackupEvidence `json:"backupEvidence,omitempty"`
+	LatestWAL      time.Time       `json:"latestWAL"`            // newest archived WAL segment
+	ObjectLock     string          `json:"objectLock,omitempty"` // e.g. "compliance 30 days", "" when not enabled
+	Err            string          `json:"error,omitempty"`
+}
+
+type BackupEvidence struct {
+	Archive     string    `json:"archive"`
+	ID          string    `json:"id"`
+	SystemID    string    `json:"systemID"`
+	Timeline    uint32    `json:"timeline"`
+	BeginWAL    string    `json:"beginWAL"`
+	EndWAL      string    `json:"endWAL"`
+	CompletedAt time.Time `json:"completedAt"`
+	ObservedAt  time.Time `json:"observedAt"`
 }
 
 // VaultOf inspects a database's vault with the ObjectStore and credentials c can read: the app's own
@@ -51,8 +60,12 @@ func VaultOf(ctx context.Context, c client.Reader, ns, db, serverName string) Va
 	if err != nil {
 		return VaultStatus{Err: err.Error()}
 	}
+	settings, err := ReadSettings(ctx, c)
+	if err != nil {
+		return VaultStatus{Err: err.Error()}
+	}
 	bucket, prefix := splitS3(dest)
-	return InspectS3(ctx, S3{Endpoint: endpoint, KeyID: keyID, Key: key}, bucket, prefix+serverName+"/")
+	return InspectS3(ctx, S3{Endpoint: endpoint, KeyID: keyID, Key: key, Dev: settings.Dev}, bucket, prefix+serverName+"/")
 }
 
 func secretValue(ctx context.Context, c client.Reader, ns string, cfg map[string]any, field string) (string, error) {
@@ -80,21 +93,32 @@ func splitS3(dest string) (string, string) {
 	return bucket, prefix
 }
 
-// b2Inspect authorizes, reads the bucket's Object Lock configuration, and finds
-// the newest backup.info and WAL object under prefix.
+// doJSON bounds the entire native B2 exchange, including response body reads.
 func doJSON(req *http.Request, out any) error {
+	ctx, cancel := context.WithTimeout(req.Context(), 20*time.Second)
+	defer cancel()
+	req = req.Clone(ctx)
 	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := b2HTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	b, err := readLimited(resp.Body, 1<<20)
+	if err != nil {
+		return fmt.Errorf("read B2 response: %w", err)
+	}
 	if resp.StatusCode/100 != 2 {
 		var e struct{ Code, Message string }
-		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if err := json.Unmarshal(b, &e); err != nil {
+			return fmt.Errorf("%s: invalid error response", resp.Status)
+		}
 		return fmt.Errorf("%s: %s %s", resp.Status, e.Code, e.Message)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	if err := json.Unmarshal(b, out); err != nil {
+		return fmt.Errorf("decode B2 response: %w", err)
+	}
+	return nil
 }
 
 // Vault is what a project needs to archive: a bucket with Object Lock and a key that
@@ -253,110 +277,27 @@ func (b *b2) hasKey(keyID string) bool {
 // key-id and key.
 const StorageSecret = "storage"
 
-// Retirable is who a vault's retiring keys still wait for: every site of each live database app of the
-// project, until it answers and says its copy of the app's Secret holds the vault's current key (report
-// is nil for a site that did not answer). Nothing awaited: no site archives with a retiring key any more,
-// so they may be deleted. A deleted app, or one without a database, holds no key.
-func Retirable(current string, apps []v1alpha1.App, report func(site string) *SiteStatus) []string {
+// Retirable waits for every current database app at every intended site to
+// report exactly the current key and its version. Missing versions never pass.
+func Retirable(current, version string, apps []v1alpha1.App, report func(site string) *SiteStatus) []string {
 	awaited := []string{}
 	for _, a := range apps {
-		if a.Spec.Database == "" || a.Spec.Deleted {
+		if a.Spec.Database == "" {
 			continue
 		}
 		for _, site := range a.Spec.Sites {
-			if st := report(site); st == nil || st.Site != site || current == "" || st.Apps[a.Namespace+"/"+a.Name].VaultKeyID != current {
+			st := report(site)
+			state, ok := AppState{}, false
+			if st != nil {
+				state, ok = st.Apps[a.Namespace+"/"+a.Name]
+			}
+			if st == nil || st.Site != site || !ok || current == "" || version == "" || state.VaultKeyID != current || state.VaultKeyVersion != version {
 				awaited = append(awaited, site)
 			}
 		}
 	}
 	slices.Sort(awaited)
 	return slices.Compact(awaited)
-}
-
-// retire is the writer's part in rotating a vault's key (decision 25). The Console makes the new key and
-// marks the old one retiring in the vault's Secret; once every site of the project's database apps reports
-// the new one (Retirable), the writer deletes the retiring keys at B2 with the account key and takes them
-// out of the vault in Git. Until then they keep working, so a site that has not applied the new key yet
-// keeps archiving. The cluster's copy says where to look; what is deleted is also retiring in Git.
-func (w *Writer) retire(ctx context.Context) error {
-	secs := &corev1.SecretList{}
-	if err := w.Client.List(ctx, secs, client.InNamespace(SystemNS)); err != nil {
-		return err
-	}
-	report := func(site string) *SiteStatus {
-		st, _ := w.Peers.Get(ctx, site)
-		return st
-	}
-	errs := []error{}
-	for _, sec := range secs.Items {
-		project, ok := strings.CutPrefix(sec.Name, "vault-")
-		checked := strings.Fields(string(sec.Data["retiring"]))
-		if !ok || len(checked) == 0 {
-			continue
-		}
-		apps := &v1alpha1.AppList{}
-		if err := w.Client.List(ctx, apps, client.InNamespace(project)); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if awaited := Retirable(string(sec.Data["b2-key-id"]), apps.Items, report); len(awaited) > 0 {
-			w.note(ctx, project, "a vault's old keys wait for sites to report its new one", "project", project, "sites", awaited)
-			continue
-		}
-		acct := &corev1.Secret{}
-		if err := w.Client.Get(ctx, types.NamespacedName{Namespace: SystemNS, Name: StorageSecret}, acct); err != nil {
-			w.note(ctx, project, "no B2 account key in Settings: a vault's old keys stay valid until one is there", "project", project)
-			continue
-		}
-		ageKey, err := siteAgeKey(ctx, w.Client, w.Site)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		p, gone := "secrets/"+sec.Name+".sops.yaml", []string{}
-		sha, err := w.Git.Edit(ctx, fabric.Author{Name: "Warden", Email: "warden@" + w.Site}, "project "+project+": its vault's old keys deleted at B2",
-			[]string{p}, func(snap *fabric.Snapshot) ([]fabric.FileChange, error) {
-				enc, ok := snap.Get(p)
-				if !ok {
-					return nil, nil
-				}
-				gone = []string{}
-				out, err := reseal(enc, path.Base(p), ageKey, func(v map[string]string) error {
-					keep := []string{}
-					for _, id := range strings.Fields(v["retiring"]) {
-						// Only keys the sites were checked against: one retired in Git since may be the one they hold.
-						if !slices.Contains(checked, id) || id == v["b2-key-id"] {
-							keep = append(keep, id)
-							continue
-						}
-						if err := DeleteVaultKey(ctx, string(acct.Data["key-id"]), string(acct.Data["key"]), v["bucket"], id); err != nil {
-							return fmt.Errorf("vault-%s: delete key %s at B2: %w", project, id, err)
-						}
-						gone = append(gone, id)
-					}
-					v["retiring"] = strings.Join(keep, " ")
-					if len(keep) == 0 {
-						delete(v, "retiring")
-					}
-					return nil
-				})
-				if err != nil || len(gone) == 0 {
-					return nil, err
-				}
-				return []fabric.FileChange{{Path: p, Content: out}}, nil
-			})
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		w.mu.Lock()
-		delete(w.notes, project) // the next rotation is told again
-		w.mu.Unlock()
-		if sha != "" {
-			log.FromContext(ctx).Info("a vault's old keys deleted at B2: every site has its new one", "project", project, "keys", gone)
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // note logs what a vault waits for once, until it changes.

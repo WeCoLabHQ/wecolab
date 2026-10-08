@@ -160,15 +160,14 @@ func (s *server) localSecret(r *http.Request, name string, data map[string]strin
 // committed here with an epoch above every one known, this copy's and every steward's claim (this
 // copy may lag the old writer's). Its Warden then pushes to every other copy, and every other
 // steward's Warden steps down when it sees the higher epoch (docs/operations.md, "The writer"). The
-// copy is opened only for the commit: if it fails, it is closed again. Until this site takes over, its
-// Warden closes the copy again on every pass, which can land between opening and committing: then the
-// push is refused (403) and both are tried once more.
+// copy is opened only for the commit: if it fails, it is closed again. Its Warden uses
+// the same local lease when adjusting protection or following another writer.
 func (s *server) takeover(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(w, r) {
 		return
 	}
 	who := author(r.Context())
-	epoch, err := warden.TakeOver(s.elevated(r.Context()), s.git, s.site, s.peers, who)
+	epoch, err := warden.TakeOver(s.elevated(r.Context()), s.git, s.site, s.peers, who, s.coordination)
 	switch {
 	case errors.Is(err, warden.ErrWriterAlready):
 		http.Error(w, err.Error(), 409)

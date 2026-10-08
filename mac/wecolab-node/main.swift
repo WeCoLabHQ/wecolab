@@ -69,7 +69,11 @@ case "up":
     }
     var lastMode = ""
     while await vm.isRunning {
-        await vm.tick()
+        do {
+            try await vm.tick()
+        } catch {
+            FileHandle.standardError.write(Data("wecolab-node: mode publication failed: \(error.localizedDescription)\n".utf8))
+        }
         if await vm.mode != lastMode { lastMode = await vm.mode; print("mac is \(lastMode)") }
         try? await Task.sleep(for: .seconds(5))
     }

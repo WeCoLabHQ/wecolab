@@ -58,7 +58,22 @@
      "name": "data-home",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "architecture": "amd64",
+    "databaseRestore": "not-applicable",
+    "evidence": "Local amd64/KVM desktop and home volume validation only; cross-site volume recovery not demonstrated.",
+    "maintainer": "WeCoLab maintainers",
+    "securityNotices": [],
+    "status": "not-tested",
+    "testedAt": null,
+    "testedImage": "ghcr.io/selkies-project/selkies/desktop:2.0.0-ubuntu26.04",
+    "updateCadence": {
+     "interval": "quarterly",
+     "lastReviewed": null
+    },
+    "volumeRestore": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -87,7 +102,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -131,7 +149,10 @@
      "name": "work",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -215,7 +236,10 @@
      "name": "homelabos-settings-py",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -298,7 +322,10 @@
      "name": "data-storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -359,7 +386,10 @@
      "name": "storage-music-podcasts",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -378,7 +408,9 @@
    "slug": "apache2",
    "state": "volume",
    "title": "apache2",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /usr/local/apache2/conf/httpd.conf cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "2.4.68",
@@ -387,13 +419,11 @@
      "mountPath": "/usr/local/apache2/htdocs/",
      "name": "root",
      "readOnly": false
-    },
-    {
-     "mountPath": "/usr/local/apache2/conf/httpd.conf",
-     "name": "httpd-conf",
-     "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -443,7 +473,10 @@
      "name": "appsmith-stacks",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -499,7 +532,10 @@
      "name": "builds",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -528,7 +564,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -605,7 +644,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -649,7 +691,10 @@
      "name": "metadata",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -681,27 +726,23 @@
    "slug": "authelia",
    "state": "database+volume",
    "title": "Authelia",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /config/configuration.yml cannot use a directory PVC",
+    "file mount /etc/authelia/userdb.yml cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "4.39.28",
    "volumes": [
     {
-     "mountPath": "/config/configuration.yml",
-     "name": "authelia-config-yml",
-     "readOnly": true
-    },
-    {
-     "mountPath": "/etc/authelia/userdb.yml",
-     "name": "userdb-yml",
-     "readOnly": false
-    },
-    {
      "mountPath": "/config/notifications",
      "name": "notifications",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -758,20 +799,20 @@
      "command": "worker",
      "env": [
       {
-       "name": "AUTHENTIK_POSTGRESQL__HOST",
-       "value": "localhost"
+       "db": "host",
+       "name": "AUTHENTIK_POSTGRESQL__HOST"
       },
       {
-       "name": "AUTHENTIK_POSTGRESQL__NAME",
-       "value": "localhost"
+       "db": "dbname",
+       "name": "AUTHENTIK_POSTGRESQL__NAME"
       },
       {
-       "name": "AUTHENTIK_POSTGRESQL__PASSWORD",
-       "value": "${secret:db_password}"
+       "db": "password",
+       "name": "AUTHENTIK_POSTGRESQL__PASSWORD"
       },
       {
-       "name": "AUTHENTIK_POSTGRESQL__USER",
-       "value": "localhost"
+       "db": "user",
+       "name": "AUTHENTIK_POSTGRESQL__USER"
       },
       {
        "name": "AUTHENTIK_SECRET_KEY",
@@ -825,7 +866,10 @@
      "name": "custom-templates",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -914,7 +958,10 @@
      "name": "storage",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -948,7 +995,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1000,7 +1050,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1057,7 +1110,10 @@
      "name": "storage-downloads-complete-tv",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1109,7 +1165,10 @@
      "name": "storage-downloads-music",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1149,7 +1208,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1246,7 +1308,10 @@
      "name": "admin-seed-sh",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1347,7 +1412,10 @@
      "name": "storage-downloads-books",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1399,7 +1467,10 @@
      "name": "books",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -1435,7 +1506,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1464,7 +1538,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -1549,7 +1626,10 @@
      "name": "workspace",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -1592,7 +1672,9 @@
    "slug": "clickhouse",
    "state": "volume",
    "title": "ClickHouse",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /etc/clickhouse-server/config.d/99-homelabos-limits.xml cannot use a directory PVC"
+   ],
    "url": "https://clickhouse.com/",
    "user": "101:101",
    "validated": "eligible",
@@ -1607,13 +1689,11 @@
      "mountPath": "/var/log/clickhouse-server",
      "name": "logs",
      "readOnly": false
-    },
-    {
-     "mountPath": "/etc/clickhouse-server/config.d/99-homelabos-limits.xml",
-     "name": "config-d-99-homelabos-limits-xml",
-     "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1644,16 +1724,13 @@
    "slug": "codeserver",
    "state": "volume",
    "title": "Codeserver",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /home/coder/.config cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "4.137.0",
    "volumes": [
-    {
-     "mountPath": "/home/coder/.config",
-     "name": "config",
-     "readOnly": false
-    },
     {
      "mountPath": "/home/coder/.local",
      "name": "local",
@@ -1664,7 +1741,10 @@
      "name": "project",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1677,8 +1757,8 @@
    "description": "The best platform to write and share markdown",
    "env": [
     {
-     "db": "uri",
-     "name": "CMD_DB_URL"
+     "name": "CMD_DB_URL",
+     "value": "postgres://codimd:${secret:secret}@codiMdDatabase:5432/codimd"
     },
     {
      "name": "CMD_USECDN",
@@ -1715,7 +1795,9 @@
    "slug": "codimd",
    "state": "database+volume",
    "title": "Codimd",
-   "unsupported": [],
+   "unsupported": [
+    "CMD_DB_URL embeds database host in a value CNPG cannot preserve"
+   ],
    "url": "https://github.com/hackmdio/codimd",
    "validated": "eligible",
    "version": "2.6.1",
@@ -1725,7 +1807,10 @@
      "name": "upload-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1881,7 +1966,10 @@
    "url": "https://github.com/get-convex/convex-backend/blob/main/self-hosted/README.md",
    "validated": "eligible",
    "version": "c0cb7ae17f54e14846c243c5332a8a5e6d0e19d4",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1921,7 +2009,10 @@
      "name": "data-dashy",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -1986,7 +2077,10 @@
      "name": "storage-pictures",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2091,7 +2185,10 @@
      "name": "directus-templates",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2112,8 +2209,8 @@
      "value": "${secret:app_secret}"
     },
     {
-     "db": "uri",
-     "name": "DATABASE_URL"
+     "name": "DATABASE_URL",
+     "value": "postgresql://docmost:${secret:db_password}@docmost-docmostdb:5432/docmost?schema=public"
     },
     {
      "name": "REDIS_URL",
@@ -2147,7 +2244,9 @@
    "slug": "docmost",
    "state": "database+volume",
    "title": "Docmost",
-   "unsupported": [],
+   "unsupported": [
+    "DATABASE_URL has database URI semantics CNPG cannot preserve"
+   ],
    "url": "https://github.com/docmost/docmost",
    "validated": "eligible",
    "version": "0.96.0",
@@ -2157,7 +2256,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2191,7 +2293,10 @@
      "name": "data-config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2243,7 +2348,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2342,7 +2450,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2419,7 +2530,10 @@
      "name": "var-www-html-sites",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -2457,7 +2571,10 @@
    "url": "",
    "validated": "environment_blocked",
    "version": "latest",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2516,7 +2633,10 @@
      "name": "source",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2651,11 +2771,6 @@
        "mountPath": "/state",
        "name": "setup",
        "readOnly": false
-      },
-      {
-       "mountPath": "/bootstrap/bootstrap.sh",
-       "name": "setup-bootstrap-sh",
-       "readOnly": true
       }
      ]
     },
@@ -2697,7 +2812,9 @@
    "slug": "elkstack",
    "state": "volume",
    "title": "ELK Stack",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /bootstrap/bootstrap.sh cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "9.5.4",
@@ -2707,7 +2824,10 @@
      "name": "kibana",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -2765,7 +2885,10 @@
      "name": "storage-temp-transcode",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -3055,7 +3178,10 @@
      "name": "sites",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -3095,7 +3221,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -3129,7 +3258,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -3152,7 +3284,10 @@
    "url": "https://github.com/excalidraw/excalidraw",
    "validated": "eligible",
    "version": "latest",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -3187,7 +3322,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -3245,7 +3383,10 @@
      "name": "temp",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -3329,7 +3470,10 @@
      "name": "data-metadata",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -3473,7 +3617,10 @@
      "name": "upload",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -3514,7 +3661,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -3544,7 +3694,7 @@
     },
     {
      "name": "FORGEJO__database__HOST",
-     "value": "localhost:5432"
+     "value": "forgejo_forgejodb:5432"
     },
     {
      "db": "dbname",
@@ -3580,7 +3730,9 @@
    "slug": "forgejo",
    "state": "database+volume",
    "title": "Forgejo",
-   "unsupported": [],
+   "unsupported": [
+    "FORGEJO__database__HOST embeds database host in a value CNPG cannot preserve"
+   ],
    "url": "https://codeberg.org/forgejo/forgejo",
    "validated": "eligible",
    "version": "16.0.4",
@@ -3590,7 +3742,10 @@
      "name": "data-forgejo",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -3637,7 +3792,10 @@
      "name": "extensions",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -3689,7 +3847,10 @@
      "name": "storage-video-frigate",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -3773,8 +3934,8 @@
        "value": "2"
       },
       {
-       "name": "DATABASE_URL",
-       "value": "postgresql://localhost:${secret:postgres_password}@localhost:5432/localhost"
+       "db": "uri",
+       "name": "DATABASE_URL"
       },
       {
        "name": "CACHE_URL",
@@ -3859,8 +4020,8 @@
        "value": "http"
       },
       {
-       "name": "DATABASE_URL",
-       "value": "postgresql://localhost:${secret:postgres_password}@localhost:5432/localhost"
+       "db": "uri",
+       "name": "DATABASE_URL"
       },
       {
        "name": "CACHE_URL",
@@ -3935,8 +4096,8 @@
        "value": "http"
       },
       {
-       "name": "DATABASE_URL",
-       "value": "postgresql://localhost:${secret:postgres_password}@localhost:5432/localhost"
+       "db": "uri",
+       "name": "DATABASE_URL"
       },
       {
        "name": "CACHE_URL",
@@ -3999,7 +4160,10 @@
      "name": "music",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -4094,7 +4258,10 @@
      "name": "content",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -4177,7 +4344,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -4268,7 +4438,10 @@
      "name": "registry",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -4387,7 +4560,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -4427,7 +4603,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -4471,7 +4650,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -4529,7 +4711,10 @@
      "name": "datasources",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -4672,7 +4857,10 @@
      "name": "graylog-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -4711,7 +4899,10 @@
      "name": "admin-seed-sh",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -4736,11 +4927,6 @@
        "mountPath": "/tmp",
        "name": "tmp",
        "readOnly": false
-      },
-      {
-       "mountPath": "/homelabos/initialize.sh",
-       "name": "initialize-sh",
-       "readOnly": true
       }
      ]
     },
@@ -4794,17 +4980,17 @@
    "slug": "grownetics",
    "state": "volume",
    "title": "Grownetics (legacy open-source stack)",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /etc/nginx/conf.d/default.conf cannot use a directory PVC",
+    "file mount /homelabos/initialize.sh cannot use a directory PVC"
+   ],
    "url": "https://gitlab.com/grownetics/grownetics",
    "validated": "eligible",
    "version": "1747634745",
-   "volumes": [
-    {
-     "mountPath": "/etc/nginx/conf.d/default.conf",
-     "name": "grownetics-proxy-conf",
-     "readOnly": true
-    }
-   ]
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -4873,7 +5059,10 @@
    "url": "",
    "validated": "eligible",
    "version": "1.6.0",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -4963,7 +5152,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -5010,7 +5202,10 @@
      "name": "admin-seed-sh",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -5169,7 +5364,10 @@
      "name": "hermes-agent-src-v2026-7-20",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -5228,11 +5426,6 @@
        "readOnly": true
       },
       {
-       "mountPath": "HOME}/.ssh/id_rsa.pub",
-       "name": "env",
-       "readOnly": true
-      },
-      {
        "mountPath": "HOME}/.homelabos_vault_pass",
        "name": "env",
        "readOnly": true
@@ -5244,12 +5437,16 @@
    "state": "volume",
    "title": "HomelabOS Dash",
    "unsupported": [
+    "file mount HOME}/.ssh/id_rsa.pub cannot use a directory PVC",
     "needs the Docker socket, which controls the whole box"
    ],
    "url": "https://gitlab.com/NickBusey/HomelabOS",
    "validated": "incompatible",
    "version": "latest",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -5289,7 +5486,10 @@
      "name": "data-appdata",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -5328,7 +5528,10 @@
      "name": "etc-letsencrypt",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -5393,7 +5596,10 @@
      "name": "data-homebox-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -5441,7 +5647,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -5485,7 +5694,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -5595,11 +5807,6 @@
        "mountPath": "/var/www/html",
        "name": "html",
        "readOnly": true
-      },
-      {
-       "mountPath": "/etc/nginx/nginx.conf",
-       "name": "conf-hubzilla-nginx-conf",
-       "readOnly": true
       }
      ]
     },
@@ -5610,36 +5817,36 @@
      ],
      "env": [
       {
-       "name": "DB_TYPE",
-       "value": "localhost"
+       "db": "host",
+       "name": "DB_TYPE"
       },
       {
-       "name": "DB_HOST",
-       "value": "localhost"
+       "db": "host",
+       "name": "DB_HOST"
       },
       {
-       "name": "DB_PORT",
-       "value": "5432"
+       "db": "port",
+       "name": "DB_PORT"
       },
       {
-       "name": "DB_NAME",
-       "value": "localhost"
+       "db": "dbname",
+       "name": "DB_NAME"
       },
       {
-       "name": "DB_USER",
-       "value": "localhost"
+       "db": "user",
+       "name": "DB_USER"
       },
       {
-       "name": "DB_PASSWORD",
-       "value": "${secret:secret}"
+       "db": "password",
+       "name": "DB_PASSWORD"
       },
       {
        "name": "DOMAIN",
        "value": "${hostname}"
       },
       {
-       "name": "SITE_NAME",
-       "value": "localhost"
+       "db": "dbname",
+       "name": "SITE_NAME"
       },
       {
        "name": "ADMIN_EMAIL",
@@ -5693,11 +5900,6 @@
        "mountPath": "/var/www/html",
        "name": "html",
        "readOnly": false
-      },
-      {
-       "mountPath": "/usr/local/etc/php/conf.d/zz-homelabos.ini",
-       "name": "conf-php-homelabos-ini",
-       "readOnly": true
       }
      ]
     }
@@ -5705,7 +5907,10 @@
    "slug": "hubzilla",
    "state": "database+volume",
    "title": "HubZilla",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /etc/nginx/nginx.conf cannot use a directory PVC",
+    "file mount /usr/local/etc/php/conf.d/zz-homelabos.ini cannot use a directory PVC"
+   ],
    "url": "https://framagit.org/hubzilla/core",
    "validated": "eligible",
    "version": "11.4.1",
@@ -5714,13 +5919,11 @@
      "mountPath": "/var/www/html",
      "name": "html",
      "readOnly": false
-    },
-    {
-     "mountPath": "/usr/local/etc/php/conf.d/zz-homelabos.ini",
-     "name": "conf-php-homelabos-ini",
-     "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -5847,7 +6050,10 @@
    "url": "",
    "validated": "eligible",
    "version": "v2026.09.22",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -5942,7 +6148,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6010,13 +6219,16 @@
     }
    ],
    "slug": "infisical",
-   "state": "database",
+   "state": "database+volume",
    "title": "Infisical",
    "unsupported": [],
    "url": "https://github.com/Infisical/infisical",
    "validated": "eligible",
    "version": "v0.165.10",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6030,7 +6242,7 @@
    "env": [
     {
      "name": "INVIDIOUS_CONFIG",
-     "value": "channel_threads: 1\ncheck_tables: true\nhmac_key: \"${secret:hmac_key}\"\nfeed_threads: 1\ndb:\n  user: kemal\n  dbname: localhost\n  host: localhost\n  port: 5432\n  password: \"${secret:db_password}\"\nfull_refresh: false\nhttps_only: true\nexternal_port: 443\nregistration_enabled: false\ninvidious_companion:\n- private_url: \"http://localhost:8282/companion\"\ninvidious_companion_key: \"${secret:companion_key}\"\ndomain: ${hostname}\n"
+     "value": "channel_threads: 1\ncheck_tables: true\nhmac_key: \"${secret:hmac_key}\"\nfeed_threads: 1\ndb:\n  user: kemal\n  dbname: invidious\n  host: invidious_db\n  port: 5432\n  password: \"${secret:db_password}\"\nfull_refresh: false\nhttps_only: true\nexternal_port: 443\nregistration_enabled: false\ninvidious_companion:\n- private_url: \"http://companion:8282/companion\"\ninvidious_companion_key: \"${secret:companion_key}\"\ndomain: ${hostname}\n"
     }
    ],
    "image": "quay.io/invidious/invidious:2.20260804.1",
@@ -6052,20 +6264,20 @@
      ],
      "env": [
       {
-       "name": "PGHOST",
-       "value": "localhost"
+       "db": "host",
+       "name": "PGHOST"
       },
       {
-       "name": "PGUSER",
-       "value": "kemal"
+       "db": "user",
+       "name": "PGUSER"
       },
       {
-       "name": "PGDATABASE",
-       "value": "localhost"
+       "db": "dbname",
+       "name": "PGDATABASE"
       },
       {
-       "name": "PGPASSWORD",
-       "value": "${secret:db_password}"
+       "db": "password",
+       "name": "PGPASSWORD"
       },
       {
        "name": "ADMIN_USER",
@@ -6099,13 +6311,18 @@
     }
    ],
    "slug": "invidious",
-   "state": "database",
+   "state": "database+volume",
    "title": "Invidious",
-   "unsupported": [],
+   "unsupported": [
+    "INVIDIOUS_CONFIG embeds database host in a value CNPG cannot preserve"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "2.20260804.1",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6293,7 +6510,10 @@
      "name": "app-storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -6417,7 +6637,10 @@
      "name": "htaccess",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6440,7 +6663,10 @@
    "url": "https://github.com/CorentinTh/it-tools",
    "validated": "eligible",
    "version": "2024.10.22-7ca5933",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6487,7 +6713,10 @@
      "name": "downloads",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -6526,7 +6755,10 @@
      "name": "cache",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6571,7 +6803,10 @@
      "name": "jenkins-home",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6637,7 +6872,10 @@
    "url": "https://github.com/laurent22/joplin",
    "validated": "eligible",
    "version": "3.7.2",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6676,7 +6914,10 @@
      "name": "data-kanboard-plugins",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6772,7 +7013,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6811,7 +7055,10 @@
      "name": "manga",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6830,7 +7077,7 @@
     },
     {
      "name": "KC_DB_URL",
-     "value": "jdbc:postgresql://localhost:5432/localhost"
+     "value": "jdbc:postgresql://keycloak-postgres:5432/keycloak"
     },
     {
      "db": "user",
@@ -6879,11 +7126,16 @@
    "slug": "keycloak",
    "state": "database",
    "title": "Keycloak",
-   "unsupported": [],
+   "unsupported": [
+    "KC_DB_URL embeds database host in a value CNPG cannot preserve"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "26.7.4",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6918,7 +7170,10 @@
      "name": "pages",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -6984,7 +7239,10 @@
      "name": "kitchenowl-files",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -7031,7 +7289,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -7230,8 +7491,8 @@
        "value": "http://${hostname}"
       },
       {
-       "name": "DATABASE_URL",
-       "value": "postgresql://localhost:${secret:db_password}@localhost:5432/localhost"
+       "db": "uri",
+       "name": "DATABASE_URL"
       },
       {
        "name": "SALT",
@@ -7539,13 +7800,16 @@
     }
    ],
    "slug": "langfuse",
-   "state": "database",
+   "state": "database+volume",
    "title": "Langfuse",
    "unsupported": [],
    "url": "",
    "validated": "eligible",
    "version": "4.43.0",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -7691,7 +7955,7 @@
       },
       {
        "name": "POSTGRES_DATABASE_URI",
-       "value": "postgres:postgres@localhost:5432/postgres"
+       "value": "postgres:postgres@langchain-db:5432/postgres"
       },
       {
        "name": "REDIS_DATABASE_URI",
@@ -7838,7 +8102,7 @@
       },
       {
        "name": "POSTGRES_DATABASE_URI",
-       "value": "postgres:postgres@localhost:5432/postgres"
+       "value": "postgres:postgres@langchain-db:5432/postgres"
       },
       {
        "name": "REDIS_DATABASE_URI",
@@ -7974,7 +8238,7 @@
       },
       {
        "name": "POSTGRES_DATABASE_URI",
-       "value": "postgres:postgres@localhost:5432/postgres"
+       "value": "postgres:postgres@langchain-db:5432/postgres"
       },
       {
        "name": "REDIS_DATABASE_URI",
@@ -8095,11 +8359,6 @@
        "mountPath": "/var/lib/clickhouse",
        "name": "clickhouse",
        "readOnly": false
-      },
-      {
-       "mountPath": "/etc/clickhouse-server/users.d/users.xml",
-       "name": "users-xml",
-       "readOnly": false
       }
      ]
     },
@@ -8179,7 +8438,7 @@
       },
       {
        "name": "POSTGRES_DATABASE_URI",
-       "value": "postgres:postgres@localhost:5432/postgres"
+       "value": "postgres:postgres@langchain-db:5432/postgres"
       },
       {
        "name": "REDIS_DATABASE_URI",
@@ -8228,13 +8487,19 @@
     }
    ],
    "slug": "langsmith",
-   "state": "database",
+   "state": "database+volume",
    "title": "LangSmith",
-   "unsupported": [],
+   "unsupported": [
+    "POSTGRES_DATABASE_URI embeds database host in a value CNPG cannot preserve",
+    "file mount /etc/clickhouse-server/users.d/users.xml cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "environment_blocked",
    "version": "0.11.4",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -8286,7 +8551,10 @@
      "name": "storage-downloads-completed-books",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -8338,7 +8606,10 @@
      "name": "storage-downloads-complete-music",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -8434,7 +8705,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -8528,7 +8802,22 @@
      "name": "uploads",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "architecture": "",
+    "databaseRestore": "not-tested",
+    "evidence": "Candidate: imported image has direct CNPG host/port/user/password/name fields and no declared mounts or sidecars. Image architecture, live deploy/use and database restore still require a disposable-fabric drill.",
+    "maintainer": "WeCoLab maintainers",
+    "securityNotices": [],
+    "status": "not-tested",
+    "testedAt": null,
+    "testedImage": "listmonk/listmonk:v6.2.0",
+    "updateCadence": {
+     "interval": "quarterly",
+     "lastReviewed": null
+    },
+    "volumeRestore": "not-applicable"
+   }
   },
   {
    "attention": [
@@ -8724,7 +9013,10 @@
      "name": "dkim",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -8758,7 +9050,10 @@
      "name": "data-config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -8799,7 +9094,10 @@
    "url": "",
    "validated": "eligible",
    "version": "2.8.0",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -8891,7 +9189,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -8943,7 +9244,10 @@
      "name": "files",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -8972,7 +9276,10 @@
      "name": "matterbridge-toml",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9074,7 +9381,10 @@
      "name": "storage-documents-mayan-storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9148,7 +9458,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9190,7 +9503,10 @@
      "name": "memos",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -9263,7 +9579,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -9370,7 +9689,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9383,8 +9705,8 @@
    "description": "Miniflux is a minimalist and opinionated feed reader.",
    "env": [
     {
-     "db": "uri",
-     "name": "DATABASE_URL"
+     "name": "DATABASE_URL",
+     "value": "postgres://miniflux:${secret:db_password}@miniflux_db/miniflux?sslmode=disable"
     },
     {
      "name": "RUN_MIGRATIONS",
@@ -9417,11 +9739,28 @@
    "slug": "miniflux",
    "state": "database",
    "title": "Miniflux",
-   "unsupported": [],
+   "unsupported": [
+    "DATABASE_URL has database URI semantics CNPG cannot preserve"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "2.3.3",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "architecture": "",
+    "databaseRestore": "not-tested",
+    "evidence": "Not certified: the imported database URL carries extra semantics that need a reviewed translation; image/deploy/use and database recovery have not been drilled.",
+    "maintainer": "WeCoLab maintainers",
+    "securityNotices": [],
+    "status": "not-tested",
+    "testedAt": null,
+    "testedImage": "",
+    "updateCadence": {
+     "interval": "quarterly",
+     "lastReviewed": null
+    },
+    "volumeRestore": "not-tested"
+   }
   },
   {
    "attention": [
@@ -9473,7 +9812,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -9551,7 +9893,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9598,7 +9943,10 @@
      "name": "storage-music",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9651,7 +9999,10 @@
      "name": "app",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9703,7 +10054,10 @@
      "name": "storage-downloads-books-comics",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9761,7 +10115,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -9816,7 +10173,10 @@
      "name": "music",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -9885,7 +10245,10 @@
      "name": "setup-key",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -9912,6 +10275,7 @@
    "state": "volume",
    "title": "Netdata",
    "unsupported": [
+    "file mount /etc/netdata/netdata.conf cannot use a directory PVC",
     "needs extra Linux capabilities: SYS_PTRACE",
     "needs the Docker socket, which controls the whole box"
    ],
@@ -9930,11 +10294,6 @@
      "readOnly": false
     },
     {
-     "mountPath": "/etc/netdata/netdata.conf",
-     "name": "netdata-conf",
-     "readOnly": true
-    },
-    {
      "mountPath": "/host/proc",
      "name": "proc",
      "readOnly": true
@@ -9944,7 +10303,10 @@
      "name": "sys",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -10073,7 +10435,9 @@
    "slug": "nextcloud",
    "state": "database+volume",
    "title": "Nextcloud",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /usr/local/etc/php/conf.d/redis-session.ini cannot use a directory PVC"
+   ],
    "url": "",
    "user": "1000:1000",
    "validated": "eligible",
@@ -10082,11 +10446,6 @@
     {
      "mountPath": "/var/www/html",
      "name": "webroot",
-     "readOnly": false
-    },
-    {
-     "mountPath": "/usr/local/etc/php/conf.d/redis-session.ini",
-     "name": "redis-session-ini",
      "readOnly": false
     },
     {
@@ -10114,7 +10473,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10150,7 +10512,10 @@
      "name": "app-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10164,7 +10529,7 @@
    "env": [
     {
      "name": "NC_DB",
-     "value": "pg://localhost:5432?u=postgres&p=${secret:nocodb_db_password}&d=nocodb"
+     "value": "pg://nocodb-nocodbdb:5432?u=postgres&p=${secret:nocodb_db_password}&d=nocodb"
     },
     {
      "name": "NC_PUBLIC_URL",
@@ -10221,7 +10586,9 @@
    "slug": "nocodb",
    "state": "database+volume",
    "title": "NocoDB",
-   "unsupported": [],
+   "unsupported": [
+    "NC_DB embeds database host in a value CNPG cannot preserve"
+   ],
    "url": "https://github.com/nocodb/nocodb",
    "validated": "eligible",
    "version": "2026.09.0",
@@ -10231,7 +10598,10 @@
      "name": "data-nocode-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10277,7 +10647,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10351,7 +10724,10 @@
      "name": "etc",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -10403,7 +10779,10 @@
      "name": "storage-downloads",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10450,7 +10829,10 @@
      "name": "storage-downloads",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10479,7 +10861,10 @@
      "name": "octoprint",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10521,7 +10906,9 @@
    "slug": "odoo",
    "state": "database+volume",
    "title": "Odoo",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /etc/odoo/odoo.conf cannot use a directory PVC"
+   ],
    "url": "https://www.odoo.com/",
    "validated": "eligible",
    "version": "17",
@@ -10530,13 +10917,11 @@
      "mountPath": "/var/lib/odoo",
      "name": "odoo-data",
      "readOnly": false
-    },
-    {
-     "mountPath": "/etc/odoo/odoo.conf",
-     "name": "config-odoo-conf",
-     "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10565,7 +10950,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10607,7 +10995,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10674,7 +11065,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10738,7 +11132,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -10815,7 +11212,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10867,7 +11267,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -10903,7 +11306,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10956,7 +11362,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -10994,7 +11403,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -11096,7 +11508,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -11138,7 +11553,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -11206,24 +11624,24 @@
        "value": "postgresql"
       },
       {
-       "name": "DB_NAME",
-       "value": "ownphotos"
+       "db": "dbname",
+       "name": "DB_NAME"
       },
       {
        "name": "DB_USER",
        "value": "postgres"
       },
       {
-       "name": "DB_PASS",
-       "value": "${secret:db_password}"
+       "db": "password",
+       "name": "DB_PASS"
       },
       {
-       "name": "DB_HOST",
-       "value": "localhost"
+       "db": "host",
+       "name": "DB_HOST"
       },
       {
-       "name": "DB_PORT",
-       "value": "5432"
+       "db": "port",
+       "name": "DB_PORT"
       },
       {
        "name": "REDIS_HOST",
@@ -11266,13 +11684,16 @@
     }
    ],
    "slug": "ownphotos",
-   "state": "database",
+   "state": "database+volume",
    "title": "OwnPhotos",
    "unsupported": [],
    "url": "",
    "validated": "eligible",
    "version": "dev",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -11374,7 +11795,10 @@
      "name": "storage-documents-export",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -11500,7 +11924,10 @@
      "name": "storage-dir-documents-paperless-ngx-expo",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -11541,7 +11968,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -11586,7 +12016,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -11686,7 +12119,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -11730,7 +12166,10 @@
      "name": "var-lib-pgadmin",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -11797,7 +12236,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -11911,7 +12353,10 @@
      "name": "phpbb-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -11968,7 +12413,10 @@
      "name": "dnsmasq-d",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -12002,7 +12450,10 @@
      "name": "data-images",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -12113,7 +12564,10 @@
      "name": "logs",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -12257,7 +12711,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -12278,8 +12735,8 @@
      "value": "true"
     },
     {
-     "db": "uri",
-     "name": "DATABASE_URL"
+     "name": "DATABASE_URL",
+     "value": "postgresql://postgres@planka-plankadb/planka"
     },
     {
      "name": "SECRET_KEY",
@@ -12316,7 +12773,9 @@
    "slug": "planka",
    "state": "database+volume",
    "title": "Planka",
-   "unsupported": [],
+   "unsupported": [
+    "DATABASE_URL has database URI semantics CNPG cannot preserve"
+   ],
    "url": "https://github.com/plankanban/planka",
    "validated": "eligible",
    "version": "2.2.1",
@@ -12341,7 +12800,10 @@
      "name": "data-attachments",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -12409,7 +12871,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -12480,7 +12945,10 @@
      "name": "storage-temp-transcode",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -12512,7 +12980,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -12561,7 +13032,10 @@
      "name": "db-pgdata",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -12595,7 +13069,10 @@
      "name": "cfg",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -12701,7 +13178,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -12752,7 +13232,9 @@
    "slug": "prometheus",
    "state": "volume",
    "title": "Prometheus",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /etc/prometheus/prometheus.yml cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "v3.14.0",
@@ -12761,13 +13243,11 @@
      "mountPath": "/prometheus",
      "name": "data",
      "readOnly": false
-    },
-    {
-     "mountPath": "/etc/prometheus/prometheus.yml",
-     "name": "prometheus-yml",
-     "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -12809,7 +13289,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -12912,7 +13395,10 @@
      "name": "storage-downloads",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -12963,7 +13449,10 @@
      "name": "state",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13015,7 +13504,10 @@
      "name": "storage-downloads-complete-movies",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13067,7 +13559,10 @@
      "name": "storage-downloads",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13128,7 +13623,10 @@
      "name": "repo",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13210,7 +13708,10 @@
      "name": "uploads",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13233,7 +13734,10 @@
    "url": "",
    "validated": "eligible",
    "version": "2026-09-24",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13280,7 +13784,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -13325,7 +13832,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13489,7 +13999,10 @@
      "name": "shared",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13532,7 +14045,10 @@
      "name": "cache",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13575,7 +14091,10 @@
      "name": "cache",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -13671,7 +14190,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13713,7 +14235,10 @@
      "name": "data-config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13811,7 +14336,10 @@
      "name": "data-repositories",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13835,7 +14363,10 @@
    "slug": "shinobi",
    "state": "volume",
    "title": "Shinobi",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /home/Shinobi/conf.json cannot use a directory PVC",
+    "file mount /home/Shinobi/super.json cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "dev@sha256:aa5cd83224a7d01df9b1b56d2eb637d005a3659fd97ddeeb5603f9076f08014a",
@@ -13851,16 +14382,6 @@
      "readOnly": true
     },
     {
-     "mountPath": "/home/Shinobi/conf.json",
-     "name": "conf-json",
-     "readOnly": false
-    },
-    {
-     "mountPath": "/home/Shinobi/super.json",
-     "name": "super-json",
-     "readOnly": false
-    },
-    {
      "mountPath": "/dev/shm/streams",
      "name": "streams",
      "readOnly": false
@@ -13870,7 +14391,10 @@
      "name": "storage-video-cctv",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -13914,7 +14438,10 @@
      "name": "storage-video-tv",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13962,7 +14489,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -13997,16 +14527,16 @@
        "value": "postgres"
       },
       {
-       "name": "DB_PASS",
-       "value": "${secret:db_password}"
+       "db": "password",
+       "name": "DB_PASS"
       },
       {
-       "name": "DB_HOST",
-       "value": "localhost"
+       "db": "host",
+       "name": "DB_HOST"
       },
       {
-       "name": "DB_PORT",
-       "value": "5432"
+       "db": "port",
+       "name": "DB_PORT"
       },
       {
        "name": "FORCE_SSL",
@@ -14041,7 +14571,10 @@
      "name": "static-files",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14157,7 +14690,10 @@
      "name": "var-lib-snipeit",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14209,7 +14745,10 @@
      "name": "storage-downloads-complete-tv",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14243,7 +14782,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14312,7 +14854,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14380,7 +14925,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14443,7 +14991,10 @@
      "name": "data-logs",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14474,7 +15025,10 @@
      "name": "configs",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -14524,7 +15078,10 @@
      "name": "storage-documents-syncthing",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14549,7 +15106,10 @@
    "url": "",
    "validated": "incompatible",
    "version": "latest",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14631,7 +15191,10 @@
      "name": "data-mediafiles",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14678,7 +15241,10 @@
      "name": "data-plex-library-application-support-pl",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14696,7 +15262,7 @@
     },
     {
      "name": "DATABASE_URL",
-     "value": "jdbc:postgresql://localhost:5432/docs"
+     "value": "jdbc:postgresql://teedydb:5432/docs"
     },
     {
      "name": "DATABASE_USER",
@@ -14729,7 +15295,9 @@
    "slug": "teedy",
    "state": "database+volume",
    "title": "Teedy",
-   "unsupported": [],
+   "unsupported": [
+    "DATABASE_URL embeds database host in a value CNPG cannot preserve"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "v1.11",
@@ -14739,7 +15307,10 @@
      "name": "storage-documents",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14796,7 +15367,10 @@
      "name": "app-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -14834,7 +15408,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -15050,7 +15627,10 @@
    "url": "",
    "validated": "eligible",
    "version": "2026.7.11",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -15127,6 +15707,7 @@
    "state": "volume",
    "title": "TICK",
    "unsupported": [
+    "file mount /etc/telegraf/telegraf.conf cannot use a directory PVC",
     "needs the Docker socket, which controls the whole box"
    ],
    "url": "",
@@ -15134,11 +15715,6 @@
    "validated": "eligible",
    "version": "1.11.5",
    "volumes": [
-    {
-     "mountPath": "/etc/telegraf/telegraf.conf",
-     "name": "telegraf-conf",
-     "readOnly": true
-    },
     {
      "mountPath": "/rootfs/sys",
      "name": "sys",
@@ -15154,7 +15730,10 @@
      "name": "etc",
      "readOnly": true
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -15184,7 +15763,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -15303,7 +15885,10 @@
      "name": "storage-video-tv",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -15337,7 +15922,10 @@
      "name": "trilium-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -15457,7 +16045,10 @@
      "name": "storage-video-tubearchivist-media",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -15505,7 +16096,10 @@
      "name": "storage-video-tubearchivist-media",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -15590,7 +16184,10 @@
      "name": "uploads",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -15651,7 +16248,10 @@
      "name": "storage",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -15762,11 +16362,6 @@
        "mountPath": "/data/db",
        "name": "mongo-data",
        "readOnly": false
-      },
-      {
-       "mountPath": "/docker-entrypoint-initdb.d/init-mongo.sh",
-       "name": "init-mongo-sh",
-       "readOnly": true
       }
      ]
     }
@@ -15774,7 +16369,9 @@
    "slug": "unificontroller",
    "state": "volume",
    "title": "unificontroller",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /docker-entrypoint-initdb.d/init-mongo.sh cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "10.6.106-ls146",
@@ -15784,7 +16381,10 @@
      "name": "config",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -15838,7 +16438,10 @@
    "url": "",
    "validated": "environment_blocked",
    "version": "latest",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -15867,7 +16470,10 @@
      "name": "app-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -15923,7 +16529,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -15992,7 +16601,10 @@
      "name": "files",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16114,7 +16726,10 @@
      "name": "images",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16153,7 +16768,10 @@
      "name": "data-logos",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16194,7 +16812,10 @@
    "url": "",
    "validated": "eligible",
    "version": "1.22.3",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16228,22 +16849,22 @@
    "slug": "webdavserver",
    "state": "volume",
    "title": "webdavserver",
-   "unsupported": [],
+   "unsupported": [
+    "file mount /config.yml cannot use a directory PVC"
+   ],
    "url": "",
    "validated": "eligible",
    "version": "v5.16.0",
    "volumes": [
     {
-     "mountPath": "/config.yml",
-     "name": "config-yml",
-     "readOnly": true
-    },
-    {
      "mountPath": "/data",
      "name": "storage-webdav-data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16378,7 +16999,10 @@
      "name": "weblate-cache",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16499,7 +17123,10 @@
      "name": "media",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -16548,7 +17175,10 @@
      "name": "data",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16599,7 +17229,10 @@
    "url": "",
    "validated": "eligible",
    "version": "latest",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16653,7 +17286,10 @@
    "url": "https://github.com/Requarks/wiki",
    "validated": "eligible",
    "version": "2.5.314",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -16732,7 +17368,10 @@
      "name": "data-wordpress",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -17019,7 +17658,10 @@
    "url": "https://github.com/workadventure/workadventure",
    "validated": "eligible",
    "version": "v1.33.10",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -17064,7 +17706,10 @@
      "name": "data-config-data-keys",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -17102,7 +17747,10 @@
    "url": "",
    "validated": "incompatible",
    "version": "latest",
-   "volumes": []
+   "volumes": [],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -17136,7 +17784,10 @@
      "name": "tmp",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -17202,7 +17853,10 @@
      "name": "data-public",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [],
@@ -17255,7 +17909,10 @@
      "name": "zt1",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   },
   {
    "attention": [
@@ -17403,8 +18060,8 @@
     {
      "env": [
       {
-       "name": "RABBITMQ_DEFAULT_USER",
-       "value": "localhost"
+       "db": "user",
+       "name": "RABBITMQ_DEFAULT_USER"
       },
       {
        "name": "RABBITMQ_DEFAULT_PASS",
@@ -17459,7 +18116,10 @@
      "name": "zulip",
      "readOnly": false
     }
-   ]
+   ],
+   "wecolab": {
+    "status": "not-tested"
+   }
   }
  ],
  "failed": [
@@ -17468,7 +18128,7 @@
    "slug": "zammad"
   }
  ],
- "generated": "2026-09-28T03:03:26Z",
+ "generated": "2026-10-06T17:22:32Z",
  "source": {
   "branch": "feat/service-batch",
   "commit": "411f2c6802a73aaf5517ed3b3ff01a083312d5c9",

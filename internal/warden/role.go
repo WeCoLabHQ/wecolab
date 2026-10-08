@@ -22,10 +22,12 @@ type AppState struct {
 	// Promotion is this site's Promotion condition: how its part of a move stands, or why it holds back.
 	Promotion *metav1.Condition `json:"promotion,omitempty"`
 	// Vault is the database's vault as the site holding its history sees it with its own keys.
-	Vault *VaultStatus `json:"vault,omitempty"`
+	Vault    *VaultStatus    `json:"vault,omitempty"`
+	Recovery *RecoveryReport `json:"recovery,omitempty"`
 	// VaultKeyID is the id (b2-key-id) of the vault key this site's copy of the app's Secret holds, never
 	// the key: the writer deletes a vault's retiring keys once every site of its apps reports the new one.
-	VaultKeyID string `json:"vaultKeyId,omitempty"`
+	VaultKeyID      string `json:"vaultKeyId,omitempty"`
+	VaultKeyVersion string `json:"vaultKeyVersion,omitempty"`
 	// Endpoints are Nebula address:port pairs where a ready pod of the app answers at this site.
 	Endpoints []string `json:"endpoints,omitempty"`
 	// Deleting is set while this site still holds something of an app a person deleted.
@@ -45,8 +47,8 @@ type Role struct {
 	Token   string // replica.promotionToken
 }
 
-// RoleAt is a site's role, from the App's spec in Git alone (R1). Sites never agree through each other, so
-// a site that lags or cannot reach the others never makes a second primary by itself:
+// RoleAt is a site's role from its accepted Git spec, not a physical fence.
+// A partitioned former primary can keep writing until an operator fences it:
 //   - no handover: every site takes spec.primary for the primary;
 //   - a handover without its token: the old primary (from) takes spec.primary, so it demotes and mints
 //     the token, and every other site keeps taking from, so none promotes;
@@ -112,14 +114,23 @@ type Local struct {
 	// Created is set once Flux has made the database here: even for a new database Git knows nothing
 	// of yet, a primary's is then never made again by initdb.
 	Created bool
-	// Archive is the archive it keeps writing while it waits to be rebuilt; "" for the spec's.
+	// Archive is the retained database's archive while it awaits rebuilding; "" for the spec's.
 	Archive string
+	// Fenced keeps a superseded incarnation stopped until guarded deletion.
+	Fenced bool
+	// RetainedRole avoids CNPG's auto-unfencing replica transition while Fenced.
+	RetainedRole Role
+	// PrimaryReady requires an observed healthy, writable database in the desired archive.
+	PrimaryReady bool
 }
 
 // DBPatch is one site's part in the database topology, as JSON-patch operations on the app's Cluster:
 // its role, the archive it writes, every site's archive it may read, and how it is first made.
 func DBPatch(app *v1alpha1.App, self string, l Local) []map[string]any {
 	db, r := app.Spec.Database, RoleAt(app.Spec, self)
+	if l.Fenced {
+		r = l.RetainedRole
+	}
 	externals := []any{}
 	for _, s := range app.Spec.Sites {
 		externals = append(externals, external(s, db, ArchiveName(app, s)))
@@ -157,6 +168,9 @@ func DBPatch(app *v1alpha1.App, self string, l Local) []map[string]any {
 	if r.Token != "" {
 		ops = append(ops, add("/spec/replica/promotionToken", r.Token))
 	}
+	if l.Fenced {
+		ops = append(ops, add("/metadata/annotations/cnpg.io~1fencedInstances", `["*"]`))
+	}
 	return ops
 }
 
@@ -167,7 +181,10 @@ func add(path string, value any) map[string]any {
 
 // ArchiveName is the Barman serverName a site's database archives under.
 func ArchiveName(app *v1alpha1.App, site string) string {
-	return archiveName(app.Spec.Database, site, app.Spec.Archive[site])
+	if app.Spec.ArchiveID == "" {
+		return ""
+	}
+	return archiveName(app.Spec.ArchiveID, site, app.Spec.Archive[site])
 }
 
 func archiveName(db, site string, gen int) string {

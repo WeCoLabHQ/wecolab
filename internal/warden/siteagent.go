@@ -2,6 +2,7 @@ package warden
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -29,9 +30,10 @@ import (
 // workload, its volumes, the role it applied from Git and where it answers. Database status is
 // CloudNativePG's own .status.
 type SiteAgent struct {
-	Client client.Reader // this site's own API, read directly
-	Site   string
-	Git    *fabric.Git // this site's copy of the Fabric; nil without one
+	Client        client.Reader // this site's own API, read directly
+	Site          string
+	SchemaVersion string      // Warden binary schema version, distinct from the node's kubelet version.
+	Git           *fabric.Git // this site's copy of the Fabric; nil without one
 
 	mu     sync.Mutex
 	cached []byte
@@ -40,12 +42,22 @@ type SiteAgent struct {
 
 	vaultMu sync.Mutex
 	vaults  map[string]*vaultAnswer // "<ns>/<archive>": a new archive generation is a new folder
+
+	recoveryMu sync.Mutex
+	recoveries map[string]*recoveryAnswer
 }
 
 type vaultAnswer struct {
 	st   *VaultStatus
 	at   time.Time
 	busy bool
+}
+
+type recoveryAnswer struct {
+	report                  RecoveryReport
+	at                      time.Time
+	pod, role, expectedRole string
+	busy                    bool
 }
 
 // vaultEvery is how often the primary looks at a database's vault. Base backups are daily and
@@ -57,7 +69,22 @@ const vaultEvery = 5 * time.Minute
 // /status never waits on the object store. Nil until the first look finishes.
 func (a *SiteAgent) vault(app *v1alpha1.App) *VaultStatus {
 	ns, db, server := app.Namespace, app.Spec.Database, ArchiveName(app, a.Site)
-	key := ns + "/" + server
+	key := ns + "/" + server + "/" + app.Spec.ArchiveID + "/" + a.Site
+	// An archive survives key rotation; a cached inspection made with an old
+	// credential must not be reused after the local Secret changes.
+	sec := &corev1.Secret{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	err := a.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: app.Name}, sec)
+	cancel()
+	if err == nil {
+		digest := sha256.New()
+		digest.Write(sec.Data["b2-key-id"])
+		digest.Write([]byte{0})
+		digest.Write(sec.Data["b2-key"])
+		key += fmt.Sprintf("/%s/%x", sec.Data["key-version"], digest.Sum(nil))
+	} else {
+		key += "/credential-unavailable"
+	}
 	a.vaultMu.Lock()
 	defer a.vaultMu.Unlock()
 	if a.vaults == nil {
@@ -86,17 +113,118 @@ func (a *SiteAgent) vault(app *v1alpha1.App) *VaultStatus {
 	return v.st
 }
 
+// recovery starts one bounded exporter scrape per database at most every
+// controller cadence, without putting network I/O on /status' critical path.
+// A failed scrape is published as an error, never as the previous good sample.
+func (a *SiteAgent) recovery(app *v1alpha1.App, db map[string]any, pods []corev1.Pod, owner types.UID) *RecoveryReport {
+	key := app.Namespace + "/" + app.Spec.Database + "/" + app.Spec.ArchiveID + "/" + ArchiveName(app, a.Site)
+	var selected *corev1.Pod
+	primary := str(db, "currentPrimary")
+	expectedRole := "replica"
+	if RoleAt(app.Spec, a.Site).Primary == a.Site {
+		expectedRole = "primary"
+	}
+	for i := range pods {
+		p := &pods[i]
+		if p.Namespace != app.Namespace || p.Labels["cnpg.io/cluster"] != app.Spec.Database ||
+			p.Labels["app.kubernetes.io/managed-by"] != "cloudnative-pg" ||
+			p.Labels["app.kubernetes.io/component"] != "database" ||
+			p.Labels["cnpg.io/instanceName"] != p.Name ||
+			p.Status.Phase != corev1.PodRunning || p.Status.PodIP == "" {
+			continue
+		}
+		owned := false
+		for _, ref := range p.OwnerReferences {
+			if ref.APIVersion == "postgresql.cnpg.io/v1" && ref.Kind == "Cluster" &&
+				ref.Name == app.Spec.Database && ref.UID == owner && owner != "" {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			continue
+		}
+		role := p.Labels["cnpg.io/instanceRole"]
+		if p.Name != primary || role != "primary" && role != "replica" {
+			continue
+		}
+		selected = p
+		break
+	}
+	a.recoveryMu.Lock()
+	defer a.recoveryMu.Unlock()
+	if a.recoveries == nil {
+		a.recoveries = map[string]*recoveryAnswer{}
+	}
+	r := a.recoveries[key]
+	if r == nil {
+		r = &recoveryAnswer{}
+		a.recoveries[key] = r
+	}
+	now := time.Now()
+	if selected == nil {
+		r.report.Error = "No CNPG instance pod with a verified role and address"
+	} else if r.pod != selected.Name || r.role != selected.Labels["cnpg.io/instanceRole"] || r.expectedRole != expectedRole {
+		r.report = RecoveryReport{Error: "CNPG instance role changed; awaiting fresh observation"}
+		r.pod, r.role, r.expectedRole, r.at, r.busy = selected.Name, selected.Labels["cnpg.io/instanceRole"], expectedRole, time.Time{}, false
+	}
+	if selected != nil && !r.busy && (r.at.IsZero() || now.Sub(r.at) >= recoveryInterval) {
+		r.busy = true
+		pod := *selected
+		archiveID := app.Spec.ArchiveID
+		go func() {
+			s, err := scrapeRecovery(context.Background(), pod.Status.PodIP)
+			at := time.Now()
+			a.recoveryMu.Lock()
+			defer a.recoveryMu.Unlock()
+			if r.pod != pod.Name || r.role != pod.Labels["cnpg.io/instanceRole"] || r.expectedRole != expectedRole {
+				return
+			}
+			r.busy, r.at = false, at
+			if err != nil {
+				if r.report.Error != recoveryRegression {
+					r.report.Error = err.Error()
+				}
+				return
+			}
+			s.Pod, s.ArchiveID, s.ObservedAt = pod.Name, archiveID, at
+			if s.Role != expectedRole || pod.Name != primary {
+				if r.report.Error != recoveryRegression {
+					r.report.Error = "Exporter role disagrees with desired PostgreSQL role or CNPG primary pod"
+				}
+				return
+			}
+			r.report.add(s, at)
+		}()
+	}
+	out := r.report
+	out.Samples = append([]RecoverySample(nil), r.report.Samples...)
+	for i := range out.Samples {
+		age := now.Sub(out.Samples[i].ObservedAt)
+		if age < 0 {
+			out.Error = "Monotonic sample age invalid"
+			break
+		}
+		out.Samples[i].AgeNanos = int64(age)
+	}
+	return &out
+}
+
 type SiteStatus struct {
-	Site        string                    `json:"site"`
-	Time        time.Time                 `json:"time"`
-	Version     string                    `json:"version"`
-	Nodes       []NodeStatus              `json:"nodes"`
-	Allocatable map[string]string         `json:"allocatable"`
-	Requested   map[string]string         `json:"requested"`
-	DB          map[string]map[string]any `json:"db"`        // "<ns>/<cluster>": CloudNativePG .status
-	Workloads   map[string]WorkloadStatus `json:"workloads"` // "<ns>/<deployment>", project namespaces only
-	Volumes     map[string]VolumeStatus   `json:"volumes"`   // "<ns>/<claim>", claims labeled wecolab.io/app
-	Apps        map[string]AppState       `json:"apps"`      // "<ns>/<app>": the role this site applied, and what it saw
+	Site string    `json:"site"`
+	Time time.Time `json:"time"`
+	// ReceivedAt is the local monotonic receipt of this report. A wire timestamp
+	// cannot establish freshness across independently clocked sites.
+	ReceivedAt    time.Time                 `json:"-"`
+	Version       string                    `json:"version"`
+	SchemaVersion string                    `json:"schemaVersion"`
+	Nodes         []NodeStatus              `json:"nodes"`
+	Allocatable   map[string]string         `json:"allocatable"`
+	Requested     map[string]string         `json:"requested"`
+	DB            map[string]map[string]any `json:"db"`        // "<ns>/<cluster>": CloudNativePG .status
+	Workloads     map[string]WorkloadStatus `json:"workloads"` // "<ns>/<deployment>", project namespaces only
+	Volumes       map[string]VolumeStatus   `json:"volumes"`   // "<ns>/<claim>", claims labeled wecolab.io/app
+	Apps          map[string]AppState       `json:"apps"`      // "<ns>/<app>": the role this site applied, and what it saw
 	// Writer and Epoch are who this site's own copy of the Fabric names the writer (GitClaim): a steward
 	// that took over publishes its higher epoch here at once, before Flux applies it anywhere.
 	Writer string `json:"writer"`
@@ -126,7 +254,7 @@ type VolumeStatus struct {
 
 // Status reads the site's state now.
 func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
-	st := &SiteStatus{Site: a.Site, Time: time.Now().UTC(), DB: map[string]map[string]any{}, Workloads: map[string]WorkloadStatus{}, Volumes: map[string]VolumeStatus{}, Apps: map[string]AppState{}}
+	st := &SiteStatus{Site: a.Site, Time: time.Now().UTC(), SchemaVersion: a.SchemaVersion, DB: map[string]map[string]any{}, Workloads: map[string]WorkloadStatus{}, Volumes: map[string]VolumeStatus{}, Apps: map[string]AppState{}}
 	nodes := &corev1.NodeList{}
 	if err := a.Client.List(ctx, nodes); err != nil {
 		return nil, err
@@ -185,13 +313,14 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 
 	dbs := &unstructured.UnstructuredList{}
 	dbs.SetGroupVersionKind(gvkCNPGCluster)
-	built := map[string]string{}                    // "<ns>/<cluster>": the archive it was built for
-	if err := a.Client.List(ctx, dbs); err == nil { // absent operator: no databases
+	built, owners := map[string]string{}, map[string]types.UID{} // "<ns>/<cluster>"
+	if err := a.Client.List(ctx, dbs); err == nil {              // absent operator: no databases
 		for i, d := range dbs.Items {
 			if s, ok := d.Object["status"].(map[string]any); ok {
 				st.DB[d.GetNamespace()+"/"+d.GetName()] = s
 			}
 			built[d.GetNamespace()+"/"+d.GetName()] = serverName(&dbs.Items[i])
+			owners[d.GetNamespace()+"/"+d.GetName()] = d.GetUID()
 		}
 	}
 	tenants := &corev1.NamespaceList{}
@@ -243,12 +372,33 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 			continue
 		}
 		s := ReportApp(&app, a.Site, st.DB[dbKey], built[dbKey])
+		if app.Spec.Database != "" {
+			if s.Archive != "" && s.Archive != ArchiveName(&app, a.Site) {
+				s.Recovery = &RecoveryReport{Error: "Database belongs to a previous archive generation"}
+			} else {
+				s.Recovery = a.recovery(&app, st.DB[dbKey], pods.Items, owners[dbKey])
+			}
+			if s.Recovery != nil && s.Recovery.Error == "" && len(s.Recovery.Samples) != 0 {
+				sample := s.Recovery.Samples[len(s.Recovery.Samples)-1]
+				if (sample.Role == "primary" || sample.Role == "replica") &&
+					validRecoverySample(sample, app.Spec.ArchiveID, sample.Role) &&
+					sampleAge(sample, 0) >= 0 && sampleAge(sample, 0) <= recoveryMaxReplayAge {
+					if st.DB[dbKey] == nil {
+						st.DB[dbKey] = map[string]any{}
+					}
+					st.DB[dbKey]["systemIdentifier"] = sample.SystemID
+					st.DB[dbKey]["timelineID"] = sample.Timeline
+					st.DB[dbKey]["recovering"] = sample.Role == "replica"
+				}
+			}
+		}
 		if app.Spec.Database != "" && Serving(app.Spec) == a.Site {
 			s.Vault = a.vault(&app)
 		}
 		sec := &corev1.Secret{} // the app's own Secret, named after it (deploy): what its database archives with
 		if app.Spec.Database != "" && a.Client.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, sec) == nil {
 			s.VaultKeyID = string(sec.Data["b2-key-id"])
+			s.VaultKeyVersion = string(sec.Data["key-version"])
 		}
 		s.Endpoints = a.endpoints(ctx, app.Namespace, app.Spec.Workload, pods.Items, nodeIP)
 		st.Apps[app.Namespace+"/"+app.Name] = s
@@ -263,6 +413,7 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 		return nil, err
 	}
 	st.Writer, st.Epoch = own.Writer, own.Epoch
+	st.ReceivedAt = time.Now()
 	return st, nil
 }
 

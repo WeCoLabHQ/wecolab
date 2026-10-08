@@ -37,12 +37,35 @@ below).
 
 ## 2. Install the first site
 
-On the public box, as root:
+On the public box, first obtain the exact release tag and **40-hex source snapshot commit**
+from the published release announcement. No release was published as part of this remediation:
+these commands are usable only after an authorized release exists. Install `gh` (GitHub CLI),
+`jq`, `shasum`, `git`, `curl` and `bash` in your unprivileged account. Download all seven
+release payloads and the manifest to a directory that only you can write; the tag identifies
+the download, while the expected commit and attestation establish trust independently:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wecolabhq/wecolab/main/install.sh | sudo bash
+RELEASE_TAG='<announced-immutable-tag>'
+SOURCE_COMMIT='<announced-40-hex-public-snapshot-commit>'
+mkdir -m 700 -p "$HOME/wecolab-release"
+gh release download "$RELEASE_TAG" -R wecolabhq/wecolab -D "$HOME/wecolab-release" \
+  -p 'release.json' -p 'source.tar.gz' -p 'install.sh' -p 'VERSION' -p 'warden-*' -p 'console-*'
+gh attestation verify "$HOME/wecolab-release/release.json" -R wecolabhq/wecolab \
+  --signer-workflow wecolabhq/wecolab/.github/workflows/release.yml \
+  --source-ref refs/heads/main --source-digest "$SOURCE_COMMIT" --deny-self-hosted-runners
+git clone https://github.com/wecolabhq/wecolab.git "$HOME/wecolab-source"
+git -C "$HOME/wecolab-source" checkout --detach "$SOURCE_COMMIT"
+bash "$HOME/wecolab-source/hack/release.sh" verify "$HOME/wecolab-release" "$SOURCE_COMMIT"
+sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh"
 ```
 
+The final command is forbidden if **any** verification fails. The manifest attestation
+authenticates the expected repository, release workflow, main source ref and source commit;
+the manifest SHA-256 values then authenticate every platform's binary and installer.
+Downloading a checksum beside an untrusted installer alone would not prove its origin.
+Keep this verified release directory to join more boxes and for `people`/`takeover`/`uninstall`.
+The builder embeds the identical installer in the Console and native Mac source. Native
+binary/VM release packaging and a production restore drill remain separate gates.
 It asks for:
 
 - **the zone**, `fab.example.org`;
@@ -54,14 +77,14 @@ It asks for:
 The site's and project's names are lowercase letters, digits and inner dashes, at most 32 characters, and
 not one the fabric keeps for itself (`console`, `door`, `mesh`, `recovery`, ...).
 
-The script's other commands run the same way, with an argument after `-s`:
+For later first-site commands use that verified local installer (and its verified binaries):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wecolabhq/wecolab/main/install.sh | sudo bash -s people
+sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh" people
 ```
 
-The same goes for `uninstall` and `takeover` (operations.md). The first box also keeps a copy, as of its
-install, at `/var/lib/wecolab/src/install.sh`; other boxes keep none.
+Replace `people` with `uninstall` or `takeover` only when the corresponding operation is
+intended. Never pipe `/join.sh` or a moving `main` branch into root.
 
 Without a terminal (from automation, or `ssh` without `-t`):
 
@@ -74,9 +97,9 @@ Without a terminal (from automation, or `ssh` without `-t`):
 
 Then, in about ten minutes, it:
 
-1. waits until the zone's delegation is visible from public resolvers;
-2. downloads Nebula and SOPS, and builds Warden and the Console from source with a pinned Go, kept under
-   `/var/lib/wecolab` (no registry holds WeCoLab's images yet);
+1. waits for the zone's DNS delegation;
+2. installs digest-pinned Nebula and SOPS artifacts and uses the release's preverified
+   Warden/Console binaries (`WECOLAB_SRC` builds are an explicit developer-only path);
 3. makes this box's Nebula key, then, in one step (`warden bootstrap`), the fabric's Nebula certificate
    authority, this site's age key, the fabric's recovery key and every generated secret, and writes the
    Fabric's first state from WeCoLab's template with every secret encrypted;
@@ -124,14 +147,16 @@ into it on **Members** (step 6). Then open **Add a site** (sidebar, under Operat
   only for a site whose owner you trust with all of that;
 - **Public**, only if its first box has a public address (Optional, below).
 
-The Console shows a one-time command, valid for a day:
+The Console shows a one-time invite (`wcl2.…`). Copy **only the invite token**, never its
+suggested unverified `curl …/join.sh | sudo bash` command. On the home box repeat the
+download and attestation checks above for the **same source commit and release**; then run:
 
 ```bash
-curl -fsSL https://console.fab.example.org/join.sh | sudo bash -s wcl2.…
+sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh" 'wcl2.…'
 ```
 
-Run it on the home box. It takes about five minutes: Nebula, k3s, Forgejo with a copy of the Fabric, Flux,
-and then everything else from the Fabric. The site appears as Ready in **Sites**.
+It takes about five minutes: Nebula, k3s, Forgejo with a copy of the Fabric, Flux, and
+everything else from the Fabric. The site appears as Ready in **Sites**.
 
 A fabric keeps working through the loss of any one site only when at least two sites are stewards: make
 your second site one.
@@ -186,8 +211,8 @@ apps) stay at the site that wrote them.
 - **A second public site** keeps public names up when the first is gone (people's sign-in, NetBird, stays
   at the first). Create it on **Add a site** with **Public** ticked. Its box needs what the first box
   needed (What you need): the same firewall openings, and nothing else listening on those ports. The join
-  detects the box's public IPv4 address; if it cannot, give it:
-  `curl -fsSL https://console.fab.example.org/join.sh | sudo WECOLAB_PUBLIC=<address> bash -s wcl2.…`.
+  detects the box's public IPv4 address; if it cannot, run the verified local installer with
+  `sudo WECOLAB_BIN="$HOME/wecolab-release" WECOLAB_PUBLIC=<address> bash "$HOME/wecolab-release/install.sh" 'wcl2.…'`.
   The site becomes a second lighthouse, relay, Door and name server.
 
   Then add it at your DNS host. The zone numbers its name servers by their public addresses sorted as

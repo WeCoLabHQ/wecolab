@@ -110,6 +110,9 @@ main{overflow:auto;padding:calc(var(--pad)*1.5) calc(var(--pad)*1.75) calc(var(-
 .ph h1{margin:0;font-size:22px;font-weight:500;letter-spacing:-.015em}
 .ph p{margin:4px 0 0;color:var(--fg-2)}
 .ph .actions{margin-left:auto;display:flex;gap:8px}
+.ph .panel-status{margin-left:auto;max-width:44%;overflow-wrap:anywhere;font-size:11.5px;text-align:right}
+.ph .panel-status[data-failed="true"]{color:var(--bad)}
+@media (max-width:900px){.ph .panel-status{margin-left:0;max-width:none;text-align:left}}
 .btn{height:32px;padding:0 12px;border:1px solid var(--line-2);border-radius:var(--radius);background:var(--bg-1);color:var(--fg);display:inline-flex;align-items:center;gap:8px;font-weight:500;transition:border-color .12s,background .12s}
 .btn:hover{border-color:var(--fg-3)}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
@@ -357,7 +360,7 @@ td .nm{font-weight:500} td .sub{color:var(--fg-3);font-size:11.5px;margin-left:8
         <table><thead><tr><th>Offer</th><th>Site</th><th>Boxes</th><th>Per holder</th><th>Held by</th><th></th></tr></thead><tbody id="offers-list"></tbody></table>
         <div class="bd" style="display:grid;gap:10px">
           <div class="frow"><label>New offer<small>Boxes are node names at the site; empty means any box. Sizes are per holder.</small></label>
-            <div style="display:flex;gap:6px;flex-wrap:wrap"><select class="in" id="of-site"></select><input class="in mono" id="of-name" data-name autocapitalize="none" spellcheck="false" placeholder="name" style="width:120px"><input class="in mono" id="of-boxes" placeholder="boxes, comma" style="width:150px"><input class="in mono" id="of-cpu" placeholder="cpu 2" style="width:80px"><input class="in mono" id="of-mem" placeholder="memory 4Gi" style="width:110px"><input class="in mono" id="of-storage" placeholder="storage 20Gi" style="width:120px"><input class="in mono" id="of-to" data-name autocapitalize="none" spellcheck="false" placeholder="to projects, comma" style="width:170px"><input class="in mono" id="of-pools" data-name autocapitalize="none" spellcheck="false" placeholder="into pools, comma" style="width:150px"><label class="chip" style="cursor:pointer"><input type="checkbox" id="of-be" style="margin-right:4px">best effort (laptops, idle time)</label><button class="btn primary" data-action="createOffer">Offer</button><span class="err" id="of-err"></span></div></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap"><select class="in" id="of-site" aria-label="Offer site"></select><input class="in mono" id="of-name" data-name autocapitalize="none" spellcheck="false" placeholder="name" style="width:120px"><input class="in mono" id="of-boxes" placeholder="boxes, comma" style="width:150px"><input class="in mono" id="of-cpu" placeholder="cpu 2" style="width:80px"><input class="in mono" id="of-mem" placeholder="memory 4Gi" style="width:110px"><input class="in mono" id="of-storage" placeholder="storage 20Gi" style="width:120px"><input class="in mono" id="of-to" data-name autocapitalize="none" spellcheck="false" placeholder="to projects, comma" style="width:170px"><input class="in mono" id="of-pools" data-name autocapitalize="none" spellcheck="false" placeholder="into pools, comma" style="width:150px"><label class="chip" style="cursor:pointer"><input type="checkbox" id="of-be" style="margin-right:4px">best effort (laptops, idle time)</label><button class="btn primary" data-action="createOffer">Offer</button><span class="err" id="of-err"></span></div></div>
           <div class="frow"><label>Redeem a key<small>An offer key makes your project a holder of that offer; a pool key makes it draw from that pool.</small></label>
             <div style="display:flex;gap:6px;flex-wrap:wrap"><input class="in mono" id="rd-code" placeholder="wclo1.… or wclp1.…" style="width:280px"><input class="in mono" id="rd-project" placeholder="project" style="width:130px"><button class="btn" data-action="redeemKey">Redeem</button><span class="err" id="rd-err"></span></div></div>
         </div></div>
@@ -379,34 +382,35 @@ td .nm{font-weight:500} td .sub{color:var(--fg-3);font-size:11.5px;margin-left:8
       </div>
     </section>
     <section class="page" id="p-storage">
-      <div class="ph"><div><h1>Storage</h1><p>A project's vault is the bucket its databases archive to, with Object Lock so nobody can delete a backup. Only databases are replicated and backed up. Volumes are site-local: each site has its own, and files on them do not follow the app when its primary moves.</p></div></div>
+      <div class="ph"><div><h1>Storage</h1><p>Vault backup and WAL timestamps indicate archive activity, not verified recovery or file protection. Database and recovery-point evidence appears in Apps. Volumes are site-local; a Bound PVC means placed, not backed up or restorable after site loss.</p></div></div>
       <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Vaults</h3><div class="r muted" id="st-acct"></div></div><div id="st-vaults" class="bd" style="display:grid;gap:12px"></div></div>
-      <div class="card"><div class="hd"><h3>Volumes</h3></div><table><thead><tr><th>Volume</th><th>App</th><th>Project</th><th>Size</th><th>At each site</th></tr></thead><tbody id="st-volumes"></tbody></table></div>
+      <div class="card"><div class="hd"><h3>Volumes</h3><span class="muted">PVC phase is placement only; file recovery remains site-local or unknown.</span></div><table><thead><tr><th>Volume</th><th>App</th><th>Project</th><th>Size</th><th>At each site</th></tr></thead><tbody id="st-volumes"></tbody></table></div>
     </section>
     <section class="page" id="p-deploy">
       <div class="ph"><div><h1>Deploy an app</h1><p>Pick an app from the catalog, or give a container image. The Console writes the app to the Fabric; each chosen site runs its part within a minute or two.</p></div></div>
-      <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Catalog</h3><div class="r"><input class="in" id="ct-q" placeholder="search" style="width:180px"><select class="in" id="ct-cat"><option value="">all categories</option></select><span class="muted" id="ct-count"></span></div></div>
-        <div class="bd"><div id="ct-list" class="grid g3" style="gap:10px"></div><div class="muted" style="margin-top:8px">From the HomelabOS catalog, validated there; translated mechanically into a workload, a replicated database when it has Postgres, sidecars, and a volume per data path. Volume data stays at the site that holds it; database data is replicated and backed up.</div></div></div>
+      <div class="card" style="margin-bottom:16px"><div class="hd"><h3>Catalog</h3><div class="r"><input class="in" id="ct-q" placeholder="search" aria-label="Search catalog" style="width:180px"><select class="in" id="ct-cat" aria-label="Catalog category"><option value="">all categories</option></select><span class="muted" id="ct-count"></span></div></div>
+        <div class="bd"><div id="ct-list" class="grid g3" style="gap:10px"></div><div class="muted" style="margin-top:8px">Imported HomelabOS roles are upstream recipes; upstream validation is not a WeCoLab install, database restore or file restore drill. Entries are not certified unless a separately dated image/architecture-specific test record says so. Volumes remain site-local; check Apps and Storage for measured protection.</div></div></div>
       <div class="grid g-2-1" style="align-items:start">
         <div class="card"><div class="bd"><div class="form">
           <div class="frow" id="dp-catalog-row" style="display:none"><label>Catalog app</label><div><span class="nm" id="dp-catalog-title"></span> <button class="btn sm ghost" data-action="clearCatalog">clear</button><div class="muted lines" id="dp-catalog-notes"></div></div></div>
-          <div class="frow"><label>Name<small>DNS label. Also the default hostname.</small></label><input class="in mono" id="dp-name" data-name autocapitalize="none" spellcheck="false" placeholder="wiki"></div>
-          <div class="frow"><label>Project<small>Namespace on every site it runs on.</small></label><input class="in mono" id="dp-project" data-name autocapitalize="none" spellcheck="false"></div>
-          <div class="frow"><label>Image</label><input class="in mono" id="dp-image" placeholder="ghcr.io/org/app:tag"></div>
-          <div class="frow"><label>Port<small>What the container listens on.</small></label><input class="in mono" id="dp-port" value="8080" style="width:120px"></div>
-          <div class="frow" id="dp-host-row"><label>Hostname<small>Leave empty for <span class="mono">&lt;name&gt;.</span><span class="mono" id="dp-domain"></span>.</small></label><input class="in mono" id="dp-host" placeholder=""></div>
-          <div class="frow"><label>Sites<small>Where it runs: sites the project owns or holds an offer at. The first checked is primary unless changed.</small></label><div class="chips" id="dp-sites"></div></div>
-          <div class="frow"><label>Primary</label><div class="seg" id="dp-primary"></div></div>
-          <div class="frow"><label>Data</label><div class="chips"><span class="chip" id="dp-db" data-action="toggle">Postgres, replicated, backed up</span><span class="chip" id="dp-mesh" data-action="toggle">Publish on the mesh</span></div></div>
+          <div class="frow"><label for="dp-name">Name<small>DNS label. Also the default hostname.</small></label><input class="in mono" id="dp-name" data-name autocapitalize="none" spellcheck="false" placeholder="wiki"></div>
+          <div class="frow"><label for="dp-project">Project<small>Namespace on every site it runs on.</small></label><input class="in mono" id="dp-project" data-name autocapitalize="none" spellcheck="false"></div>
+          <div class="frow"><label for="dp-image">Image</label><input class="in mono" id="dp-image" placeholder="ghcr.io/org/app:tag"></div>
+          <div class="frow"><label for="dp-port">Port<small>What the container listens on.</small></label><input class="in mono" id="dp-port" value="8080" inputmode="numeric" style="width:120px"></div>
+          <div class="frow" id="dp-host-row"><label for="dp-host">Hostname<small>Leave empty for <span class="mono">&lt;name&gt;.</span><span class="mono" id="dp-domain"></span>.</small></label><input class="in mono" id="dp-host" placeholder=""></div>
+          <div class="frow"><span id="dp-sites-label">Sites<small>Where it runs: sites the project owns or holds an offer at. The first checked is primary unless changed.</small></span><div class="chips" id="dp-sites" role="group" aria-labelledby="dp-sites-label"></div></div>
+          <div class="frow"><span id="dp-primary-label">Primary</span><div class="seg" id="dp-primary" role="group" aria-labelledby="dp-primary-label"></div></div>
+          <div class="frow"><span id="dp-data-label">Data</span><div class="chips" role="group" aria-labelledby="dp-data-label"><button type="button" class="chip" id="dp-db" data-action="toggle" aria-pressed="false" aria-describedby="dp-policy">Postgres with archive replication</button><button type="button" class="chip" id="dp-mesh" data-action="toggle" aria-pressed="false" aria-describedby="dp-policy">Publish on the mesh</button></div></div>
+          <p class="muted" id="dp-policy" style="margin:0">For catalog apps the database and mesh publication are set by the recipe; custom apps can choose both.</p>
           <div id="dp-vault" style="display:none"><div class="frow"><label>Vault<small>Only if the project has no vault yet (Storage → Create vault is simpler): a bucket with Object Lock, its endpoint, and a key restricted to it. Ignored once the project has one.</small></label><div style="display:grid;gap:6px"><input class="in mono" id="dp-vbucket" placeholder="bucket"><input class="in mono" id="dp-vendpoint" placeholder="https://s3.us-west-002.backblazeb2.com"><input class="in mono" id="dp-vkeyid" placeholder="key id"><input class="in mono" id="dp-vkey" type="password" placeholder="application key"></div></div></div>
-          <div class="frow"><label>RPO<small>How much recent data you accept to lose if the primary site dies. Shown against the newest archived WAL; never blocks anything.</small></label><input class="in mono" id="dp-rpo" value="5m" style="width:120px"></div>
+          <div class="frow"><label for="dp-rpo">RPO<small>Recovery objective, not a guarantee of data retained after site loss.</small></label><input class="in mono" id="dp-rpo" value="5m" style="width:120px"></div>
           <div class="frow"><label></label><div style="display:flex;gap:8px;align-items:center"><button class="btn primary" data-action="doDeploy">Deploy</button><span class="err" id="dp-err"></span></div></div>
         </div></div></div>
         <div class="card"><div class="hd"><h3>What gets created</h3></div><div class="bd"><ul class="steps">
           <li><span class="n">1</span><span>Deployment and Service in the project, placed on every chosen site.</span></li>
           <li><span class="n">2</span><span>With Postgres: a cluster per site, primary at the primary, replica fed from the vault, nightly backups, first one immediately.</span></li>
           <li><span class="n">3</span><span>A Door route for the hostname with a certificate, following the primary.</span></li>
-          <li><span class="n">4</span><span>The <span class="mono">App</span> with its gates. Ready when every gate is green.</span></li>
+          <li><span class="n">4</span><span>The <span class="mono">App</span> with separate operational readiness and measured recovery evidence.</span></li>
         </ul><div class="note" style="margin-top:12px"><span class="dim">ⓘ</span><span>The app reads its database settings from the database's own secret at its site. Pods run in user namespaces: root inside the container is an unprivileged user on the box.</span></div></div></div>
       </div>
     </section>
@@ -454,7 +458,7 @@ td .nm{font-weight:500} td .sub{color:var(--fg-3);font-size:11.5px;margin-left:8
           <div class="bd"><div style="display:flex;gap:6px"><input class="in mono" id="pj-name" data-name autocapitalize="none" spellcheck="false" placeholder="name"><button class="btn primary" data-action="createProject">Create project</button><span class="err" id="pj-err"></span></div></div></div>
         <div class="card"><div class="hd"><h3>Invite a member</h3><div class="r muted">a member sees only their projects; an admin sees and changes everything</div></div>
           <div class="bd" style="display:grid;gap:8px">
-            <div style="display:flex;gap:6px;flex-wrap:wrap"><input class="in" id="iv-email" placeholder="email" style="width:200px"><input class="in" id="iv-name" placeholder="name" style="width:140px"><select class="in" id="iv-role"><option value="member">member</option><option value="admin">admin</option></select><input class="in mono" id="iv-projects" data-name autocapitalize="none" spellcheck="false" placeholder="projects, comma" style="width:170px"><button class="btn primary" data-action="inviteMember">Invite</button><span class="err" id="iv-err"></span></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap"><input class="in" id="iv-email" placeholder="email" style="width:200px"><input class="in" id="iv-name" placeholder="name" style="width:140px"><select class="in" id="iv-role" aria-label="Invited member role"><option value="member">member</option><option value="admin">admin</option></select><input class="in mono" id="iv-projects" data-name autocapitalize="none" spellcheck="false" placeholder="projects, comma" style="width:170px"><button class="btn primary" data-action="inviteMember">Invite</button><span class="err" id="iv-err"></span></div>
           </div></div>
       </div>
       <div class="card" style="margin-top:16px"><div class="hd"><h3>People</h3></div>
@@ -475,12 +479,13 @@ td .nm{font-weight:500} td .sub{color:var(--fg-3);font-size:11.5px;margin-left:8
     </section>
   </main>
 </div>
-<div class="modal" id="m-invite"><div class="dlg"><div class="hd"><h3 id="inv-title"></h3></div><div class="bd"><p style="margin:0" class="muted" id="inv-lead"></p><div class="invite" id="inv-cmd"></div><p style="margin:0" class="muted" id="inv-note"></p></div><div class="ft"><button class="btn" data-action="close">Close</button><button class="btn primary" data-action="copy">Copy</button></div></div></div>
-<div class="modal" id="m-failover"><div class="dlg"><div class="hd"><span class="dot bad"></span><h3>Move <span class="mono" id="fo-app"></span> to <span class="mono" id="fo-to"></span></h3></div><div class="bd">
+<div class="modal" id="m-invite" role="dialog" aria-modal="true" aria-labelledby="inv-title" aria-describedby="inv-lead inv-note"><div class="dlg"><div class="hd"><h3 id="inv-title"></h3></div><div class="bd"><p style="margin:0" class="muted" id="inv-lead"></p><div class="invite" id="inv-cmd" tabindex="0"></div><p style="margin:0" class="muted" id="inv-note"></p><p class="muted" id="inv-warning">This secret is shown once. Closing removes it from this page; copy or save it first.</p></div><div class="ft"><span class="err" id="inv-copy-status" role="alert" style="margin-right:auto"></span><button class="btn" data-action="close">Close</button><button class="btn primary" data-action="copy">Copy</button></div></div></div>
+<div class="modal" id="m-failover" role="dialog" aria-modal="true" aria-labelledby="fo-title" aria-describedby="fo-note"><div class="dlg"><div class="hd"><span class="dot bad"></span><h3 id="fo-title">Move <span class="mono" id="fo-app"></span> to <span class="mono" id="fo-to"></span></h3></div><div class="bd">
   <div class="note" id="fo-note"></div>
   <div><div class="muted" style="font-size:11.5px;margin-bottom:6px">What a planned move needs, as the sites report it now (checked again when you move)</div><ul class="steps" id="fo-gates"></ul></div>
-  <label style="font-size:12.5px;display:flex;gap:8px;align-items:center"><input type="checkbox" id="fo-force"> Force: move now, even if a check is red or the primary is healthy (writes not yet archived may be lost; every other site's database is rebuilt from the vault)</label>
-</div><div class="ft"><span class="err" id="fo-err" style="margin-right:auto"></span><button class="btn" data-action="close">Cancel</button><button class="btn danger" data-action="doFailover">Change primary</button></div></div></div>
+  <label style="font-size:12.5px;display:flex;gap:8px;align-items:center"><input type="checkbox" id="fo-force"> Force: override the planned-move checks. A force move can lose writes not archived; remote site databases are rebuilt from the vault.</label>
+  <div id="fo-fence" style="display:none"><p class="muted" id="fo-preview" role="status"></p><label style="display:flex;gap:8px;align-items:start"><input type="checkbox" id="fo-isolated"> I have fenced the previous primary; I will not allow it to accept writes before reconciliation.</label><label for="fo-method">How was it fenced?</label><select class="in" id="fo-method"><option value="">Choose a method</option><option value="power-off">Powered off</option><option value="write-path-isolated">Write path isolated independently</option></select><label for="fo-evidence">Evidence of power-off or write-path isolation (operator record)</label><textarea class="in" id="fo-evidence" rows="2" placeholder="What was isolated, how and when"></textarea><p class="muted">This acknowledgment records an operator action; the Console cannot physically fence a partitioned site.</p></div>
+</div><div class="ft"><span class="err" id="fo-err" style="margin-right:auto" role="alert"></span><button class="btn" data-action="close">Cancel</button><button class="btn danger" data-action="doFailover">Change primary</button></div></div></div>
 <script>
 const $=s=>document.querySelector(s);
 let STATE={sites:[],apps:[],offers:[],pools:[]}, ME={admin:false,projects:[]}, MEMBERS=[];
@@ -519,10 +524,10 @@ document.addEventListener('input',e=>{ const t=e.target; if(!t.matches('[data-na
 document.addEventListener('click',async e=>{
   const t=e.target.closest('[data-action]'); if(!t)return;
   const out=t.parentElement.querySelector(':scope > .err'); if(out)out.textContent='';
-  try{ await ACT[t.dataset.action](t.dataset,t); }catch(x){ out?out.textContent=x.message:say(x.message,true); }
+  try{ await ACT[t.dataset.action](t.dataset,t); }catch(x){ if(x===stalePanel)return; out?out.textContent=x.message:say(x.message,true); }
 });
 const ACT={go:d=>go(d.to), menu:()=>toggleMenu(), closeMenu:()=>toggleMenu(false), cycleTheme, theme:d=>setTheme(d.v), accent:d=>setAccent(d.v),
-  close:closeModals, copy:()=>{ navigator.clipboard.writeText($('#inv-cmd').textContent); say('copied'); },
+  close:closeModals, copy:async()=>{ const text=$('#inv-cmd').textContent; try{ if(!window.isSecureContext||!navigator.clipboard?.writeText)throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(text); $('#inv-copy-status').textContent='Copied'; say('copied'); }catch(e){ $('#inv-cmd').focus(); const range=document.createRange(); range.selectNodeContents($('#inv-cmd')); const selection=window.getSelection(); selection.removeAllRanges(); selection.addRange(range); $('#inv-copy-status').textContent='Copy failed. Secret selected: press Cmd+C or Ctrl+C to copy manually.'; say('Clipboard copy failed; select the secret and copy manually.',true); } },
   saveMyKeys, createProject, inviteMember, removeMember,
   projects:d=>{ const v=prompt('Projects for this member, comma separated',d.cur); if(v!==null)return setMember(d.id,{Projects:list(v)}); },
   role:d=>setMember(d.id,{Role:d.v}), block:d=>setMember(d.id,{Blocked:d.v==='true'}),
@@ -530,24 +535,42 @@ const ACT={go:d=>go(d.to), menu:()=>toggleMenu(), closeMenu:()=>toggleMenu(false
   createSite, addBox, removeBox, removeSite, rotateVault, setSteward, createOffer, withdrawOffer, offerKey, redeemKey, createPool, deletePool, poolKey,
   setMesh, deleteApp, openFailover, doFailover, addDomain, removeDomain, createVault, takeover, saveB2,
   useCatalog:d=>useCatalog(d.slug), clearCatalog, doDeploy,
-  toggle:(d,t)=>{ t.classList.toggle('on'); dpVault(); }, dpSite:(d,t)=>{ t.classList.toggle('on'); dpPrimary(); },
-  dpPick:(d,t)=>[...t.parentNode.children].forEach(b=>b.classList.toggle('on',b===t)),
+  toggle:(d,t)=>{ if(t.disabled)return; selected(t,!t.classList.contains('on')); dpVault(); }, dpSite:(d,t)=>{ selected(t,!t.classList.contains('on')); dpPrimary(); },
+  dpPick:(d,t)=>[...t.parentNode.children].forEach(b=>selected(b,b===t)),
 };
+function selected(button,on){button.classList.toggle('on',on);button.setAttribute('aria-pressed',String(on));}
 // secret shows what works once (a join command, a key, an invite link, a password) until the dialog
 // closes; closing takes it out of the page.
-function secret(title,lead,text,note){ $('#inv-title').textContent=title; $('#inv-lead').textContent=lead; $('#inv-cmd').textContent=text; $('#inv-note').textContent=note||''; openModal('invite'); }
+function secret(title,lead,text,note){ $('#inv-title').textContent=title; $('#inv-lead').textContent=lead; $('#inv-cmd').textContent=text; $('#inv-note').textContent=note||''; $('#inv-copy-status').textContent=''; openModal('invite'); }
 const once=j=>'It works once and expires '+when(j.expires)+'. It is not shown again: copy it now.';
 async function whoami(){ ME=await api('GET','/api/me'); if(document.activeElement!==$('#me-keys'))$('#me-keys').value=(ME.sshKeys||[]).join('\n'); $('#foot-me').textContent=ME.auth?(ME.name||ME.email):'owner';
   put('#me',ME.auth&&html`${ME.email} <span class="dim">· ${ME.role}</span> · <a href="/oauth/logout">sign out</a>`); document.querySelectorAll('[data-admin]').forEach(a=>a.style.display=ME.admin?'':'none');
   for(const i of ['#dp-project','#dm-project','#rd-project']) if(!$(i).value)$(i).value=(ME.projects||[])[0]||''; }
-async function load(){
-  try{ if(!ME.email)await whoami(); STATE=await api('GET','/api/state'); render(); if(page()==='deploy')renderDeploy(); $('#refreshed').textContent='live'; }
-  catch(e){ say('cannot reach the fabric: '+e.message,true); $('#refreshed').textContent=''; }
-  document.documentElement.classList.remove('booting');
+let statePending=null, stateQueued=false;
+function load(){
+  if(statePending){stateQueued=true;return statePending;}
+  statePending=(async()=>{
+    try{
+      if(!ME.email)await whoami();
+      STATE=await api('GET','/api/state');
+      render();
+      if(page()==='deploy'&&!$('#dp-sites').children.length)renderDeploy();
+      const wasFailed=$('#refreshed').dataset.failed==='true';
+      $('#refreshed').textContent='State updated '+when(new Date());
+      $('#refreshed').dataset.failed='false';
+      $('#refreshed').setAttribute('role',wasFailed?'status':'note');
+      refreshPanel(page());
+    }catch(e){
+      $('#refreshed').textContent='State refresh failed; showing last known data: '+e.message;
+      $('#refreshed').dataset.failed='true';
+      $('#refreshed').setAttribute('role','alert');
+    }finally{ document.documentElement.classList.remove('booting'); }
+  })().finally(()=>{statePending=null;if(stateQueued){stateQueued=false;load();}});
+  return statePending;
 }
 function ownsSite(s){ return ME.admin||(ME.projects||[]).includes(s.Owner); }
 async function saveMyKeys(){ await api('POST','/api/me/keys',{SSHKeys:$('#me-keys').value.split('\n').map(x=>x.trim()).filter(Boolean)}); say('keys saved; every box of your projects\' sites has them within the hour'); await whoami(); }
-async function loadMembers(){ const d=await api('GET','/api/members'); MEMBERS=d.members||[];
+async function loadMembers(){ const d=await panelAPI('members','/api/members'); MEMBERS=d.members||[];
   put('#mb-projects',each(d.projects,p=>html`<tr><td class="nm">${p.Name}</td><td class="num">${Number(p.Members)}</td></tr>`,html`<tr><td colspan=2 class="muted">no projects yet</td></tr>`));
   put('#mb-list',each(MEMBERS.filter(m=>m.Phase!=='Invited'),m=>html`<tr><td><span class="nm">${m.FullName||m.Email}</span><span class="sub">${m.Email}</span></td><td>${tag(m.Role==='owner'||m.Role==='admin'?'acc':'',m.Role)}${m.Blocked&&html` ${tag('','blocked')}`}</td><td class="mono">${(m.Projects||[]).join(', ')||dim('none')}</td><td style="white-space:nowrap">${m.Role!=='owner'&&html`<button class="btn sm" data-action="projects" data-id="${m.Name}" data-cur="${(m.Projects||[]).join(', ')}">Projects</button> <span class="dim" title="SSH keys on the profile">${Number(m.Keys)} key${m.Keys===1?'':'s'}</span> <button class="btn sm ghost" data-action="role" data-id="${m.Name}" data-v="${m.Role==='admin'?'member':'admin'}">${m.Role==='admin'?'Make member':'Make admin'}</button> <button class="btn sm ghost" data-action="block" data-id="${m.Name}" data-v="${!m.Blocked}">${m.Blocked?'Unblock':'Block'}</button> <button class="btn sm ghost" style="color:var(--bad)" data-action="removeMember" data-id="${m.Name}" data-email="${m.Email}">Remove</button>`}</td></tr>`,html`<tr><td colspan=4 class="muted">nobody yet</td></tr>`));
   put('#mb-invites',each(MEMBERS.filter(m=>m.Phase==='Invited'),m=>html`<tr><td>${m.Email}<span class="sub">${(m.Projects||[]).join(', ')}</span></td><td>${m.Role}</td><td class="muted">${m.InviteExpires?when(m.InviteExpires):'minting…'}</td><td style="white-space:nowrap">${m.Invite&&html`<button class="btn sm" data-action="showLink" data-id="${m.Name}">Show link</button>`} <button class="btn sm ghost" data-action="removeMember" data-id="${m.Name}" data-email="${m.Email}">Cancel</button></td></tr>`,html`<tr><td colspan=4 class="muted">none</td></tr>`)); }
@@ -555,6 +578,22 @@ async function inviteMember(){ await api('POST','/api/members/invite',{Email:$('
 async function setMember(id,body){ await api('POST',`/api/members/${u(id)}`,body); await loadMembers(); }
 async function removeMember(d){ if(!confirm('Remove '+d.email+'? Their devices leave the mesh with them.'))return; await api('DELETE',`/api/members/${u(d.id)}`); await loadMembers(); }
 async function createProject(){ await api('POST','/api/projects',{Name:$('#pj-name').value.trim()}); $('#pj-name').value=''; await loadMembers(); }
+function protection(a){
+  const p=a.Protection||{};
+  const state=(part,allowed)=>allowed.includes(part?.State)?part.State:'unknown';
+  const db=state(p.Database,['protected','degraded','unknown','not-applicable']);
+  const files=state(p.Files,['local-only','unknown','not-applicable']);
+  const point=state(p.RecoveryPoint,['within-objective','outside-objective','unknown','not-applicable']);
+  const detail=(label,part,value)=>html`<div><b>${label}: ${value}</b>${part?.Reason&&html` · ${part.Reason}`}${part?.ObservedAt&&html` · observed ${when(part.ObservedAt)}`}</div>`;
+  return html`<div class="muted" aria-label="Recovery evidence">
+    ${detail('Database',p.Database,db)}${p.Database?.BackupCompletedAt&&html`<div>Backup completed ${when(p.Database.BackupCompletedAt)} (not a verified restore)</div>`}
+    ${detail('Files',p.Files,files)}
+    ${detail('Recovery point',p.RecoveryPoint,point)}
+    ${p.RecoveryPoint?.ExposureUpperBoundSeconds!=null&&html`<div>Measured upper-bound exposure: ${Number(p.RecoveryPoint.ExposureUpperBoundSeconds)} seconds</div>`}
+    <div>Last verified restore: ${p.LastVerifiedRestore?html`${when(p.LastVerifiedRestore)} · ${p.LastVerifiedRestoreScope||'scope unavailable'}`:'Never verified'}</div>
+    <a href="#storage">Storage evidence and local-volume placement</a>
+  </div>`;
+}
 function render(){
   const {sites,apps,domain}=STATE;
   $('#brand-domain').textContent=domain||''; $('#fabric-name').textContent=sites.map(s=>s.Name).join(' + ')||'no sites yet'; $('#net-server').textContent='https://mesh.'+(domain||'');
@@ -562,9 +601,9 @@ function render(){
   const ready=apps.filter(a=>a.Ready==='True').length, sready=sites.filter(s=>s.Ready).length, stewards=sites.filter(s=>s.Steward).length;
   $('#fabric-dot').className='dot pulse '+(sready===sites.length&&ready===apps.length?'ok':'warn');
   put('#ov-sub',html`${sites.length} sites · ${apps.length} apps · zone <span class="mono">${domain||''}</span>`);
-  put('#ov-stats',[['Sites ready',html`${sready}<small>/ ${sites.length}</small>`,sready===sites.length?'ok':'warn'],['Apps protected',html`${ready}<small>/ ${apps.length}</small>`,ready===apps.length?'ok':'warn'],
+  put('#ov-stats',[['Sites ready',html`${sready}<small>/ ${sites.length}</small>`,sready===sites.length?'ok':'warn'],['Apps ready',html`${ready}<small>/ ${apps.length}</small>`,ready===apps.length?'ok':'warn'],
     ['Moving',apps.filter(a=>a.Handover).length,''],['Stewards',stewards,stewards>1?'ok':'warn']].map(([l,v,s])=>html`<div class="card stat ${s}"><span class="lbl">${l}</span><span class="val">${v}</span></div>`));
-  put('#ov-apps',each(apps,a=>html`<tr class="click" data-action="go" data-to="apps"><td>${dot(a.Ready==='True')}</td><td><span class="nm">${a.Name}</span><span class="sub">${a.Namespace}</span></td><td class="role"><b>${a.Active||a.Primary}</b></td><td class="mono">${a.Hostname||'—'}</td><td title="${(a.Conditions||[]).find(c=>c.type===a.Reason)?.message||''}">${tag(a.Ready==='True'?'ok':'warn',a.Ready==='True'?'Protected':(a.Conditions||[]).find(c=>c.type===a.Reason)?.reason||a.Reason||'Not ready')}</td></tr>`,html`<tr><td colspan=5 class="muted">no apps</td></tr>`));
+  put('#ov-apps',each(apps,a=>html`<tr class="click" data-action="go" data-to="apps"><td>${dot(a.Ready==='True')}</td><td><span class="nm">${a.Name}</span><span class="sub">${a.Namespace}</span></td><td class="role"><b>${a.Active||a.Primary}</b></td><td class="mono">${a.Hostname||'—'}</td><td title="${(a.Conditions||[]).find(c=>c.type===a.Reason)?.message||''}">${tag(a.Ready==='True'?'ok':'warn',a.Ready==='True'?'Ready':(a.Conditions||[]).find(c=>c.type===a.Reason)?.reason||a.Reason||'Not ready')}<span class="sub">DB ${a.Protection?.Database?.State||'unknown'} · files ${a.Protection?.Files?.State||'unknown'} · recovery ${a.Protection?.RecoveryPoint?.State||'unknown'} · last restore ${a.Protection?.LastVerifiedRestore?when(a.Protection.LastVerifiedRestore):'Never verified'}</span></td></tr>`,html`<tr><td colspan=5 class="muted">no apps</td></tr>`));
   put('#ov-sites',each(sites,s=>html`<tr class="click" data-action="go" data-to="sites"><td>${dot(s.Ready)}</td><td class="nm">${s.Name}</td><td class="muted">${s.Owner}</td><td>${tag(s.Ready?'ok':'warn',s.Ready?'Ready':'not answering')}${s.Writer&&html` ${tag('','writer')}`}</td></tr>`,html`<tr><td colspan=4 class="muted">no sites yet</td></tr>`));
   put('#apps-list',each(apps,a=>{ const at=a.Active||a.Primary, link=h=>html`<a class="mono" href="https://${h}" target="_blank" rel="noopener">https://${h}</a>`;
     return html`<div class="card"><div class="hd">${dot(a.Ready==='True')}<h3>${a.Name}</h3><span class="tag">${a.Namespace}</span>${a.Database&&html`<span class="tag">postgres</span>`}<div class="r">${a.Deleted&&tag('warn','deleting')}${a.Handover&&tag('warn','moving from '+a.Handover.from+' to '+a.Primary)}</div></div>
@@ -572,6 +611,7 @@ function render(){
       <div class="kv"><dt>Public</dt><dd>${a.Hostname?link(a.Hostname):dim('none')}</dd><dt>On the mesh</dt><dd>${a.Mesh?html`${link(a.MeshName)} <span class="dim">for people on the mesh, follows the primary</span>`:dim('not published')} <button class="btn sm ghost" data-action="setMesh" data-ns="${a.Namespace}" data-name="${a.Name}" data-v="${!a.Mesh}">${a.Mesh?'Unpublish':'Publish on the mesh'}</button></dd><dt>Delete</dt><dd><button class="btn sm ghost" style="color:var(--bad)" data-action="deleteApp" data-ns="${a.Namespace}" data-name="${a.Name}">Delete app</button></dd></div>
       <div class="field"><span class="k">primary:</span><span class="v">${at}</span><span class="k" style="margin-left:14px">sites:</span><span>${(a.Sites||[]).join(', ')}</span><span class="k" style="margin-left:14px">rpo:</span><span>${a.RPO||'—'}</span>
         <div class="swt">${(a.Sites||[]).map(s=>s===at?html`<button class="on">${s}</button>`:html`<button data-action="openFailover" data-ns="${a.Namespace}" data-name="${a.Name}" data-to="${s}">${s}</button>`)}</div></div>
+      ${protection(a)}
       <ul class="conds">${(a.Conditions||[]).filter(c=>c.type!=='Ready').map(cnd)}</ul>
     </div></div>`},html`<div class="empty">No apps yet. <a href="#deploy">Deploy one</a>.</div>`));
   put('#sites-list',each(sites,s=>html`<div class="card"><div class="hd">${dot(s.Ready)}<h3>${s.Name}</h3><div class="r"><span class="tag">${s.Owner}</span>${s.Steward&&tag('acc','steward')}${s.Writer&&tag('acc','writer')}${s.Public&&tag('','public')}</div></div>
@@ -605,27 +645,91 @@ async function setSteward(d){ const v=d.v==='true'; if(!confirm(v?'Make '+d.site
 async function setMesh(d){ await api('POST',`/api/apps/${u(d.ns)}/${u(d.name)}/mesh`,{Mesh:d.v==='true'}); await load(); }
 async function deleteApp(d){ if(!confirm('Delete '+d.name+' and everything created for it, on every site? The vault keeps its backups.'))return; await api('DELETE',`/api/apps/${u(d.ns)}/${u(d.name)}`); await load(); }
 let FO=null;
-function openFailover(d){ const a=STATE.apps.find(x=>x.Namespace===d.ns&&x.Name===d.name); if(!a)return; FO={ns:d.ns,name:d.name,to:d.to}; const at=a.Active||a.Primary; $('#fo-app').textContent=a.Name; $('#fo-to').textContent=d.to; $('#fo-err').textContent=''; $('#fo-force').checked=false;
+function openFailover(d){ const a=STATE.apps.find(x=>x.Namespace===d.ns&&x.Name===d.name); if(!a)return; FO={ns:d.ns,name:d.name,to:d.to,database:!!a.Database,preview:null}; const at=a.Active||a.Primary; $('#fo-app').textContent=a.Name; $('#fo-to').textContent=d.to; $('#fo-err').textContent=''; $('#fo-force').checked=false; $('#fo-force').disabled=!a.Database; $('#fo-fence').style.display='none'; $('#fo-isolated').checked=false; $('#fo-method').value=''; $('#fo-evidence').value='';
   const ph=(a.Conditions||[]).find(c=>c.type==='PrimaryHealthy'), planned=ph&&ph.status==='True'&&a.Database;
-  put('#fo-note',planned?html`<span class="dim">ⓘ</span><span><b>Planned switchover.</b> ${at} is healthy: it stops taking writes and hands a token to ${d.to}, which starts with it. No database data is lost. Files on the app's volumes stay at ${at}. The app is stopped for a minute or two.</span>`:a.Database?html`<span>!</span><span><b>Failover.</b> ${at} is not healthy, so a planned move is refused. Tick Force to make ${d.to} primary now: writes ${at} had not archived are lost, and every other site's database is rebuilt from the vault.</span>`:html`<span>ⓘ</span><span><b>No database.</b> ${d.to} becomes primary now; there is nothing to hand over. Files on the app's volumes stay at each site.</span>`);
+  put('#fo-note',planned?html`<span class="dim">ⓘ</span><span><b>Planned switchover.</b> ${at} is healthy: it stops taking writes and hands a token to ${d.to}. Verify the actual recovery point after the move; files on local volumes remain at ${at}.</span>`:a.Database?html`<span>!</span><span><b>Failover.</b> ${at} is not healthy, so a planned move is refused. Force requires independent physical power-off or write-path isolation of ${at}; writes not archived may be lost. Database rebuild from the vault may fail. Files are site-local.</span>`:html`<span>ⓘ</span><span><b>No database.</b> ${d.to} becomes primary now; there is nothing to hand over. Files on the app's volumes stay at each site.</span>`);
   put('#fo-gates',(a.Database?a.Conditions||[]:[]).filter(c=>(a.Handover?['StandbyStaged']:['StandbyStaged','PrimaryHealthy','WithinRPO']).includes(c.type)).map(c=>html`<li><span class="n ${c.status==='True'?'ok':'warn'}">${c.status==='True'?'✓':'!'}</span><span>${c.type}: ${c.message||''}</span><span class="g ${c.status==='True'?'ok':'warn'}">${c.status==='True'?'ok':'blocks'}</span></li>`));
   openModal('failover'); }
-async function doFailover(){ await api('POST',`/api/apps/${u(FO.ns)}/${u(FO.name)}/primary`,{To:FO.to,Force:$('#fo-force').checked}); closeModals(); await load(); }
+async function doFailover(){
+  const force=$('#fo-force').checked, body={To:FO.to,Force:force};
+  if(force&&FO.database){
+    if(!FO.preview)throw new Error('Force preview unavailable; uncheck Force and retry to fetch it.');
+    if(!$('#fo-isolated').checked||!$('#fo-method').value||!$('#fo-evidence').value.trim())throw new Error('Confirm independent fencing, select its method and record evidence before forcing.');
+    body.Fencing={...FO.preview,Method:$('#fo-method').value,Evidence:$('#fo-evidence').value.trim()};
+  }
+  try{await api('POST',`/api/apps/${u(FO.ns)}/${u(FO.name)}/primary`,body);}
+  catch(error){if(force&&FO.database){FO.preview=null;$('#fo-preview').textContent='Preview expired or move failed; uncheck Force and recheck to preview again.';}throw error;}
+  closeModals();await load();
+}
+$('#fo-force').addEventListener('change',async e=>{
+  const enabled=e.target.checked&&FO?.database;
+  $('#fo-fence').style.display=enabled?'':'none';
+  FO.preview=null;
+  if(!enabled)return;
+  $('#fo-preview').textContent='Checking current archive and previous primary…';
+  const current=FO;
+  try{
+    const preview=await api('GET',`/api/apps/${u(current.ns)}/${u(current.name)}/force-preview`);
+    if(FO!==current||!$('#fo-force').checked)return;
+    if(!preview.ArchiveID||!preview.PreviousPrimary||!preview.ExpectedAppSHA)throw new Error('Incomplete force preview');
+    current.preview={ArchiveID:preview.ArchiveID,PreviousPrimary:preview.PreviousPrimary,ExpectedAppSHA:preview.ExpectedAppSHA};
+    $('#fo-preview').textContent='Archive '+preview.ArchiveID+' · previous primary '+preview.PreviousPrimary+' · app revision '+preview.ExpectedAppSHA+'. Independently fence the previous primary before proceeding.';
+  }catch(error){if(FO===current){$('#fo-preview').textContent='Cannot preview force: '+error.message;$('#fo-err').textContent='Force unavailable until a valid preview is fetched.';}}
+});
 const titles={overview:'Overview',apps:'Apps',sites:'Sites',resources:'Resources',network:'Mesh',domains:'Domains',deploy:'Deploy an app',add:'Add a site',settings:'Settings',members:'Members',storage:'Storage'};
-async function loadDomains(){ const d=await api('GET','/api/domains'); $('#dm-fabric').textContent=d.fabric||''; $('#dm-doors').textContent='doors: '+(d.doors||[]).join(', ');
+async function loadDomains(){ const d=await panelAPI('domains','/api/domains'); $('#dm-fabric').textContent=d.fabric||''; $('#dm-doors').textContent='doors: '+(d.doors||[]).join(', ');
   put('#dm-list',each(d.domains,x=>html`<tr><td>${dot(x.Verified)}</td><td><span class="nm">${x.Domain}</span><span class="sub mono lines">${(x.Records||[]).join('\n')}</span></td><td class="mono">${x.Project}</td><td>${tag(x.Verified?'ok':'',x.Phase||'Pending')}<div class="dim" style="font-size:11px">${x.Reason||''}${x.LastChecked&&' · checked '+x.LastChecked}</div></td><td><button class="btn sm ghost" data-action="removeDomain" data-name="${x.Name}" data-domain="${x.Domain}">Remove</button></td></tr>`,html`<tr><td colspan=5 class="muted">no project domains yet</td></tr>`)); }
 async function addDomain(){ $('#dm-result').style.display='none'; const j=await api('POST','/api/domains',{Domain:$('#dm-name').value.trim(),Project:$('#dm-project').value.trim()});
   put('#dm-result',html`<span class="dim">ⓘ</span><span>Create these two records at your DNS provider, DNS only (not proxied). Warden checks every two minutes.<br><span class="mono lines">${(j.records||[]).join('\n')}</span></span>`); $('#dm-result').style.display='flex'; $('#dm-name').value=''; await loadDomains(); }
 async function removeDomain(d){ if(!confirm('Remove '+d.domain+'? Apps using it keep running until redeployed; its DNS records are left in place.'))return; await api('DELETE',`/api/domains/${u(d.name)}`); await loadDomains(); }
 let CATALOG=null, DP_CATALOG='', DP_FOR=null;
-async function loadCatalog(){ if(CATALOG)return; CATALOG=[]; try{ CATALOG=(await api('GET','/catalog.json')).entries||[]; }catch(e){ CATALOG=null; throw e; }
-  put('#ct-cat',[html`<option value="">all categories</option>`,[...new Set(CATALOG.map(e=>e.category))].sort().map(c=>html`<option value="${c}">${c.replace(/-/g,' ')}</option>`)]); renderCatalog(); }
-function renderCatalog(){ const f=$('#ct-q').value.toLowerCase(), cat=$('#ct-cat').value; const l=(CATALOG||[]).filter(e=>(!cat||e.category===cat)&&(!f||(e.title+' '+e.description+' '+e.slug).toLowerCase().includes(f))); $('#ct-count').textContent=l.length+' apps';
-  put('#ct-list',[l.slice(0,60).map(e=>html`<div class="card" style="padding:10px;display:flex;flex-direction:column"><div style="display:flex;gap:6px;align-items:baseline"><span class="nm">${e.title}</span><span class="dim mono" style="font-size:11px">${e.version}</span></div><div class="muted" style="font-size:12px;margin:4px 0 6px">${(e.description||'').slice(0,110)}</div><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:auto">${tag('',e.category.replace(/-/g,' '))}${e.runtime&&tag('acc','own VM')}${e.meshOnly&&tag('','mesh only')}${e.database&&tag('acc','postgres')}${e.volumes.length>0&&tag('','volume')}${e.sidecars.length>0&&tag('',e.sidecars.length+' sidecar')}${e.unsupported.length?tag('bad','host incompatible'):e.validated==='eligible'?tag('ok','validated'):tag('',e.validated.replace(/_/g,' '))}<span style="margin-left:auto">${!e.unsupported.length&&html`<button class="btn sm" data-action="useCatalog" data-slug="${e.slug}">Use</button>`}</span></div>${e.unsupported.length>0&&html`<div class="dim" style="font-size:11px;margin-top:6px">Why: ${e.unsupported.join('; ')}</div>`}</div>`),l.length>60&&html`<div class="muted">refine the search to see more</div>`]); }
-function useCatalog(slug){ const e=CATALOG.find(x=>x.slug===slug); if(!e)return; DP_CATALOG=slug; $('#dp-catalog-row').style.display=''; $('#dp-catalog-title').textContent=e.title+' · '+e.image; const notes=[]; if(e.database)notes.push('Postgres: replicated and backed up (vault needed once per project)'); if(e.volumes.length)notes.push('volumes: '+e.volumes.map(v=>v.name).join(', ')+' (5Gi each, site-local)'); if(e.sidecars.length)notes.push('sidecars: '+e.sidecars.map(x=>x.name).join(', ')); if(e.secrets.includes('admin_password'))notes.push('an admin password is generated and shown once'); notes.push(...e.attention); if(e.runtime){ const cpu=n=>Math.max(0,...((STATE.sites||[]).find(x=>x.Name===n)?.Boxes||[]).filter(b=>b.Kata&&b.Ready).map(b=>q(b.CPU))); const chips=[...document.querySelectorAll('#dp-sites .chip')], best=chips.map(c=>c.dataset.site).sort((a,b)=>cpu(b)-cpu(a))[0]; chips.forEach(c=>c.classList.toggle('on',c.dataset.site===best)); dpPrimary(); notes.push(best&&cpu(best)?'one site, '+best+': the one with the largest box that runs Kata; a second site would run a second desktop':'no site has a box that runs Kata yet: it would wait to be scheduled'); } $('#dp-catalog-notes').textContent=notes.join('\n'); $('#dp-host-row').style.display=e.meshOnly?'none':''; if(e.meshOnly){ $('#dp-host').value=''; $('#dp-mesh').classList.add('on'); } $('#dp-name').value=slug; $('#dp-image').value=e.image; $('#dp-port').value=e.port; $('#dp-db').classList.toggle('on',!!e.database); dpVault(); $('#dp-image').disabled=$('#dp-port').disabled=true; $('#dp-name').scrollIntoView({behavior:'smooth',block:'center'}); $('#dp-name').focus({preventScroll:true}); }
-function clearCatalog(){ DP_CATALOG=''; $('#dp-catalog-row').style.display='none'; $('#dp-host-row').style.display=''; $('#dp-image').disabled=$('#dp-port').disabled=false; $('#dp-image').value=''; }
+let catalogPending=null;
+async function loadCatalog(){ if(CATALOG)return; if(catalogPending)return catalogPending;
+  catalogPending=api('GET','/catalog.json').then(data=>{
+    CATALOG=data.entries||[];
+    put('#ct-cat',[html`<option value="">all categories</option>`,[...new Set(CATALOG.map(e=>e.category))].sort().map(c=>html`<option value="${c}">${c.replace(/-/g,' ')}</option>`)]);
+    renderCatalog();
+  }).finally(()=>catalogPending=null);
+  return catalogPending;
+}
+function renderCatalog(){
+  const f=$('#ct-q').value.toLowerCase(), cat=$('#ct-cat').value;
+  const entries=(CATALOG||[]).filter(e=>(!cat||e.category===cat)&&(!f||(e.title+' '+e.description+' '+e.slug).toLowerCase().includes(f)));
+  $('#ct-count').textContent=entries.length+' apps';
+  put('#ct-list',[
+    entries.slice(0,60).map(e=>{
+      const tested=e.wecolab?.status==='passed';
+      const upstream=e.runtime?'Local VM validation (not restore)':
+        'HomelabOS '+(e.validated==='eligible'?'validated':(e.validated||'unknown').replace(/_/g,' '));
+      const notices=(e.wecolab?.securityNotices||[]).map(n=>{
+        const href=typeof n.url==='string'&&/^https:\/\/[^/\s]+\/\S*$/.test(n.url)?n.url:null;
+        return html`<div class="dim">Security notice ${n.date||'date unknown'}:
+          ${href?html`<a href="${href}" rel="noopener noreferrer" target="_blank">${href}</a>`:dim('link unavailable')}
+          · ${n.disposition||'impact unknown'}</div>`;
+      });
+      return html`<div class="card" style="padding:10px;display:flex;flex-direction:column">
+        <div><span class="nm">${e.title}</span> <span class="dim mono">${e.version}</span></div>
+        <div class="muted" style="font-size:12px;margin:4px 0 6px">${(e.description||'').slice(0,110)}</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:auto">
+          ${tag('',e.category.replace(/-/g,' '))}${e.runtime&&tag('acc','own VM')}${e.meshOnly&&tag('','mesh only')}
+          ${e.database&&tag('','postgres')}${e.volumes.length>0&&tag('','volume · site-local')}
+          ${e.sidecars.length>0&&tag('',e.sidecars.length+' sidecar')}${tag('',upstream)}
+          ${tested?tag('ok','WeCoLab tested '+e.wecolab.testedImage+'/'+e.wecolab.architecture):
+            tag(e.wecolab?.status==='failed'?'bad':'warn','WeCoLab not certified'+(e.wecolab?.status==='failed'?' · failed':''))}
+          <span style="margin-left:auto">${!e.unsupported.length&&html`<button class="btn sm" data-action="useCatalog" data-slug="${e.slug}">Use</button>`}</span>
+        </div>
+        ${e.wecolab?.maintainer&&html`<div class="dim" style="font-size:11px">Owner: ${e.wecolab.maintainer} · review: ${e.wecolab.updateCadence?.interval||'unknown'} (${e.wecolab.updateCadence?.lastReviewed||'not reviewed'}) · DB restore: ${e.wecolab.databaseRestore||'not-tested'} · volume restore: ${e.wecolab.volumeRestore||'not-tested'}</div>`}
+        ${notices}
+        ${e.unsupported.length>0&&html`<div class="dim" style="font-size:11px">Host incompatible: ${e.unsupported.join('; ')}</div>`}
+      </div>`;
+    }),
+    entries.length>60&&html`<div class="muted">refine the search to see more</div>`
+  ]);
+}
+function useCatalog(slug){ const e=CATALOG.find(x=>x.slug===slug); if(!e)return; DP_CATALOG=slug; $('#dp-catalog-row').style.display=''; $('#dp-catalog-title').textContent=e.title+' · '+e.image; const notes=[]; if(e.database)notes.push('Postgres: database protection depends on a healthy vault, backup and measured WAL; see Storage'); if(e.volumes.length)notes.push('volumes: '+e.volumes.map(v=>v.name).join(', ')+' (5Gi each, site-local; no cross-site file restore)'); if(e.sidecars.length)notes.push('sidecars: '+e.sidecars.map(x=>x.name).join(', ')); if(e.secrets.includes('admin_password'))notes.push('an admin password is generated and shown once'); notes.push(...e.attention); if(e.runtime){ const cpu=n=>Math.max(0,...((STATE.sites||[]).find(x=>x.Name===n)?.Boxes||[]).filter(b=>b.Kata&&b.Ready).map(b=>q(b.CPU))); const chips=[...document.querySelectorAll('#dp-sites .chip')], best=chips.map(c=>c.dataset.site).sort((a,b)=>cpu(b)-cpu(a))[0]; chips.forEach(c=>selected(c,c.dataset.site===best)); dpPrimary(); notes.push(best&&cpu(best)?'one site, '+best+': the one with the largest box that runs Kata; a second site would run a second desktop':'no site has a box that runs Kata yet: it would wait to be scheduled'); } $('#dp-catalog-notes').textContent=notes.join('\n'); $('#dp-host-row').style.display=e.meshOnly?'none':''; if(e.meshOnly)$('#dp-host').value=''; selected($('#dp-mesh'),!!e.meshOnly||$('#dp-mesh').classList.contains('on')); $('#dp-mesh').disabled=!!e.meshOnly; $('#dp-mesh').setAttribute('aria-describedby','dp-policy'); $('#dp-name').value=slug; $('#dp-image').value=e.image; $('#dp-port').value=e.port; selected($('#dp-db'),!!e.database); $('#dp-db').disabled=true; $('#dp-policy').textContent=e.meshOnly?'Recipe requires a database setting and mesh-only access. Hostname and publication cannot be changed.':'Recipe owns its database setting and image/port. Mesh publication and hostname remain your choice.'; dpVault(); $('#dp-image').disabled=$('#dp-port').disabled=true; $('#dp-name').scrollIntoView({behavior:'smooth',block:'center'}); $('#dp-name').focus({preventScroll:true}); }
+function clearCatalog(){ DP_CATALOG=''; $('#dp-catalog-row').style.display='none'; $('#dp-host-row').style.display=''; $('#dp-image').disabled=$('#dp-port').disabled=$('#dp-db').disabled=$('#dp-mesh').disabled=false; $('#dp-image').value=''; selected($('#dp-db'),false); selected($('#dp-mesh'),false); $('#dp-policy').textContent='Custom apps can choose database and mesh publication.'; dpVault(); }
 function ago(t){ if(!t)return dim('never'); const m=Math.round((Date.now()-new Date(t))/60000); return m<60?m+' min ago':m<1440?Math.round(m/60)+' h ago':Math.round(m/1440)+' d ago'; }
-async function loadStorage(){ const d=await api('GET','/api/storage');
+async function loadStorage(){ const d=await panelAPI('storage','/api/storage');
   $('#st-acct').textContent=d.accountKey?'B2 account key in Settings: vaults are created for you':'no B2 account key in Settings: enter a bucket and key by hand when deploying';
   const vs=[...(d.vaults||[]).map(v=>html`<div><div style="display:flex;gap:8px;align-items:baseline"><span class="nm">${v.Project}</span><span class="mono muted">${v.Bucket} · ${v.Endpoint}</span>${d.accountKey&&html`<button class="btn sm ghost" data-action="rotateVault" data-project="${v.Project}">Rotate key</button>`}</div>
     ${v.Retiring?.length>0&&html`<div class="muted" style="margin-top:4px">old key ${v.Retiring.join(', ')} stays valid until every site has the new one: ${v.Awaiting?.length>0?'waiting for '+v.Awaiting.join(', '):'every site has it; the writer deletes it shortly'}</div>`}
@@ -635,21 +739,21 @@ async function loadStorage(){ const d=await api('GET','/api/storage');
   put('#st-volumes',each(d.volumes,v=>html`<tr><td class="mono">${v.Name}</td><td class="nm">${v.App}</td><td class="mono">${v.Project}</td><td class="mono">${v.Size}</td><td>${each(v.Sites,x=>html`<span style="margin-right:12px">${dot(x.Phase==='Bound')} ${x.Site} <span class="dim">${x.Phase||(x.Applied?'applied':'not applied')}${x.Capacity&&' · '+x.Capacity}</span></span>`,dim('not placed yet'))}</td></tr>`,html`<tr><td colspan=5 class="muted">no volumes</td></tr>`)); }
 async function createVault(d){ if(!confirm('Create a B2 bucket with Object Lock (30 days, compliance) and a restricted key for project '+d.project+'?'))return; const j=await api('POST','/api/storage/vault',{Project:d.project}); say('vault '+j.bucket+' created: '+j.note); await loadStorage(); }
 function dpVault(){ $('#dp-vault').style.display=$('#dp-db').classList.contains('on')?'block':'none'; }
-// renderDeploy runs again whenever the state arrives; the sites someone picked stay picked.
+// Only route entry and project changes rebuild site choices; polls leave form drafts and focus alone.
 function renderDeploy(){ loadCatalog().catch(e=>say(e.message,true)); $('#dp-domain').textContent=STATE.domain||''; const p=$('#dp-project').value.trim(); const keep=DP_FOR===p&&$('#dp-sites').children.length?new Set(chosen('#dp-sites .chip.on')):null; DP_FOR=p;
-  put('#dp-sites',allowedSites(p).map((s,i)=>html`<span class="chip ${(keep?keep.has(s.Name):i<2)?'on':''}" data-site="${s.Name}" data-action="dpSite">${s.Name}</span>`)); dpPrimary(); }
-function dpPrimary(){ const on=chosen('#dp-sites .chip.on'), cur=$('#dp-primary .on')?.dataset.site, pick=on.includes(cur)?cur:on[0]; put('#dp-primary',on.map(s=>html`<button class="${s===pick?'on':''}" data-site="${s}" data-action="dpPick">${s}</button>`)); }
+  put('#dp-sites',allowedSites(p).map((s,i)=>{const on=keep?keep.has(s.Name):i<2;return html`<button type="button" class="chip ${on?'on':''}" aria-pressed="${on}" data-site="${s.Name}" data-action="dpSite">${s.Name}</button>`;})); dpPrimary(); }
+function dpPrimary(){ const on=chosen('#dp-sites .chip.on'), cur=$('#dp-primary .on')?.dataset.site, pick=on.includes(cur)?cur:on[0]; put('#dp-primary',on.map(s=>html`<button type="button" class="${s===pick?'on':''}" aria-pressed="${s===pick}" data-site="${s}" data-action="dpPick">${s}</button>`)); }
 async function doDeploy(){ const sites=chosen('#dp-sites .chip.on'); const body={Catalog:DP_CATALOG,Name:$('#dp-name').value.trim(),Project:$('#dp-project').value.trim(),Image:$('#dp-image').value.trim(),Port:parseInt($('#dp-port').value)||8080,Hostname:$('#dp-host').value.trim(),Sites:sites,Primary:$('#dp-primary .on')?.dataset.site||sites[0],Database:$('#dp-db').classList.contains('on'),Mesh:$('#dp-mesh').classList.contains('on'),RPO:$('#dp-rpo').value.trim(),Vault:{KeyID:$('#dp-vkeyid').value.trim(),Key:$('#dp-vkey').value,Bucket:$('#dp-vbucket').value.trim(),Endpoint:$('#dp-vendpoint').value.trim()}};
   const j=await api('POST','/api/deploy',body); $('#dp-vkey').value=''; clearCatalog(); await load(); go('apps'); say('deployed '+body.Name);
   if(j.admin)secret('Initial admin for '+body.Name,'Shown once: it is stored in the app\'s secret on the fabric.','user: '+j.admin.user+'\npassword: '+j.admin.password); }
-async function loadNetwork(){ if(!ME.admin)return; const d=await api('GET','/api/network');
+async function loadNetwork(){ if(!ME.admin)return; const d=await panelAPI('network','/api/network');
   if(!d.configured){ put('#net-peers',html`<tr><td colspan=5 class="muted">the Console has no mesh token</td></tr>`); return; }
   const ds=(d.devices||[]).sort((a,b)=>(a.Owner+a.Name).localeCompare(b.Owner+b.Name)); $('#net-count').textContent=ds.filter(p=>p.Connected).length+' of '+ds.length+' online';
   put('#net-peers',each(ds,p=>html`<tr><td>${dot(p.Connected)}</td><td><span class="nm">${p.Name}</span><span class="sub">${p.OS}</span></td><td>${p.Owner||tag('warn','nobody: joined with a setup key')}</td><td class="mono">${p.IP}</td><td class="muted">${p.Connected?'now':ago(p.LastSeen)}</td></tr>`,html`<tr><td colspan=5 class="muted">no devices yet</td></tr>`));
   put('#net-rules',each(d.rules,r=>html`<tr><td class="mono">${r.From}</td><td class="mono">${r.To}</td><td>${r.Proto}${r.Ports&&' '+r.Ports}${!r.Enabled&&html` <span class="tag warn">disabled</span>`}</td></tr>`,html`<tr><td colspan=3 class="muted">no rules</td></tr>`)); }
 function q(v){ if(v==null) return 0; v=String(v); if(v.endsWith('m')) return parseFloat(v)/1000; if(v.endsWith('Ki')) return parseFloat(v)*1024; if(v.endsWith('Mi')) return parseFloat(v)*1048576; if(v.endsWith('Gi')) return parseFloat(v)*1073741824; if(v.endsWith('Ti')) return parseFloat(v)*1099511627776; return (parseFloat(v)||0)*({k:1e3,M:1e6,G:1e9,T:1e12}[v.slice(-1)]||1); }
 const gi=b=>(b/1073741824).toFixed(1)+' GiB', cores=c=>c.toFixed(2)+' vCPU';
-async function loadResources(){ const d=await api('GET','/api/resources'); const sites=d.sites||[], pl=d.placements||[], names=sites.map(s=>s.Name);
+async function loadResources(){ const d=await panelAPI('resources','/api/resources'); const sites=d.sites||[], pl=d.placements||[], names=sites.map(s=>s.Name);
   const bar=(label,x,y,f)=>html`<div><div class="legend" style="margin:0 0 6px"><span>${label}</span><span style="margin-left:auto" class="num">${f(x)} of ${f(y)}</span></div><div class="bar"><i class="res" style="width:${y?Math.min(100,x/y*100):0}%"></i></div></div>`;
   put('#res-sites',sites.map(s=>{ const a=s.Allocatable||{}, m=s.Allocated||{}, bx=s.Boxes||[], sum=(l,k)=>l.reduce((t,b)=>t+q(b[k]),0);
     // The bars are what the site always has; a laptop's capacity is best effort, only while its person is away.
@@ -661,7 +765,7 @@ async function loadResources(){ const d=await api('GET','/api/resources'); const
     </div></div>`}));
   put('#res-head',html`<th>Workload</th><th>Project</th><th>Kind</th>${names.map(n=>html`<th>${n}</th>`)}`);
   put('#res-placements',each(pl.sort((a,b)=>(a.Namespace+a.Name).localeCompare(b.Namespace+b.Name)),p=>html`<tr><td class="nm">${p.Name}</td><td class="muted">${p.Namespace}</td><td class="muted">${p.Kind}</td>${names.map(n=>{ const h=(p.Sites||{})[n]; return html`<td>${h?tag(h==='Healthy'?'ok':'warn',h):dim('—')}</td>`; })}</tr>`,html`<tr><td colspan="${3+names.length}" class="muted">nothing placed</td></tr>`)); }
-async function loadSettings(){ const d=await api('GET','/api/settings'); const st=d.storage||{}; $('#b2-state').textContent=st.configured?'configured · '+(st.updated||''):'not configured';
+async function loadSettings(){ const d=await panelAPI('settings','/api/settings'); const st=d.storage||{}; $('#b2-state').textContent=st.configured?'configured · '+(st.updated||''):'not configured';
   put('#wr-state',html`<span class="mono">${d.writer}</span> takes the fabric's changes (epoch ${Number(d.epoch)}). This Console is at <span class="mono">${d.site}</span>.`); $('#wr-take').style.display=d.isSteward&&!d.isWriter?'':'none'; }
 async function takeover(){ if(!confirm('Take over as writer here? Only when the writer is really gone or you are moving it on purpose: the old writer\'s later commits are set aside as a branch.'))return; await api('POST','/api/settings/takeover'); await loadSettings(); }
 async function saveB2(){ await api('POST','/api/settings/storage',{KeyID:$('#b2-keyid').value,Key:$('#b2-key').value}); $('#b2-key').value=''; $('#b2-keyid').value=''; say('storage key stored on the fabric'); await loadSettings(); }
@@ -670,17 +774,95 @@ function page(){ return (location.hash||'#overview').slice(1); }
 function toggleMenu(force){ const open=force===undefined?!document.querySelector('nav.side').classList.contains('open'):force; document.querySelector('nav.side').classList.toggle('open',open); $('#scrim').classList.toggle('show',open); }
 document.querySelectorAll('.navsec a').forEach(a=>a.addEventListener('click',()=>toggleMenu(false)));
 $('#ct-q').addEventListener('input',renderCatalog); $('#ct-cat').addEventListener('change',renderCatalog); $('#dp-project').addEventListener('change',renderDeploy);
-const loaders={resources:loadResources,settings:loadSettings,network:loadNetwork,deploy:renderDeploy,domains:loadDomains,members:loadMembers,storage:loadStorage};
-function route(){ const r=page(), pg=document.getElementById('p-'+r); if(!pg)return; Promise.resolve().then(()=>loaders[r]?.()).catch(e=>say(e.message,true));
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('show')); pg.classList.add('show'); document.querySelectorAll('.navsec a').forEach(a=>a.classList.toggle('active',a.dataset.route===r)); put('#crumbs',html`<b>${titles[r]||r}</b>`); }
+const loaders={resources:loadResources,settings:loadSettings,network:loadNetwork,domains:loadDomains,members:loadMembers,storage:loadStorage};
+const panelPending=new Map(), panelQueued=new Set(), panelEpoch=new Map(), panelRequests=new Map();
+let activePanel='';
+const stalePanel=Symbol('stale panel');
+async function panelAPI(panel,path){
+  const epoch=panelEpoch.get(panel), request=(panelRequests.get(panel)||0)+1;
+  panelRequests.set(panel,request);
+  try{
+    const data=await api('GET',path);
+    if(page()!==panel||panelEpoch.get(panel)!==epoch||panelRequests.get(panel)!==request)throw stalePanel;
+    panelStatus(panel,'Updated '+when(new Date()),false,true);
+    return data;
+  }catch(error){
+    if(page()!==panel||panelEpoch.get(panel)!==epoch||panelRequests.get(panel)!==request)throw stalePanel;
+    throw error;
+  }
+}
+function panelStatus(panel,message,failed,success=false){
+  const status=document.querySelector('#p-'+panel+' .panel-status');
+  if(!status)return;
+  const previous=status.dataset.failed;
+  if(success)status.dataset.lastSuccess=when(new Date());
+  status.textContent=message+(success?'':status.dataset.lastSuccess?' · last successful '+status.dataset.lastSuccess:' · never updated');
+  status.dataset.failed=String(failed);
+  status.setAttribute('role',failed?'alert':'status');
+  status.setAttribute('aria-live',previous===String(failed)?'off':'polite');
+}
+function refreshPanel(panel){
+  const loader=loaders[panel];
+  if(!loader||page()!==panel)return;
+  if(panelPending.has(panel)){panelQueued.add(panel);return;}
+  panelEpoch.set(panel,(panelEpoch.get(panel)||0)+1);
+  panelStatus(panel,'Refreshing…',false);
+  const pending=Promise.resolve().then(loader).then(()=>{
+    if(page()===panel)panelStatus(panel,'Updated '+when(new Date()),false,true);
+  }).catch(error=>{
+    if(error!==stalePanel&&page()===panel)panelStatus(panel,'Refresh failed; showing last known data: '+error.message,true);
+  }).finally(()=>{
+    panelPending.delete(panel);
+    if(panelQueued.delete(panel)&&page()===panel)refreshPanel(panel);
+  });
+  panelPending.set(panel,pending);
+}
+function route(){
+  const r=page(), pg=document.getElementById('p-'+r); if(!pg)return;
+  if(r!==activePanel){activePanel=r;for(const key of Object.keys(loaders))panelEpoch.set(key,(panelEpoch.get(key)||0)+1);}
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('show')); pg.classList.add('show');
+  document.querySelectorAll('.navsec a').forEach(a=>a.classList.toggle('active',a.dataset.route===r));
+  put('#crumbs',html`<b>${titles[r]||r}</b>`);
+  if(r==='deploy')renderDeploy();
+  refreshPanel(r);
+}
+for(const panel of Object.keys(loaders)){
+  const status=document.createElement('p');status.className='panel-status muted';status.textContent='Not refreshed yet';
+  document.querySelector('#p-'+panel+' .ph')?.append(status);
+}
 addEventListener('hashchange',route);
 const H=document.documentElement,LS=localStorage;
 function setTheme(t){H.dataset.theme=t;LS.wtheme=t;} function setAccent(a){H.dataset.accent=a;LS.waccent=a;}
 function cycleTheme(){const o=['graphite','paper','dusk'];setTheme(o[(o.indexOf(H.dataset.theme)+1)%o.length]);}
 setTheme(LS.wtheme||(matchMedia('(prefers-color-scheme: light)').matches?'paper':'graphite')); setAccent(LS.waccent||'teal');
-function openModal(id){document.getElementById('m-'+id).classList.add('show');}
-function closeModals(){ for(const i of ['#inv-title','#inv-lead','#inv-cmd','#inv-note'])$(i).textContent=''; document.querySelectorAll('.modal').forEach(m=>m.classList.remove('show')); }
+let modalOpener=null, modalOpenerData=null;
+const modalControls=m=>[...m.querySelectorAll('button, input, select, textarea, [tabindex="0"]')].filter(x=>!x.disabled&&x.getClientRects().length);
+function openModal(id){
+  modalOpener=document.activeElement;
+  modalOpenerData=modalOpener?.dataset?{...modalOpener.dataset}:null;
+  const m=document.getElementById('m-'+id);m.classList.add('show');$('.shell').inert=true;
+  (id==='invite'?$('#inv-cmd'):modalControls(m)[0])?.focus();
+}
+function closeModals(){
+  const m=document.querySelector('.modal.show');if(!m)return;
+  if(m.id==='m-invite'&&$('#inv-cmd').textContent&&!confirm('This is the only copy shown here. Close and clear it?'))return;
+  for(const i of ['#inv-title','#inv-lead','#inv-cmd','#inv-note','#inv-copy-status'])$(i).textContent='';
+  m.classList.remove('show');$('.shell').inert=false;
+  const replacement=modalOpenerData?.action?[...document.querySelectorAll('.shell [data-action]')].find(node=>
+    Object.entries(modalOpenerData).every(([key,value])=>node.dataset[key]===value)):null;
+  (modalOpener?.isConnected?modalOpener:replacement||document.querySelector('.navsec a.active'))?.focus();
+  modalOpener=null;modalOpenerData=null;
+}
+document.addEventListener('keydown',e=>{
+  const m=document.querySelector('.modal.show');if(!m)return;
+  if(e.key==='Escape'){e.preventDefault();closeModals();}
+  if(e.key!=='Tab')return;
+  const controls=modalControls(m),first=controls[0],last=controls.at(-1);
+  if(!first){e.preventDefault();return;}
+  if(e.shiftKey&&(document.activeElement===first||!m.contains(document.activeElement))){e.preventDefault();last.focus();}
+  else if(!e.shiftKey&&(document.activeElement===last||!m.contains(document.activeElement))){e.preventDefault();first.focus();}
+});
 document.querySelectorAll('.modal').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)closeModals();}));
-load().then(route); setInterval(load,10000);
+route();load();setInterval(load,10000);
 </script>
 </body></html>

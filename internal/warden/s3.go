@@ -7,9 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -21,7 +21,8 @@ type S3 struct {
 	Endpoint string // https://s3.eu-central-003.backblazeb2.com
 	KeyID    string
 	Key      string
-	HTTP     *http.Client
+	Dev      bool         // set only from the fabric's explicit development setting
+	http     *http.Client // package-private fixture transport; production uses guarded clients
 }
 
 // Region is read from the endpoint's host where providers put it; anything else signs as us-east-1.
@@ -37,27 +38,53 @@ func (s S3) Region() string {
 	return "us-east-1"
 }
 
-// get signs and sends a path-style GET: <endpoint>/<bucket>?<query>.
+// get signs and sends a path-style bucket request.
 func (s S3) get(ctx context.Context, bucket string, q url.Values) ([]byte, error) {
-	u := strings.TrimRight(s.Endpoint, "/") + "/" + bucket
-	if len(q) > 0 {
-		u += "?" + canonicalQuery(q)
+	return s.getPath(ctx, bucket, "", q, 16<<20)
+}
+
+func (s S3) getObject(ctx context.Context, bucket, key string) ([]byte, error) {
+	if key == "" || strings.HasPrefix(key, "/") || path.Clean(key) != key || strings.Contains(key, "\\") {
+		return nil, fmt.Errorf("invalid archive object key")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	return s.getPath(ctx, bucket, key, nil, 1<<20)
+}
+
+func (s S3) getPath(ctx context.Context, bucket, key string, q url.Values, limit int64) ([]byte, error) {
+	u, err := url.Parse(s.Endpoint)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+		(u.Scheme != "https" && !(s.Dev && u.Scheme == "http")) {
+		return nil, fmt.Errorf("vault endpoint must be an HTTPS URL without credentials, query or fragment")
+	}
+	if bucket == "" || strings.ContainsAny(bucket, "/\\") || bucket == "." || bucket == ".." {
+		return nil, fmt.Errorf("invalid vault bucket")
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/" + bucket
+	if key != "" {
+		u.Path += "/" + key
+	}
+	u.RawPath, u.RawQuery = "", canonicalQuery(q)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	sign(req, s.KeyID, s.Key, s.Region(), time.Now().UTC())
-	hc := s.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 20 * time.Second}
+	hc := productionS3Client
+	if s.Dev {
+		hc = developmentS3Client
+	}
+	if s.http != nil {
+		hc = s.http
 	}
 	res, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(res.Body, 16<<20))
+	b, err := readLimited(res.Body, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read vault response: %w", err)
+	}
 	if res.StatusCode != http.StatusOK {
 		var e struct{ Code, Message string }
 		_ = xml.Unmarshal(b, &e)
@@ -143,10 +170,15 @@ func uriEncode(s string) string {
 	return b.String()
 }
 
-// InspectS3 is what a vault itself says under prefix: its default Object Lock, its newest base backup
-// (a backup.info is written when a backup completes) and its newest archived WAL.
+// InspectS3 reports validated completed backup metadata, not object upload times.
 func InspectS3(ctx context.Context, s S3, bucket, prefix string) VaultStatus {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	st := VaultStatus{}
+	observed := time.Now()
+	if prefix == "" || !strings.HasSuffix(prefix, "/") {
+		return VaultStatus{Err: "archive prefix must end with /"}
+	}
 	if b, err := s.get(ctx, bucket, url.Values{"object-lock": {""}}); err == nil {
 		var lock struct {
 			Rule struct {
@@ -167,6 +199,7 @@ func InspectS3(ctx context.Context, s S3, bucket, prefix string) VaultStatus {
 		}
 	}
 	token := ""
+	seen := map[string]bool{}
 	for {
 		q := url.Values{"list-type": {"2"}, "prefix": {prefix}, "max-keys": {"1000"}}
 		if token != "" {
@@ -188,16 +221,33 @@ func InspectS3(ctx context.Context, s S3, bucket, prefix string) VaultStatus {
 			return VaultStatus{Err: fmt.Sprintf("list %s: %v", bucket, err)}
 		}
 		for _, o := range page.Contents {
+			if !strings.HasPrefix(o.Key, prefix) {
+				return VaultStatus{Err: "listing returned an object outside the archive"}
+			}
 			switch {
-			case strings.HasSuffix(o.Key, "/backup.info") && o.LastModified.After(st.LatestBackup):
-				st.LatestBackup = o.LastModified
-			case strings.Contains(o.Key, "/wals/") && o.LastModified.After(st.LatestWAL):
+			case strings.HasSuffix(o.Key, "/backup.info"):
+				data, err := s.getObject(ctx, bucket, o.Key)
+				if err != nil {
+					return VaultStatus{Err: fmt.Sprintf("read backup metadata: %v", err)}
+				}
+				evidence, err := backupMetadata(data, o.Key, prefix, observed)
+				if err != nil {
+					return VaultStatus{Err: fmt.Sprintf("backup %s: %v", o.Key, err)}
+				}
+				if evidence != nil && evidence.CompletedAt.After(st.LatestBackup) {
+					st.BackupEvidence, st.LatestBackup = evidence, evidence.CompletedAt
+				}
+			case strings.HasPrefix(o.Key, prefix+"wals/") && o.LastModified.After(st.LatestWAL):
 				st.LatestWAL = o.LastModified
 			}
 		}
-		if !page.IsTruncated || page.NextContinuationToken == "" {
+		if !page.IsTruncated {
 			return st
 		}
 		token = page.NextContinuationToken
+		if token == "" || seen[token] {
+			return VaultStatus{Err: "invalid listing continuation token"}
+		}
+		seen[token] = true
 	}
 }

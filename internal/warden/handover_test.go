@@ -116,12 +116,29 @@ func TestHandoverCommitsAgainstGit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			_ = json.NewEncoder(w).Encode(map[string]string{"type": "file", "sha": "s", "content": base64.StdEncoding.EncodeToString([]byte(content))})
+			payload := content
+			switch strings.TrimPrefix(r.URL.Path, "/api/v1/repos/fabric/fabric/contents/") {
+			case fabric.UpgradePath:
+				payload = `{"phase":"ready"}`
+			case fabric.MigrationCompletePath:
+				payload = `{}`
+			case fabric.PlacementRevisionPath:
+				payload = `{"revision":"1"}`
+			case "fabric/apps/vince/docs.yaml":
+			default:
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"type": "file", "sha": "s", "content": base64.StdEncoding.EncodeToString([]byte(payload))})
 		case http.MethodPost:
 			var body struct{ Files []map[string]any }
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			b, _ := base64.StdEncoding.DecodeString(body.Files[0]["content"].(string))
-			posted = append(posted, string(b))
+			for _, change := range body.Files {
+				if change["path"] == "fabric/apps/vince/docs.yaml" {
+					b, _ := base64.StdEncoding.DecodeString(change["content"].(string))
+					posted = append(posted, string(b))
+				}
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]string{"sha": "c"}})
 		}
 	}))

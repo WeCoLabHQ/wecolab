@@ -31,6 +31,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	coordinationclient "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -52,7 +53,7 @@ var Version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: warden site|entrance|entrance-init|node-agent|bootstrap|people|upgrade|takeover|image|version [flags]")
+		fmt.Fprintln(os.Stderr, "usage: warden site|entrance|entrance-init|node-agent|bootstrap|people|upgrade|record-restore|takeover|image|version [flags]")
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
@@ -70,6 +71,8 @@ func main() {
 		err = people(args)
 	case "upgrade":
 		err = upgrade(args)
+	case "record-restore":
+		err = recordRestore(args)
 	case "takeover":
 		err = takeover(args)
 	case "image":
@@ -109,10 +112,15 @@ func site(args []string) error {
 	if *name == "" {
 		return fmt.Errorf("--site is required")
 	}
-	// Host network: the manager's own endpoints stay off so they take no port on the box.
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{Scheme: scheme(), Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0"})
+	// The manager and the writer use the same local cluster configuration.
+	config := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(config, ctrl.Options{Scheme: scheme(), Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0"})
 	if err != nil {
 		return err
+	}
+	coordination, err := coordinationclient.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("writer coordination: %w", err)
 	}
 	c := mgr.GetClient()
 	peers := &warden.Peers{Client: c}
@@ -136,14 +144,14 @@ func site(args []string) error {
 	}
 	status, certs := http.NewServeMux(), http.NewServeMux()
 	g := fabric.GitFromEnv()
-	agent := &warden.SiteAgent{Client: mgr.GetAPIReader(), Site: *name, Git: g}
+	agent := &warden.SiteAgent{Client: mgr.GetAPIReader(), Site: *name, Git: g, SchemaVersion: Version}
 	status.Handle("/status", agent)
 	status.Handle("/healthz", agent)
 	certs.Handle("/nebula/", &warden.CertService{Client: c})
 	certs.Handle("/healthz", agent)
 	if g != nil {
-		w := &warden.Writer{Client: c, Site: *name, Git: g, Peers: peers}
-		status.Handle("/fabric/", w) // followers ask the writer about its copy
+		w := &warden.Writer{Client: c, APIReader: mgr.GetAPIReader(), Site: *name, Git: g, Peers: peers, Coordination: coordination}
+		status.Handle("/fabric/", w) // ancestry observations and serialized history custody
 		_ = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error { w.Run(ctx, 20*time.Second); return nil }))
 	}
 	serve(mgr, *statusAddr, status)
@@ -330,30 +338,130 @@ func people(args []string) error {
 	return p.Run(interrupted())
 }
 
-// upgrade commits this version's system/ and crds/ to the Fabric in WECOLAB_GIT_URL and
-// WECOLAB_GIT_TOKEN, the writer's copy: every site's Flux then applies it.
+// upgrade requires an operator-controlled maintenance window: inventory and recoverability,
+// additive schemas, restartable migration, then platform rollout and fresh site reports.
 func upgrade(args []string) error {
 	fs := flag.NewFlagSet("upgrade", flag.ExitOnError)
-	version := fs.String("version", Version, "WeCoLab's image tag; its images must be at every site")
-	lock := fs.Bool("lock-flux", false, "lock down Flux in a fabric made before the lockdown, once every site runs this version")
+	stage := fs.String("stage", "review", "review|begin|schemas|migrate|platform|complete")
+	version := fs.String("version", Version, "same release version staged on every site")
+	lock := fs.Bool("lock-flux", false, "lock down Flux after all sites run this version")
+	snapshot := fs.String("snapshot", "", "operator's offline Fabric snapshot, required at begin")
+	recovery := fs.String("recovery-material", "", "operator's offline recovery material, required at begin")
+	ageKey := fs.String("age-key", "", "writer's age identity file, required for migration")
+	proof := fs.String("backup-proof", "", "operator backup and actual restore readback receipt JSON")
+	localSite := fs.String("local-site", "", "writer manager's site for direct current vault inspection")
 	_ = fs.Parse(args)
 	g := fabric.GitFromEnv()
 	if g == nil {
-		return fmt.Errorf("usage: WECOLAB_GIT_URL=… WECOLAB_GIT_TOKEN=… warden upgrade [--version V] [--lock-flux]")
+		return fmt.Errorf("WECOLAB_GIT_URL and WECOLAB_GIT_TOKEN are required")
 	}
-	sha, kept, err := bootstrap.Upgrade(interrupted(), g, bootstrap.Options{Version: *version, LockFlux: *lock}, fabric.Author{Name: "WeCoLab", Email: "fabric@wecolab"})
+	ctx := interrupted()
+	report, err := fabric.UpgradeReview(ctx, g)
 	if err != nil {
 		return err
 	}
-	if sha == "" {
-		fmt.Println("the Fabric has this version's system/ and crds/ already")
-	} else {
-		fmt.Println("committed", sha)
+	switch *stage {
+	case "review":
+		b, err := json.MarshalIndent(report, "", "  ")
+		if err == nil {
+			fmt.Println(string(b))
+		}
+		return err
+	case "begin":
+		for _, entry := range []struct{ name, path string }{{"snapshot", *snapshot}, {"recovery material", *recovery}} {
+			if entry.path == "" {
+				return fmt.Errorf("%s path required before maintenance", entry.name)
+			}
+			info, err := os.Stat(entry.path)
+			if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+				return fmt.Errorf("%s must be an existing nonempty regular file: %s", entry.name, entry.path)
+			}
+		}
+		revision, err := g.Head(ctx)
+		if err != nil {
+			return err
+		}
+		if revision == "" {
+			return fmt.Errorf("upgrade requires a nonempty writer Git main revision")
+		}
+		paths, err := g.ListAt(ctx, "fabric/sites", revision)
+		if err != nil {
+			return err
+		}
+		var sites []string
+		for _, path := range paths {
+			if strings.HasSuffix(path, ".yaml") {
+				sites = append(sites, strings.TrimSuffix(filepath.Base(path), ".yaml"))
+			}
+		}
+		if err := upgradeBackupPreflight(ctx, g, revision, sites, *proof, *snapshot, *recovery, *localSite); err != nil {
+			return err
+		}
+		if err := fabric.BeginUpgrade(ctx, g, sites, revision); err != nil {
+			return err
+		}
+		fmt.Println("maintenance gate active; apply additive schemas, migrate, then roll platform controllers")
+		return nil
+	case "schemas":
+		if report.Phase != "maintenance" {
+			return fmt.Errorf("begin maintenance before additive schema rollout")
+		}
+		sha, _, err := bootstrap.Upgrade(ctx, g, bootstrap.Options{Version: *version, SchemaOnly: true},
+			fabric.Author{Name: "WeCoLab", Email: "fabric@wecolab"})
+		if err == nil {
+			fmt.Println("additive schema commit", sha)
+		}
+		return err
+	case "platform":
+		if report.Phase != "maintenance" {
+			return fmt.Errorf("begin maintenance before platform rollout")
+		}
+		if _, ready, err := g.Read(ctx, fabric.MigrationCompletePath); err != nil || !ready {
+			return fmt.Errorf("complete legacy migration before controller rollout: %v", err)
+		}
+		sha, kept, err := bootstrap.Upgrade(ctx, g, bootstrap.Options{Version: *version, LockFlux: *lock}, fabric.Author{Name: "WeCoLab", Email: "fabric@wecolab"})
+		if err != nil {
+			return err
+		}
+		fmt.Println("platform commit", sha)
+		if kept {
+			fmt.Println("Flux remains unlocked until all sites run the schema-aware Warden")
+		}
+		return nil
+	case "migrate":
+		if report.Phase != "maintenance" || *ageKey == "" {
+			return fmt.Errorf("migration requires maintenance and --age-key PATH")
+		}
+		key, err := os.ReadFile(*ageKey)
+		if err != nil {
+			return err
+		}
+		return warden.MigrateLegacy(ctx, g, strings.TrimSpace(string(key)))
+	case "complete":
+		if report.Phase != "maintenance" {
+			return fmt.Errorf("maintenance gate required to complete migration")
+		}
+		config, err := ctrl.GetConfig()
+		if err != nil {
+			return fmt.Errorf("site report kubeconfig: %w", err)
+		}
+		kube, err := client.New(config, client.Options{Scheme: scheme()})
+		if err != nil {
+			return err
+		}
+		peers := &warden.Peers{Client: kube}
+		versions := make(map[string]bool, len(report.Sites))
+		for _, site := range report.Sites {
+			st, ok := peers.Get(ctx, site)
+			if !ok || st == nil || st.Time.Before(time.Now().Add(-time.Minute)) || st.Time.After(time.Now().Add(time.Minute)) || st.SchemaVersion != *version {
+				return fmt.Errorf("site %s has no fresh schema-aware report for %s", site, *version)
+			}
+			versions[site] = true
+		}
+		return fabric.CompleteUpgrade(ctx, g, versions)
+	default:
+		return fmt.Errorf("unknown upgrade stage %q", *stage)
 	}
-	if kept {
-		fmt.Println("Flux stays as it was: this fabric's is not locked down yet. Once every site runs this version, run warden upgrade --lock-flux.")
-	}
-	return nil
 }
 
 // takeover makes this steward the writer from the box, for when the writer's site is gone and with it the
@@ -367,11 +475,16 @@ func takeover(args []string) error {
 	if g == nil || *site == "" {
 		return fmt.Errorf("usage: WECOLAB_GIT_URL=… WECOLAB_GIT_TOKEN=… warden takeover --site SITE")
 	}
-	c, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme()})
+	config := ctrl.GetConfigOrDie()
+	c, err := client.New(config, client.Options{Scheme: scheme()})
 	if err != nil {
 		return err
 	}
-	epoch, err := warden.TakeOver(interrupted(), g, *site, &warden.Peers{Client: c}, fabric.Author{Name: "WeCoLab", Email: "fabric@" + *site})
+	coordination, err := coordinationclient.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("writer coordination: %w", err)
+	}
+	epoch, err := warden.TakeOver(interrupted(), g, *site, &warden.Peers{Client: c}, fabric.Author{Name: "WeCoLab", Email: "fabric@" + *site}, coordination)
 	if err != nil {
 		return err
 	}

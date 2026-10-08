@@ -61,10 +61,20 @@ decrypted is ever written back to Git.
 |---|---|
 | NetBird's service token | the writer, two months before it expires: the new token is committed, the old one deleted a day after |
 | The object storage account key | enter the new one in Settings; revoke the old one at the provider |
-| A project's vault key | Storage → Rotate key: the new key is committed with the old one marked retiring; the writer deletes the old one at B2 once every site of the project's database apps reports the new one |
+| A project's vault key | Storage → Rotate key commits a strictly increasing `key-version` and `mutation-revision` with the new key; each database app's encrypted Secret receives the current version. The writer repairs interrupted app rekeys from Git, including apps added during rotation. Retirement waits for each current Git database app Secret and a newly fetched report from every intended site with the exact current key ID **and** version. A durable `retirement-phase` claim pauses rotation and affected app mutations while the writer verifies each provider deletion; after a restart it checks/deletes remaining claimed keys again. Never delete the only live key or infer deletion from a timed-out provider response. |
 | A box's Nebula key | remove the box in the Console and delete its Kubernetes node, run the install script with `uninstall` on it (what k3s held there, volumes and databases included, goes with it), and join it again with a new invite: the join makes a new key. A site's manager cannot be removed, so its key cannot be rotated yet |
 | The Nebula CA | *Not built yet* (the CA lasts five years): a new CA is to join every box's bundle, boxes are re-signed at their next renewal, the old CA leaves a certificate lifetime later |
 | A site's age key, Forgejo tokens, the Console's session key, NetBird's own keys, the recovery key | *Not built yet.* |
+
+The one-time upgrade gate initializes legacy vault and app `key-version` to `0`, vault
+`mutation-revision` to `0`, and explicit archive identities before reopening deployment.
+Missing versions afterward are an error, not an invitation to assume version 0. A failed
+rotation before the Git commit can leave a provider key without any Git reference: inventory
+the account and revoke that orphan deliberately; never guess that an unreferenced key may
+be deleted automatically. If the writer cannot finish a retirement phase, restore provider
+availability, current app Secrets and fresh reports; do not clear the claim by hand or
+revert to a binary that retires based only on key IDs. Vault calls have bounded deadlines:
+a timeout is recorded as an error and retried on the writer's next tick, not success.
 
 ## When a key is lost
 
