@@ -338,15 +338,25 @@ Python 3.14 importer fixture (Jinja2 3.1.6, PyYAML 6.0.3, MarkupSafe 3.0.4), ARM
 Swift/NoCloud ISO and main-only disposable Docker fabric jobs. Importer upstream input is
 `../homelabos` commit `411f2c6802a73aaf5517ed3b3ff01a083312d5c9`; CI uses
 checked-in fixture tests, never a moving upstream branch. Website root/subpath checks stay
-in `website.yml`. The trusted-main integration job requires an **ephemeral, isolated**
+in `website.yml`. The default trusted-main integration job requires an **ephemeral, isolated**
 self-hosted Linux x64 runner labelled `wecolab-recovery`, privileged systemd containers,
 a local Docker engine, Python 3, and at least **30 GiB free in Docker's backing store**.
 The gate refuses insufficient space; it never prunes to make room. GitHub's
 [standard runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
-only guarantees 14 GB storage, below the fabric prerequisite, so the workflow does not
-pretend a standard runner is sufficient. Without the provisioned runner the integration
-gate is unavailable, not a pass. Success and failure `result.json` artifacts are retained
-for 30 days.
+documents 14 GB storage, below the fabric prerequisite; actual capacity must be measured.
+Without the provisioned runner the default integration gate is unavailable, not a pass.
+An explicit hosted experiment runs the same suite and unchanged storage gate on
+`ubuntu-24.04`:
+
+```bash
+gh workflow run verification.yml --repo WeCoLabHQ/wecolab --ref main -f hosted_integration=true
+```
+
+This opt-in does not change the default runner or prune preinstalled software to make
+room. `runner-capacity.json` records Docker filesystem space, CPU/RAM, cgroups, inotify
+and KVM device visibility; device visibility alone does not certify KVM workloads.
+Capacity and success/failure `result.json` artifacts are retained for 30 days, including
+the capacity report when the storage gate refuses the run.
 
 The development vault is credential-free/emulated. Its presence alone proves neither an
 application-data restore nor B2 compliance retention, production S3 dial policy,

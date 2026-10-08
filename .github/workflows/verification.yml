@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      hosted_integration:
+        description: Try the unchanged integration suite on a disposable public Ubuntu runner
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -70,7 +75,7 @@ jobs:
         run: swift test
   integration:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, wecolab-recovery]
+    runs-on: ${{ fromJSON(inputs.hosted_integration && '["ubuntu-24.04"]' || '["self-hosted","linux","x64","wecolab-recovery"]') }}
     timeout-minutes: 240
     permissions:
       contents: read
@@ -82,9 +87,32 @@ jobs:
       - name: Require provisioned Docker storage
         run: |
           python3 - <<'PY'
-          import shutil, subprocess
-          root = subprocess.check_output(['docker', 'info', '--format', '{{.DockerRootDir}}'], text=True).strip()
-          free = shutil.disk_usage(root).free
+          import json, os, pathlib, platform, shutil, subprocess
+          info = json.loads(subprocess.check_output(['docker', 'info', '--format', '{{json .}}'], text=True))
+          root = info['DockerRootDir']
+          disk = shutil.disk_usage(root)
+          free = disk.free
+          capacity = {
+              'architecture': platform.machine(),
+              'kernel': platform.release(),
+              'docker_cpus': info['NCPU'],
+              'docker_memory_bytes': info['MemTotal'],
+              'docker_storage_driver': info['Driver'],
+              'docker_cgroup_version': info['CgroupVersion'],
+              'docker_root': root,
+              'docker_total_bytes': disk.total,
+              'docker_free_bytes': free,
+              'required_free_bytes': 30 * 1024**3,
+              'kvm_device_present': os.path.exists('/dev/kvm'),
+              'kvm_accessible_to_runner': os.access('/dev/kvm', os.R_OK | os.W_OK),
+          }
+          inotify = pathlib.Path('/proc/sys/fs/inotify/max_user_instances')
+          if inotify.exists():
+              capacity['inotify_max_user_instances'] = int(inotify.read_text())
+          report = pathlib.Path(os.environ['RUNNER_TEMP']) / 'wecolab-recovery' / 'runner-capacity.json'
+          report.parent.mkdir(parents=True, exist_ok=True)
+          report.write_text(json.dumps(capacity, indent=2) + '\n')
+          print(json.dumps(capacity, indent=2), flush=True)
           if free < 30 * 1024**3:
               raise SystemExit(f'Disposable recovery runner needs 30 GiB free in Docker storage; has {free / 1024**3:.1f} GiB. No automatic prune.')
           PY
@@ -130,6 +158,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: recovery-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/wecolab-recovery/**/result.json
+          path: |
+            ${{ runner.temp }}/wecolab-recovery/**/result.json
+            ${{ runner.temp }}/wecolab-recovery/runner-capacity.json
           if-no-files-found: error
           retention-days: 30
