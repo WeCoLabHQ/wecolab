@@ -3,6 +3,8 @@ package warden
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,11 +12,15 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/util/flowcontrol"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"wecolab.io/wecolab/api/v1alpha1"
@@ -88,6 +94,198 @@ func TestSiteStatus(t *testing.T) {
 	}
 }
 
+type rateLimitedStatusReader struct {
+	client.Reader
+	limit   flowcontrol.RateLimiter
+	latency time.Duration
+}
+
+func (r rateLimitedStatusReader) wait(ctx context.Context) error {
+	if err := r.limit.Wait(ctx); err != nil {
+		return err
+	}
+	if r.latency != 0 {
+		select {
+		case <-time.After(r.latency):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (r rateLimitedStatusReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := r.wait(ctx); err != nil {
+		return err
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (r rateLimitedStatusReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if err := r.wait(ctx); err != nil {
+		return err
+	}
+	return r.Reader.List(ctx, list, opts...)
+}
+
+type delayedSettingsReader struct {
+	client.Reader
+	delay time.Duration
+}
+
+func (r delayedSettingsReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if key.Namespace == SystemNS && key.Name == "fabric" {
+		select {
+		case <-time.After(r.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+type unavailableStatusReader struct{ client.Reader }
+
+func (unavailableStatusReader) List(context.Context, client.ObjectList, ...client.ListOption) error {
+	return errors.New("inventory unavailable")
+}
+
+func TestStatusReportsAppRoutesWithinPeerDeadline(t *testing.T) {
+	site := testSite("vince", false, "10.77.0.1")
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "box"}, Status: corev1.NodeStatus{
+		Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+		Addresses:  []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.77.0.9"}},
+	}}
+	objects := []client.Object{&site, node, &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "hidden", Namespace: "system"},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
+	}}
+	type expectation struct{ keyID, endpoint string }
+	want := map[string]expectation{}
+	for project, base := range map[string]int32{"p": 31000, "q": 31100, "r": 31200} {
+		replicas := int32(2)
+		objects = append(objects,
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: project, Labels: map[string]string{"wecolab.io/tenant": project}}},
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "work", Namespace: project},
+				Spec: appsv1.DeploymentSpec{Replicas: &replicas}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}})
+		for i := range 12 {
+			name := fmt.Sprintf("app-%02d", i)
+			app := named(name)
+			app.Namespace = project
+			app.Spec.Primary, app.Spec.Database, app.Spec.Workload = "home", name+"-db", name
+			keyID := project + "-" + name
+			port := base + int32(i)
+			objects = append(objects, app,
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
+					Data: map[string][]byte{"b2-key-id": []byte(keyID)}},
+				&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
+					Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeNodePort, Selector: map[string]string{"app": name},
+						Ports: []corev1.ServicePort{{Port: 80, NodePort: port}}}},
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project, Labels: map[string]string{"app": name}},
+					Spec:   corev1.PodSpec{NodeName: "box"},
+					Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}})
+			want[project+"/"+name] = expectation{keyID, fmt.Sprintf("10.77.0.9:%d", port)}
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objects...).Build()
+	// API latency and throttling must not make a healthy multi-app site
+	// disappear. Inventory reads need both batching and bounded concurrency.
+	limit := flowcontrol.NewTokenBucketRateLimiter(1, 12)
+	defer limit.Stop()
+	agent := &SiteAgent{Client: rateLimitedStatusReader{Reader: c, limit: limit, latency: 300 * time.Millisecond}, Site: "vince"}
+	server := httptest.NewServer(agent)
+	defer server.Close()
+	peers := &Peers{Client: c, HTTP: &http.Client{Timeout: 3 * time.Second, Transport: toServer{server.URL}}}
+	report, ok := peers.Get(context.Background(), "vince")
+	if !ok {
+		t.Fatal("healthy multi-app site missed the peer observation deadline")
+	}
+	for key, expected := range want {
+		app := report.Apps[key]
+		if app.VaultKeyID != expected.keyID || len(app.Endpoints) != 1 || app.Endpoints[0] != expected.endpoint {
+			t.Errorf("%s: wrong project-scoped key or route: %+v", key, app)
+		}
+	}
+	for _, project := range []string{"p", "q", "r"} {
+		if got := report.Workloads[project+"/work"]; got.Ready != 1 || got.Replicas != 2 {
+			t.Errorf("%s workload observation: %+v", project, got)
+		}
+	}
+	if _, exposed := report.Workloads["system/hidden"]; exposed {
+		t.Fatal("status exposed a workload outside tenant namespaces")
+	}
+}
+
+func TestShortPeerRequestsDoNotStarveStatusCollection(t *testing.T) {
+	site := testSite("vince", false, "10.77.0.1")
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "box"}, Status: corev1.NodeStatus{
+		Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+	}}
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(&site, node).Build()
+	limit := flowcontrol.NewTokenBucketRateLimiter(10, 1)
+	defer limit.Stop()
+	agent := &SiteAgent{Client: rateLimitedStatusReader{Reader: c, limit: limit}, Site: "vince"}
+	server := httptest.NewServer(agent)
+	defer server.Close()
+	peers := &Peers{Client: c, HTTP: &http.Client{Timeout: 250 * time.Millisecond, Transport: toServer{server.URL}}}
+	if _, err := peers.fetch(context.Background(), "vince"); err == nil {
+		t.Fatal("a cold inventory cannot fit in this peer's request budget")
+	}
+	// Each peer request is shorter than a complete inventory. A disconnected
+	// caller must not discard shared progress and make every later peer miss.
+	for range 6 {
+		report, err := peers.fetch(context.Background(), "vince")
+		if err != nil {
+			continue
+		}
+		if len(report.Nodes) != 1 || report.Nodes[0].Name != "box" || !report.Nodes[0].Ready {
+			t.Fatalf("peer received an incomplete healthy-site observation: %+v", report)
+		}
+		return
+	}
+	t.Fatal("short peer requests continually canceled the healthy site's inventory")
+}
+
+func TestStatusRefreshFailureDoesNotServeExpiredSuccess(t *testing.T) {
+	ctx := context.Background()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "box"}, Status: corev1.NodeStatus{
+		Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+	}}
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(node).WithStatusSubresource(node).Build()
+	agent := &SiteAgent{Client: c, Site: "vince"}
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRecorder()
+		agent.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/status", nil))
+		return r
+	}
+	if got := request(); got.Code != http.StatusOK {
+		t.Fatalf("initial inventory: %d %s", got.Code, got.Body)
+	}
+	agent.mu.Lock()
+	agent.at = time.Now().Add(-6 * time.Second)
+	agent.mu.Unlock()
+	agent.Client = unavailableStatusReader{c}
+	if got := request(); got.Code != http.StatusInternalServerError {
+		t.Fatalf("failed refresh served an expired success: %d %s", got.Code, got.Body)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: "box"}, node); err != nil {
+		t.Fatal(err)
+	}
+	node.Status.Conditions[0].Status = corev1.ConditionFalse
+	if err := c.Status().Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	agent.Client = c
+	got := request()
+	var report SiteStatus
+	if got.Code != http.StatusOK || json.Unmarshal(got.Body.Bytes(), &report) != nil {
+		t.Fatalf("inventory after API recovery: %d %s", got.Code, got.Body)
+	}
+	if len(report.Nodes) != 1 || report.Nodes[0].Ready {
+		t.Fatalf("API recovery resurrected the old ready-node observation: %+v", report.Nodes)
+	}
+}
+
 func TestPeerReceiptPreservedAcrossCachedPolls(t *testing.T) {
 	body := &SiteStatus{Site: "home", ReceivedAt: time.Now().Add(-time.Hour)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +323,7 @@ func TestVaultLookPerArchive(t *testing.T) {
 	app := sampleApp()
 	look := func() *VaultStatus {
 		for i := 0; i < 200; i++ {
-			if v := a.vault(app); v != nil {
+			if v := a.vault(app, nil); v != nil {
 				return v
 			}
 			time.Sleep(5 * time.Millisecond)
@@ -137,34 +335,63 @@ func TestVaultLookPerArchive(t *testing.T) {
 		t.Fatalf("no ObjectStore, no vault: %+v", v)
 	}
 	app.Spec.Archive = map[string]int{"vince": 2}
-	if v := a.vault(app); v != nil {
+	if v := a.vault(app, nil); v != nil {
 		t.Fatalf("the new archive's first look is its own, not the old folder's: %+v", v)
 	}
 	app.Spec.Archive = nil
 	app.Spec.ArchiveID = "new-identity"
-	if v := a.vault(app); v != nil {
+	if v := a.vault(app, nil); v != nil {
 		t.Fatalf("a recreated database with the same archive label cannot reuse old vault evidence: %+v", v)
 	}
 }
 
-// Report age increases from the producer's receipt; pod role changes invalidate it.
-func TestRecoveryPodSelectionAndReceiptAge(t *testing.T) {
+// Publication ages samples through slow collection; pod role changes invalidate them.
+func TestRecoveryPodSelectionAndPublicationAge(t *testing.T) {
 	app := sampleApp()
 	app.Spec.ArchiveID = "archive"
 	a := &SiteAgent{Site: "vince"}
 	now := time.Now()
+	observedAt := now.Add(-(recoveryMaxReplayAge - recoveryDeliveryAllowance - time.Second))
 	key := app.Namespace + "/" + app.Spec.Database + "/archive/" + ArchiveName(app, "vince")
 	a.recoveries = map[string]*recoveryAnswer{key: {pod: "docs-db-1", role: "primary", expectedRole: "primary", at: now, report: RecoveryReport{Samples: []RecoverySample{
-		{ArchiveID: "archive", SystemID: "system", Timeline: 1, Pod: "docs-db-1", Role: "primary", LSNLow: 1, ObservedAt: now.Add(-time.Second)},
+		{ArchiveID: "archive", SystemID: "system", Timeline: 1, Pod: "docs-db-1", Role: "primary", LSNLow: 1, ObservedAt: observedAt},
 	}}}}
 	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "docs-db-1", Namespace: app.Namespace, Labels: map[string]string{
 		"cnpg.io/cluster": app.Spec.Database, "app.kubernetes.io/managed-by": "cloudnative-pg",
 		"app.kubernetes.io/component": "database", "cnpg.io/instanceName": "docs-db-1", "cnpg.io/instanceRole": "primary",
 	}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: app.Spec.Database, UID: "owner"}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "invalid-ip"}}
 	db := map[string]any{"currentPrimary": "docs-db-1"}
-	got := a.recovery(app, db, []corev1.Pod{pod}, "owner")
-	if got.Error != "" || len(got.Samples) != 1 || got.Samples[0].AgeNanos < int64(time.Second) {
-		t.Fatalf("sample receipt age must increase without resampling: %+v", got)
+	cluster := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster", "status": db,
+		"metadata": map[string]any{"namespace": app.Namespace, "name": app.Spec.Database, "uid": "owner"},
+	}}
+	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(app, &pod, cluster).Build()
+	a.Client = delayedSettingsReader{Reader: c, delay: 2 * time.Second}
+	status, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := status.Apps[app.Namespace+"/"+app.Name].Recovery
+	if got == nil || got.Error != "" || len(got.Samples) != 1 || !got.Samples[0].ObservedAt.Equal(observedAt) {
+		t.Fatalf("publication must preserve the original successful observation: %+v", got)
+	}
+	replica := got.Samples[0]
+	replica.Role, replica.Pod, replica.ObservedAt, replica.AgeNanos = "replica", "replica-1", time.Now(), 0
+	point := MeasureRecovery(*got, RecoveryReport{Samples: []RecoverySample{replica}}, "archive", 5*time.Minute, 0, 0)
+	if point.State != "unknown" {
+		t.Fatalf("slow collection made expired evidence pass recovery gates: %+v; sample=%+v", point, got.Samples[0])
+	}
+	if db := status.DB[app.Namespace+"/"+app.Spec.Database]; db["systemIdentifier"] != nil || db["timelineID"] != nil || db["recovering"] != nil {
+		t.Fatalf("expired recovery evidence supplied current database identity: %+v", db)
+	}
+	a.recoveries[key].report.Samples[0].ObservedAt = time.Now()
+	a.Client = c
+	status, err = a.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if db := status.DB[app.Namespace+"/"+app.Spec.Database]; db["systemIdentifier"] != "system" || db["timelineID"] != uint32(1) || db["recovering"] != false {
+		t.Fatalf("fresh verified recovery evidence did not supply database identity: %+v", db)
 	}
 	pod.Labels["cnpg.io/instanceRole"] = "replica"
 	got = a.recovery(app, db, []corev1.Pod{pod}, "owner")

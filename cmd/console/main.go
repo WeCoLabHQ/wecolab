@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -58,6 +59,9 @@ type server struct {
 	auth         *auth // nil: no sign-in (the development fabric)
 	catalog      map[string]catalogEntry
 	git          *fabric.Git // this site's copy of the Fabric; it takes commits only at the writer
+	scopeMu      sync.Mutex
+	scopeHead    string
+	scopes       map[string]fileScopeResult
 	peers        *warden.Peers
 	coordination coordinationclient.CoordinationV1Interface
 }
@@ -265,6 +269,16 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	scopes := make([]fileScopeResult, len(al.Items))
+	if len(al.Items) != 0 {
+		// A failed head never inherits an earlier commit's file-free assessment.
+		if head, err := s.git.Head(ctx); err == nil && head != "" {
+			snapshot := s.scopeSnapshot(ctx, head)
+			for i := range al.Items {
+				scopes[i] = snapshot[fabric.AppFolder(al.Items[i].Namespace, al.Items[i].Name)]
+			}
+		}
+	}
 	set, _ := warden.ReadSettings(s.elevated(ctx), s.c) // everyone sees who the writer is; not everyone may read the ConfigMap
 	answers, _ := s.siteStatuses(ctx)
 	sites := []site{}
@@ -292,9 +306,12 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 		}
 		sites = append(sites, st)
 	}
+	// Assess all observations at the same instant, after potentially slow Git
+	// reads: neither app order nor inventory duration extends their freshness.
+	observedAt := time.Now()
 	apps := []app{}
-	for _, x := range al.Items {
-		active, conds := warden.AppView(&x, answers, time.Now(), 24*time.Hour)
+	for i, x := range al.Items {
+		active, conds := warden.AppView(&x, answers, observedAt, 24*time.Hour)
 		rd := warden.Ready(conds)
 		var h *v1alpha1.Handover // the demotion token is the promotion's credential: never on the page
 		if x.Spec.Handover != nil {
@@ -302,11 +319,11 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 			c.Token = ""
 			h = &c
 		}
-		filesKnown, hasFiles := s.fileScope(ctx, &x)
+		filesKnown, hasFiles := scopes[i].known, scopes[i].persistent
 		apps = append(apps, app{Namespace: x.Namespace, Name: x.Name, Primary: x.Spec.Primary, Active: active, Hostname: x.Spec.Hostname, Workload: x.Spec.Workload, Database: x.Spec.Database,
 			Ready: string(rd.Status), Reason: rd.Reason, Sites: x.Spec.Sites, RPO: x.Spec.RPO.Duration.String(), Conditions: append(conds, rd), Handover: h, Deleted: x.Spec.Deleted,
 			Archive: x.Spec.Archive, ArchiveID: x.Spec.ArchiveID, Mesh: x.Spec.Mesh, MeshName: warden.MeshName(&x, s.domain),
-			Protection: warden.ProtectionOf(&x, answers, time.Now(), 24*time.Hour, filesKnown, hasFiles)})
+			Protection: warden.ProtectionOf(&x, answers, observedAt, 24*time.Hour, filesKnown, hasFiles)})
 	}
 	if id := s.who(r); id != nil && !id.Admin {
 		mine := func(p string) bool { return slices.Contains(id.Projects, p) }

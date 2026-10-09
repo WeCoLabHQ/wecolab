@@ -398,6 +398,28 @@ Promotion readiness observes writable state and an advanced PostgreSQL timeline
 together, inside the existing bounded wait. The old site cannot rejoin based only
 on a writable probe taken before a CNPG promotion restart.
 
+The [next hosted run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37894648381)
+again passed the first three scenarios, but stopped at the measured healthy-recovery
+baseline before replay was paused. It did not exercise promotion. Replay-lag artifacts
+now retain each rejected observation's state, reason, covered-position timestamp and
+exposure bound; the acceptance gates and waits are unchanged.
+
+Site observation batches tenant workload and app resource reads, with at most four
+independent API reads in flight so network latency does not accumulate serially.
+Short peer requests share one bounded refresh instead of repeatedly canceling it; only successful
+complete reports enter the five-second cache. Recovery samples age through publication,
+including slow inventory reads, before they can supply recovery bounds or database
+identity. Console file-scope inspection reads one bounded immutable Git archive,
+including Git's global PAX metadata, and caches classifications only for that exact
+verified commit. Missing, malformed or incomplete evidence cannot inherit an earlier
+file-free classification. These paths have targeted live smoke coverage and regression
+checks; they do not replace the required full hosted run.
+
+Writer lease release re-reads ownership after a resource-version conflict: canceling
+an in-flight renewal does not undo an API-server write. Conflict retries remain bounded,
+and a successor's lease is never released. Lease and custody regressions use an API
+fixture that enforces Kubernetes resource-version compare-and-swap.
+
 Fresh manager installs wait for their named Kubernetes Node to exist before waiting
 for its Ready condition. A reachable API returning an empty Node list is not node
 registration; both registration and Ready waits remain bounded.

@@ -21,11 +21,12 @@ import (
 // leaseServer enforces the resourceVersion compare-and-swap that a real API
 // server uses. The generated client exercises the actual LeaseLock HTTP path.
 type leaseServer struct {
-	mu           sync.Mutex
-	lease        *coordinationv1.Lease
-	deny         bool
-	failRenewals bool
-	serial       int
+	mu            sync.Mutex
+	lease         *coordinationv1.Lease
+	deny          bool
+	failRenewals  bool
+	serial        int
+	beforeRelease func(*coordinationv1.Lease)
 }
 
 func leaseFailure(w http.ResponseWriter, code int, reason metav1.StatusReason) {
@@ -64,6 +65,13 @@ func (s *leaseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if next.Name != "wecolab-writer-transition" || next.Namespace != "wecolab-system" {
 			http.Error(w, "wrong lock", http.StatusBadRequest)
 			return
+		}
+		if r.Method == http.MethodPut && s.lease != nil && next.Spec.HolderIdentity != nil && *next.Spec.HolderIdentity == "" && s.beforeRelease != nil {
+			change := s.beforeRelease
+			s.beforeRelease = nil
+			change(s.lease)
+			s.serial++
+			s.lease.ResourceVersion = strconv.Itoa(s.serial)
 		}
 		if r.Method == http.MethodPost && s.lease != nil || r.Method == http.MethodPut && (s.lease == nil || next.ResourceVersion != s.lease.ResourceVersion) {
 			leaseFailure(w, http.StatusConflict, metav1.StatusReasonConflict)
@@ -199,6 +207,33 @@ func TestWriterLockCancellationWaitsForMutationCleanup(t *testing.T) {
 	awaitLeaseEvent(t, secondEntered)
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second mutation: %v", err)
+	}
+}
+
+func TestWriterLockReleaseRechecksOwnershipAfterConflict(t *testing.T) {
+	for _, tc := range []struct{ name, holder string }{
+		{"late-renewal", ""},
+		{"successor", "successor"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, client := newLeaseTestClient(t)
+			fixture.beforeRelease = func(lease *coordinationv1.Lease) {
+				// A canceled HTTP request may still commit at the API server
+				// after release reads its resourceVersion.
+				lease.Spec.RenewTime = &metav1.MicroTime{Time: time.Now()}
+				if tc.holder != "" {
+					lease.Spec.HolderIdentity = &tc.holder
+				}
+			}
+			if err := withWriterLock(context.Background(), client, func(context.Context) error { return nil }); err != nil {
+				t.Fatalf("completed mutation failed to release safely: %v", err)
+			}
+			fixture.mu.Lock()
+			defer fixture.mu.Unlock()
+			if got := *fixture.lease.Spec.HolderIdentity; got != tc.holder {
+				t.Fatalf("released the wrong owner: got %q, want %q", got, tc.holder)
+			}
+		})
 	}
 }
 

@@ -501,19 +501,29 @@ class Runner:
         self.sentinel()
         self.backup()
         self.wait('replica present on home',lambda: self.sql('home',self.app,'SELECT pg_is_in_recovery()') == b't',1200)
-        def measured(since):
+        def observe(phase, since=None):
             point = self.current()['Protection']['RecoveryPoint']
+            evidence = {'Phase':phase, 'RecoveryPoint':{
+                key:point[key] for key in ('State','Reason','ObservedAt','ExposureUpperBoundSeconds') if key in point}}
+            if since is not None:
+                evidence['RequiredObservedAt'] = since.isoformat()
+            self.operations.append('recovery-point-observation '+json.dumps(evidence,sort_keys=True))
+            return point
+        def measured(phase, since):
+            point = observe(phase, since)
             return point if point['State'] == 'within-objective' and point.get('ObservedAt') and (
                 dt.datetime.fromisoformat(point['ObservedAt'].replace('Z','+00:00')) >= since) else None
+        baseline_phase = 'measured healthy recovery before replay pause'
         baseline_at = dt.datetime.now(dt.timezone.utc)
-        baseline = self.wait('measured healthy recovery before replay pause',lambda: measured(baseline_at),180)
+        baseline = self.wait(baseline_phase,lambda: measured(baseline_phase,baseline_at),180)
         replica = self.dbpod('home')
         self.sql('home',self.app,'SELECT pg_wal_replay_pause()',pod=replica)
         try:
             for n in range(257,513):
                 self.sql('pub',self.app,f"INSERT INTO public.wecolab_recovery VALUES ({n},'lag-{n}')")
-            lag = self.wait('fresh measured replay outside the five-minute objective',
-                            lambda: p if (p:=self.current()['Protection']['RecoveryPoint'])['State'] == 'outside-objective' else None,450)
+            paused_phase = 'fresh measured replay outside the five-minute objective'
+            lag = self.wait(paused_phase,
+                            lambda: p if (p:=observe(paused_phase))['State'] == 'outside-objective' else None,450)
         finally:
             self.sql('home',self.app,'SELECT pg_wal_replay_resume()',pod=replica)
         resumed_at = dt.datetime.now(dt.timezone.utc)
@@ -522,7 +532,8 @@ class Runner:
         # Later primary WAL must not move the catch-up target on every probe.
         self.wait('post-resume primary write position replayed',
                   lambda: self.sql('home',self.app,f"SELECT pg_last_wal_replay_lsn() >= '{replay_target}'::pg_lsn") == b't',120)
-        recovered = self.wait('measured healthy recovery after replay resumes',lambda: measured(resumed_at),180)
+        resumed_phase = 'measured healthy recovery after replay resumes'
+        recovered = self.wait(resumed_phase,lambda: measured(resumed_phase,resumed_at),180)
         self.operations.append('verified recovery-confidence-transitions '+json.dumps(
             {'BeforePause':baseline,'Paused':lag,'AfterResume':recovered},sort_keys=True))
         vault = self.prefix+'-vault'

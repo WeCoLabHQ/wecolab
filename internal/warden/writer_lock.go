@@ -12,6 +12,7 @@ import (
 	coordinationclient "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
+	"k8s.io/client-go/util/retry"
 )
 
 type writerHolderKey struct{}
@@ -84,18 +85,22 @@ func withWriterLock(ctx context.Context, coordination coordinationclient.Coordin
 		}
 		releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancelRelease()
-		record, _, err := lock.Get(releaseCtx)
+		// Canceling a renewal request cannot undo a write already in flight
+		// at the API server. Re-read on conflict, preserving any successor.
+		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			record, _, err := lock.Get(releaseCtx)
+			if err != nil {
+				return err
+			}
+			if record.HolderIdentity != lock.Identity() {
+				return nil
+			}
+			record.HolderIdentity = ""
+			record.LeaseDurationSeconds = 1
+			record.RenewTime = metav1.Now()
+			return lock.Update(releaseCtx, *record)
+		})
 		if err != nil {
-			result = errors.Join(result, fmt.Errorf("read writer transition lease for release: %w", err))
-			return
-		}
-		if record.HolderIdentity != lock.Identity() {
-			return // Never release a successor's lease after losing ours.
-		}
-		record.HolderIdentity = ""
-		record.LeaseDurationSeconds = 1
-		record.RenewTime = metav1.Now()
-		if err := lock.Update(releaseCtx, *record); err != nil {
 			result = errors.Join(result, fmt.Errorf("release writer transition lease: %w", err))
 		}
 	}()

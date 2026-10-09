@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"wecolab.io/wecolab/api/v1alpha1"
@@ -36,6 +37,18 @@ func newCustodyPair(t *testing.T) *custodyPair {
 	readyCustodyRollout(t, winnerRollout)
 	p.sourceWriter = custodyWriter(t, "home", p.source, p.routes, sourceRollout, "home", "pub", "edge")
 	p.winnerWriter = custodyWriter(t, "pub", p.winner, p.routes, winnerRollout, "home", "pub", "edge")
+	// The fake client does not enforce resourceVersion conflicts. A renewal
+	// based on an older Lease can otherwise erase a persisted recreation
+	// journal, unlike the API server used by real custody transitions.
+	for _, writer := range []*Writer{p.sourceWriter, p.winnerWriter} {
+		_, writer.Coordination = newLeaseTestClient(t)
+		_, err := writer.Coordination.Leases(SystemNS).Create(context.Background(), &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{Name: "wecolab-writer-transition", Namespace: SystemNS},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	p.warden = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		req.RemoteAddr = "10.77.0.1:49152" // real peer identity, never a forwarded header
 		if p.intercept != nil {
@@ -204,6 +217,10 @@ func TestCustodyIncompleteReceiptRetainsSourceAndRetryIsIdempotent(t *testing.T)
 	}
 	if p.source.deleted != 1 || p.winner.ref(name) != previous || p.winner.ref("refs/heads/superseded-home-"+p.sourceHead) != p.sourceHead {
 		t.Fatal("retry failed to verify the already-installed exact refs and recreate source")
+	}
+	journal, err := readRecreation(custodyContext(t), p.sourceWriter.Coordination)
+	if err != nil || journal != nil {
+		t.Fatalf("completed retry did not clear the recreation journal: %v %v", journal, err)
 	}
 }
 

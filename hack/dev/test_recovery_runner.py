@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """No Docker calls: safety and artifact contract checks for disposable recovery runner."""
 import contextlib
+import datetime as dt
 import json
 import os
 import pathlib
@@ -97,6 +98,58 @@ class RecoverySafetyTests(unittest.TestCase):
             result_path = r.directory/'result.json'
             self.assertTrue(result_path.is_file(), 'unexpected failure lost its evidence')
             self.assertEqual(json.loads(result_path.read_text())['Outcome'], 'failed')
+
+    def test_replay_lag_failed_evidence_retains_rejected_recovery_points(self):
+        unknown = {'State':'unknown','Reason':'No comparable primary and replay samples',
+                   'Key':'must not leak'}
+        stale = {'State':'within-objective','Reason':'Target replay covers a same-history primary write position',
+                 'ObservedAt':'2000-01-01T00:00:00Z','ExposureUpperBoundSeconds':12.5}
+        outside = {'State':'outside-objective','Reason':'Fresh replay is behind a primary write position older than the objective'}
+        fresh = dict(stale, ObservedAt='2999-01-01T00:00:00Z')
+        phases = (
+            ('measured healthy recovery before replay pause', [unknown, stale, unknown]),
+            ('fresh measured replay outside the five-minute objective', [unknown, stale, unknown]),
+            ('measured healthy recovery after replay resumes', [unknown, stale, unknown]),
+        )
+        for target, observations in phases:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as root:
+                r = Runner('replay-lag')
+                r.directory = pathlib.Path(root)/'run'
+                r.preflight = r.deploy = r.backup = lambda: None
+                r.sentinel = lambda: b''
+                r.dbpod = lambda site: 'replica'
+                r.sql = lambda site, app, query, **kwargs: b't' if 'pg_is_in_recovery' in query else b'512'
+                points = iter(observations)
+                r.current = lambda: {'Protection':{'RecoveryPoint':next(points)}}
+                original_wait = r.wait
+                def wait(description, fn, seconds=900):
+                    if description == target:
+                        return original_wait(description, fn, seconds)
+                    if description == 'measured healthy recovery before replay pause':
+                        return fresh
+                    if description == 'fresh measured replay outside the five-minute objective':
+                        return outside
+                    return True
+                r.wait = wait
+                with patch('recovery_runner.time.monotonic', side_effect=[0, 0, 0, 0, 1000]), \
+                     patch('recovery_runner.time.sleep'):
+                    with self.assertRaisesRegex(Refusal, 'timed out waiting for '+target):
+                        r.execute()
+                result = json.loads((r.directory/'result.json').read_text())
+                self.assertEqual(result['Outcome'], 'failed')
+                evidence = [json.loads(op.split(' ', 1)[1]) for op in result['Operations']
+                            if op.startswith('recovery-point-observation ')]
+                self.assertEqual([e['RecoveryPoint'] for e in evidence],
+                                 [{k:v for k,v in point.items() if k != 'Key'} for point in observations])
+                self.assertEqual([e['Phase'] for e in evidence], [target]*3)
+                self.assertNotIn('must not leak', (r.directory/'result.json').read_text())
+                for entry in evidence:
+                    if target == 'fresh measured replay outside the five-minute objective':
+                        self.assertNotIn('RequiredObservedAt', entry)
+                    else:
+                        self.assertIn('RequiredObservedAt', entry)
+                        threshold = dt.datetime.fromisoformat(entry['RequiredObservedAt'])
+                        self.assertLess(dt.datetime.now(dt.timezone.utc)-threshold, dt.timedelta(minutes=1))
 
     def test_preflight_rejects_a_writer_other_than_the_required_pub(self):
         owner = 'disposableowner123'

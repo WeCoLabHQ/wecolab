@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -42,15 +44,39 @@ import (
 // fakeGit is a Forgejo holding the Fabric in memory. Like the real one, it refuses a commit whose sha
 // is not the file's current one (409) and a create where the file exists (422).
 type fakeGit struct {
-	mu        sync.Mutex
-	files     map[string]string
-	commits   int
-	failing   bool // every commit fails
-	pausePost func([]byte)
-	pushers   []string // branch protection's push whitelist; nil: none
+	mu                sync.Mutex
+	files             map[string]string
+	commits           int
+	failing           bool   // every commit fails
+	unreadable        string // contents path that fails to read
+	headUnreadable    bool   // main cannot be inspected
+	archiveUnreadable bool
+	archiveBroken     bool
+	symlinkPath       string
+	revisions         map[string]map[string]string
+	revisionLinks     map[string]string
+	onArchive         func()
+	pausePost         func([]byte)
+	pushers           []string // branch protection's push whitelist; nil: none
 }
 
 func sha(c string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(c))) }
+func (f *fakeGit) currentHead() string {
+	paths := make([]string, 0, len(f.files))
+	for path := range f.files {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	h := sha("")
+	for _, path := range paths {
+		mode := "file"
+		if path == f.symlinkPath {
+			mode = "symlink"
+		}
+		h = sha(h + path + "\x00" + mode + "\x00" + f.files[path])
+	}
+	return h
+}
 
 func (f *fakeGit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && f.pausePost != nil {
@@ -63,13 +89,26 @@ func (f *fakeGit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/api/v1/repos/fabric/fabric")
 	switch {
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/contents/"):
+		if p == f.unreadable {
+			http.Error(w, "unreadable", http.StatusServiceUnavailable)
+			return
+		}
 		p = strings.TrimPrefix(p, "/contents/")
-		if c, ok := f.files[p]; ok {
+		files := f.files
+		if ref := r.URL.Query().Get("ref"); ref != "" && ref != "main" {
+			var ok bool
+			files, ok = f.revisions[ref]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		if c, ok := files[p]; ok {
 			_ = json.NewEncoder(w).Encode(map[string]string{"type": "file", "path": p, "sha": sha(c), "content": base64.StdEncoding.EncodeToString([]byte(c))})
 			return
 		}
 		list := []map[string]string{}
-		for k := range f.files {
+		for k := range files {
 			if pathpkg.Dir(k) == p {
 				list = append(list, map[string]string{"type": "file", "path": k})
 			}
@@ -79,6 +118,67 @@ func (f *fakeGit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(list)
+	case r.Method == http.MethodGet && p == "/branches/main":
+		if f.headUnreadable {
+			http.Error(w, "unreadable", http.StatusServiceUnavailable)
+			return
+		}
+		h := f.currentHead()
+		if f.revisions == nil {
+			f.revisions = make(map[string]map[string]string)
+			f.revisionLinks = make(map[string]string)
+		}
+		if _, ok := f.revisions[h]; !ok {
+			copy := make(map[string]string, len(f.files))
+			for p, c := range f.files {
+				copy[p] = c
+			}
+			f.revisions[h] = copy
+			f.revisionLinks[h] = f.symlinkPath
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]string{"id": h}})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/archive/"):
+		if f.archiveUnreadable {
+			http.Error(w, "unreadable", http.StatusServiceUnavailable)
+			return
+		}
+		ref := strings.TrimSuffix(strings.TrimPrefix(p, "/archive/"), ".tar.gz")
+		files, ok := f.revisions[ref]
+		if !ok || !strings.HasSuffix(p, ".tar.gz") {
+			http.NotFound(w, r)
+			return
+		}
+		if f.onArchive != nil {
+			f.onArchive()
+			f.onArchive = nil
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		zip := gzip.NewWriter(w)
+		tw := tar.NewWriter(zip)
+		// Git archive emits commit metadata before the prefixed file entries.
+		_ = tw.WriteHeader(&tar.Header{Name: "pax_global_header", Typeflag: tar.TypeXGlobalHeader,
+			PAXRecords: map[string]string{"comment": ref}, Format: tar.FormatPAX})
+		paths := make([]string, 0, len(files))
+		for path := range files {
+			paths = append(paths, path)
+		}
+		slices.Sort(paths)
+		for _, path := range paths {
+			content := files[path]
+			hdr := &tar.Header{Name: "fabric/" + path, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}
+			if path == f.revisionLinks[ref] {
+				hdr.Size, hdr.Typeflag, hdr.Linkname = 0, tar.TypeSymlink, content
+			}
+			_ = tw.WriteHeader(hdr)
+			if hdr.Typeflag == tar.TypeReg {
+				_, _ = io.WriteString(tw, content)
+			}
+		}
+		_ = tw.Close()
+		if f.archiveBroken {
+			return // omit gzip trailer: a truncated archive must never certify file-free
+		}
+		_ = zip.Close()
 	case r.Method == http.MethodPost && p == "/contents":
 		var body struct {
 			Files []struct{ Operation, Path, SHA, Content string }

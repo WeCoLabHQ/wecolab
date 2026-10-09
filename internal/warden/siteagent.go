@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,16 +36,23 @@ type SiteAgent struct {
 	SchemaVersion string      // Warden binary schema version, distinct from the node's kubelet version.
 	Git           *fabric.Git // this site's copy of the Fabric; nil without one
 
-	mu     sync.Mutex
-	cached []byte
-	at     time.Time
-	claim  atomic.Pointer[Claim] // the copy's last answer to GitClaim
+	mu      sync.Mutex
+	cached  []byte
+	at      time.Time
+	refresh *statusRefresh
+	claim   atomic.Pointer[Claim] // the copy's last answer to GitClaim
 
 	vaultMu sync.Mutex
 	vaults  map[string]*vaultAnswer // "<ns>/<archive>": a new archive generation is a new folder
 
 	recoveryMu sync.Mutex
 	recoveries map[string]*recoveryAnswer
+}
+
+type statusRefresh struct {
+	done chan struct{}
+	body []byte
+	err  error
 }
 
 type vaultAnswer struct {
@@ -67,16 +75,12 @@ const vaultEvery = 5 * time.Minute
 
 // vault is the last look at this site's archive of the app's database, refreshed in the background so
 // /status never waits on the object store. Nil until the first look finishes.
-func (a *SiteAgent) vault(app *v1alpha1.App) *VaultStatus {
+func (a *SiteAgent) vault(app *v1alpha1.App, sec *corev1.Secret) *VaultStatus {
 	ns, db, server := app.Namespace, app.Spec.Database, ArchiveName(app, a.Site)
 	key := ns + "/" + server + "/" + app.Spec.ArchiveID + "/" + a.Site
 	// An archive survives key rotation; a cached inspection made with an old
 	// credential must not be reused after the local Secret changes.
-	sec := &corev1.Secret{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	err := a.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: app.Name}, sec)
-	cancel()
-	if err == nil {
+	if sec != nil {
 		digest := sha256.New()
 		digest.Write(sec.Data["b2-key-id"])
 		digest.Write([]byte{0})
@@ -199,14 +203,6 @@ func (a *SiteAgent) recovery(app *v1alpha1.App, db map[string]any, pods []corev1
 	}
 	out := r.report
 	out.Samples = append([]RecoverySample(nil), r.report.Samples...)
-	for i := range out.Samples {
-		age := now.Sub(out.Samples[i].ObservedAt)
-		if age < 0 {
-			out.Error = "Monotonic sample age invalid"
-			break
-		}
-		out.Samples[i].AgeNanos = int64(age)
-	}
 	return &out
 }
 
@@ -256,7 +252,37 @@ type VolumeStatus struct {
 func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 	st := &SiteStatus{Site: a.Site, Time: time.Now().UTC(), SchemaVersion: a.SchemaVersion, DB: map[string]map[string]any{}, Workloads: map[string]WorkloadStatus{}, Volumes: map[string]VolumeStatus{}, Apps: map[string]AppState{}}
 	nodes := &corev1.NodeList{}
-	if err := a.Client.List(ctx, nodes); err != nil {
+	pods := &corev1.PodList{}
+	dbs := &unstructured.UnstructuredList{}
+	dbs.SetGroupVersionKind(gvkCNPGCluster)
+	tenants := &corev1.NamespaceList{}
+	deps := &appsv1.DeploymentList{}
+	pvcs := &corev1.PersistentVolumeClaimList{}
+	apps := &v1alpha1.AppList{}
+	// Independent API latency must not accumulate across the whole inventory.
+	// Bound pressure on the API server and publish only after reads finish.
+	reads, readCtx := errgroup.WithContext(ctx)
+	reads.SetLimit(4)
+	reads.Go(func() error { return a.Client.List(readCtx, nodes) })
+	reads.Go(func() error { return a.Client.List(readCtx, pods) })
+	reads.Go(func() error {
+		if err := a.Client.List(readCtx, dbs); err != nil { // absent operator: no databases
+			dbs.Items = nil
+		}
+		return nil
+	})
+	reads.Go(func() error {
+		if err := a.Client.List(readCtx, tenants, client.HasLabels{"wecolab.io/tenant"}); err != nil {
+			return err
+		}
+		if len(tenants.Items) != 0 {
+			return a.Client.List(readCtx, deps)
+		}
+		return nil
+	})
+	reads.Go(func() error { return a.Client.List(readCtx, pvcs, client.HasLabels{"wecolab.io/app"}) })
+	reads.Go(func() error { return a.Client.List(readCtx, apps) })
+	if err := reads.Wait(); err != nil {
 		return nil, err
 	}
 	alloc := corev1.ResourceList{}
@@ -290,10 +316,6 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 		st.Nodes = append(st.Nodes, ns)
 	}
 	st.Allocatable = quantities(alloc)
-	pods := &corev1.PodList{}
-	if err := a.Client.List(ctx, pods); err != nil {
-		return nil, err
-	}
 	req := corev1.ResourceList{}
 	for _, p := range pods.Items {
 		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed || p.Spec.NodeName == "" {
@@ -311,28 +333,23 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 	}
 	st.Requested = quantities(req)
 
-	dbs := &unstructured.UnstructuredList{}
-	dbs.SetGroupVersionKind(gvkCNPGCluster)
 	built, owners := map[string]string{}, map[string]types.UID{} // "<ns>/<cluster>"
-	if err := a.Client.List(ctx, dbs); err == nil {              // absent operator: no databases
-		for i, d := range dbs.Items {
-			if s, ok := d.Object["status"].(map[string]any); ok {
-				st.DB[d.GetNamespace()+"/"+d.GetName()] = s
-			}
-			built[d.GetNamespace()+"/"+d.GetName()] = serverName(&dbs.Items[i])
-			owners[d.GetNamespace()+"/"+d.GetName()] = d.GetUID()
+	for i, d := range dbs.Items {
+		if s, ok := d.Object["status"].(map[string]any); ok {
+			st.DB[d.GetNamespace()+"/"+d.GetName()] = s
 		}
+		built[d.GetNamespace()+"/"+d.GetName()] = serverName(&dbs.Items[i])
+		owners[d.GetNamespace()+"/"+d.GetName()] = d.GetUID()
 	}
-	tenants := &corev1.NamespaceList{}
-	if err := a.Client.List(ctx, tenants, client.HasLabels{"wecolab.io/tenant"}); err != nil {
-		return nil, err
-	}
-	for _, ns := range tenants.Items {
-		deps := &appsv1.DeploymentList{}
-		if err := a.Client.List(ctx, deps, client.InNamespace(ns.Name)); err != nil {
-			return nil, err
+	if len(tenants.Items) != 0 {
+		tenantNames := make(map[string]struct{}, len(tenants.Items))
+		for _, ns := range tenants.Items {
+			tenantNames[ns.Name] = struct{}{}
 		}
 		for _, d := range deps.Items {
+			if _, tenant := tenantNames[d.Namespace]; !tenant {
+				continue
+			}
 			w := WorkloadStatus{Ready: d.Status.ReadyReplicas}
 			if d.Spec.Replicas != nil {
 				w.Replicas = *d.Spec.Replicas
@@ -340,17 +357,68 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 			st.Workloads[d.Namespace+"/"+d.Name] = w
 		}
 	}
-	pvcs := &corev1.PersistentVolumeClaimList{}
-	if err := a.Client.List(ctx, pvcs, client.HasLabels{"wecolab.io/app"}); err != nil {
-		return nil, err
-	}
 	for _, p := range pvcs.Items {
 		q, want := p.Status.Capacity[corev1.ResourceStorage], p.Spec.Resources.Requests[corev1.ResourceStorage]
 		st.Volumes[p.Namespace+"/"+p.Name] = VolumeStatus{App: p.Labels["wecolab.io/app"], Request: want.String(), Phase: string(p.Status.Phase), Capacity: q.String()}
 	}
-	apps := &v1alpha1.AppList{}
-	if err := a.Client.List(ctx, apps); err != nil {
-		return nil, err
+	// Read each project's app resources in batches. Per-app Get calls can
+	// exhaust the API rate limit and make /status miss its peers' deadline.
+	services := make(map[types.NamespacedName]*corev1.Service, len(apps.Items))
+	secrets := make(map[types.NamespacedName]*corev1.Secret, len(apps.Items))
+	namespaces := map[string]bool{}
+	for i := range apps.Items {
+		app := &apps.Items[i]
+		if app.Spec.Deleted || !slices.Contains(app.Spec.Sites, a.Site) {
+			continue
+		}
+		namespaces[app.Namespace] = namespaces[app.Namespace] || app.Spec.Database != ""
+		services[types.NamespacedName{Namespace: app.Namespace, Name: app.Spec.Workload}] = nil
+		if app.Spec.Database != "" {
+			secrets[types.NamespacedName{Namespace: app.Namespace, Name: app.Name}] = nil
+		}
+	}
+	resources := make([]struct {
+		services corev1.ServiceList
+		secrets  corev1.SecretList
+	}, len(namespaces))
+	var resourceReads errgroup.Group
+	resourceReads.SetLimit(4)
+	i := 0
+	for ns, database := range namespaces {
+		batch := &resources[i]
+		i++
+		resourceReads.Go(func() error {
+			if err := a.Client.List(ctx, &batch.services, client.InNamespace(ns)); err != nil {
+				batch.services.Items = nil // no route evidence from a failed read
+			}
+			return nil
+		})
+		if database {
+			resourceReads.Go(func() error {
+				if err := a.Client.List(ctx, &batch.secrets, client.InNamespace(ns)); err != nil {
+					batch.secrets.Items = nil // no vault evidence from a failed read
+				}
+				return nil
+			})
+		}
+	}
+	_ = resourceReads.Wait()
+	for j := range resources {
+		batch := &resources[j]
+		for i := range batch.services.Items {
+			svc := &batch.services.Items[i]
+			key := client.ObjectKeyFromObject(svc)
+			if _, needed := services[key]; needed {
+				services[key] = svc
+			}
+		}
+		for i := range batch.secrets.Items {
+			sec := &batch.secrets.Items[i]
+			key := client.ObjectKeyFromObject(sec)
+			if _, needed := secrets[key]; needed {
+				secrets[key] = sec
+			}
+		}
 	}
 	nodeIP := map[string]string{}
 	for _, n := range nodes.Items {
@@ -378,29 +446,16 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 			} else {
 				s.Recovery = a.recovery(&app, st.DB[dbKey], pods.Items, owners[dbKey])
 			}
-			if s.Recovery != nil && s.Recovery.Error == "" && len(s.Recovery.Samples) != 0 {
-				sample := s.Recovery.Samples[len(s.Recovery.Samples)-1]
-				if (sample.Role == "primary" || sample.Role == "replica") &&
-					validRecoverySample(sample, app.Spec.ArchiveID, sample.Role) &&
-					sampleAge(sample, 0) >= 0 && sampleAge(sample, 0) <= recoveryMaxReplayAge {
-					if st.DB[dbKey] == nil {
-						st.DB[dbKey] = map[string]any{}
-					}
-					st.DB[dbKey]["systemIdentifier"] = sample.SystemID
-					st.DB[dbKey]["timelineID"] = sample.Timeline
-					st.DB[dbKey]["recovering"] = sample.Role == "replica"
-				}
-			}
 		}
+		sec := secrets[types.NamespacedName{Namespace: app.Namespace, Name: app.Name}]
 		if app.Spec.Database != "" && Serving(app.Spec) == a.Site {
-			s.Vault = a.vault(&app)
+			s.Vault = a.vault(&app, sec)
 		}
-		sec := &corev1.Secret{} // the app's own Secret, named after it (deploy): what its database archives with
-		if app.Spec.Database != "" && a.Client.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, sec) == nil {
+		if sec != nil {
 			s.VaultKeyID = string(sec.Data["b2-key-id"])
 			s.VaultKeyVersion = string(sec.Data["key-version"])
 		}
-		s.Endpoints = a.endpoints(ctx, app.Namespace, app.Spec.Workload, pods.Items, nodeIP)
+		s.Endpoints = appEndpoints(services[types.NamespacedName{Namespace: app.Namespace, Name: app.Spec.Workload}], pods.Items, nodeIP)
 		st.Apps[app.Namespace+"/"+app.Name] = s
 	}
 	own := a.gitClaim(ctx)
@@ -413,7 +468,39 @@ func (a *SiteAgent) Status(ctx context.Context) (*SiteStatus, error) {
 		return nil, err
 	}
 	st.Writer, st.Epoch = own.Writer, own.Epoch
-	st.ReceivedAt = time.Now()
+	now := time.Now()
+	// Include all inventory I/O in producer age. A slow later read must not
+	// make an earlier sample appear fresh when peers receive this report.
+	for _, app := range apps.Items {
+		s := st.Apps[app.Namespace+"/"+app.Name]
+		if s.Recovery == nil {
+			continue
+		}
+		for i := range s.Recovery.Samples {
+			sample := &s.Recovery.Samples[i]
+			age := now.Sub(sample.ObservedAt)
+			if age < 0 {
+				s.Recovery.Error = "Monotonic sample age invalid"
+				break
+			}
+			sample.AgeNanos = int64(age)
+		}
+		if s.Recovery.Error == "" && len(s.Recovery.Samples) != 0 {
+			sample := s.Recovery.Samples[len(s.Recovery.Samples)-1]
+			if (sample.Role == "primary" || sample.Role == "replica") &&
+				validRecoverySample(sample, app.Spec.ArchiveID, sample.Role) &&
+				sampleAge(sample, 0) >= 0 && sampleAge(sample, 0) <= recoveryMaxReplayAge {
+				dbKey := app.Namespace + "/" + app.Spec.Database
+				if st.DB[dbKey] == nil {
+					st.DB[dbKey] = map[string]any{}
+				}
+				st.DB[dbKey]["systemIdentifier"] = sample.SystemID
+				st.DB[dbKey]["timelineID"] = sample.Timeline
+				st.DB[dbKey]["recovering"] = sample.Role == "replica"
+			}
+		}
+	}
+	st.ReceivedAt = now
 	return st, nil
 }
 
@@ -445,19 +532,18 @@ func ReportApp(app *v1alpha1.App, self string, db map[string]any, built string) 
 	return s
 }
 
-// endpoints are where the Door reaches an app here: the Nebula address of every box running a ready
+// appEndpoints are where the Door reaches an app here: the Nebula address of every box running a ready
 // pod behind the app's Service, with the Service's node port. The Service keeps the caller's address
 // (externalTrafficPolicy Local), so it answers only on those boxes.
-func (a *SiteAgent) endpoints(ctx context.Context, ns, workload string, pods []corev1.Pod, nodeIP map[string]string) []string {
-	svc := &corev1.Service{}
-	if err := a.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: workload}, svc); err != nil || svc.Spec.Type != corev1.ServiceTypeNodePort || len(svc.Spec.Ports) == 0 {
+func appEndpoints(svc *corev1.Service, pods []corev1.Pod, nodeIP map[string]string) []string {
+	if svc == nil || svc.Spec.Type != corev1.ServiceTypeNodePort || len(svc.Spec.Ports) == 0 {
 		return nil
 	}
 	port := svc.Spec.Ports[0].NodePort
 	sel := labels.SelectorFromSet(svc.Spec.Selector)
 	out := []string{}
 	for _, p := range pods {
-		if p.Namespace != ns || !sel.Matches(labels.Set(p.Labels)) || p.Spec.NodeName == "" || !podReady(p) {
+		if p.Namespace != svc.Namespace || !sel.Matches(labels.Set(p.Labels)) || p.Spec.NodeName == "" || !podReady(p) {
 			continue
 		}
 		if ip := nodeIP[p.Spec.NodeName]; ip != "" {
@@ -503,18 +589,47 @@ func (a *SiteAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if time.Since(a.at) > 5*time.Second || a.cached == nil {
-		st, err := a.Status(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+	body := a.cached
+	if time.Since(a.at) > 5*time.Second || body == nil {
+		refresh := a.refresh
+		if refresh == nil {
+			refresh = &statusRefresh{done: make(chan struct{})}
+			a.refresh = refresh
+			go func() {
+				// A short-lived peer must not repeatedly cancel a slower
+				// inventory. Share one bounded collection, not stale success.
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				st, err := a.Status(ctx)
+				if err == nil {
+					refresh.body, err = json.Marshal(st)
+				}
+				refresh.err = err
+				a.mu.Lock()
+				if err == nil {
+					a.cached, a.at = refresh.body, time.Now()
+				}
+				a.refresh = nil
+				close(refresh.done)
+				a.mu.Unlock()
+			}()
+		}
+		a.mu.Unlock()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-refresh.done:
+		}
+		if refresh.err != nil {
+			http.Error(w, refresh.err.Error(), http.StatusInternalServerError)
 			return
 		}
-		a.cached, _ = json.Marshal(st)
-		a.at = time.Now()
+		body = refresh.body
+	} else {
+		a.mu.Unlock()
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(a.cached)
+	_, _ = w.Write(body)
 }
 
 // holds is whether anything of an app is still at this site: its database, or the Kustomization that

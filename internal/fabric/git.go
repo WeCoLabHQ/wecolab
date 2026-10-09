@@ -3,7 +3,9 @@
 package fabric
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -187,6 +189,81 @@ func validRevision(sha string) bool {
 		}
 	}
 	return true
+}
+
+// VisitArchive streams one immutable Forgejo tar.gz snapshot. The callback must consume
+// each wanted regular file before returning; no archive path is ever extracted to disk.
+func (g *Git) VisitArchive(ctx context.Context, revision string, visit func(string, byte, io.Reader) error) error {
+	if !validRevision(revision) {
+		return fmt.Errorf("invalid Git revision")
+	}
+	path := "/api/v1/repos/" + g.Repo + "/archive/" + revision + ".tar.gz"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.URL+path, nil)
+	if err != nil {
+		return err
+	}
+	if g.User != "" {
+		req.SetBasicAuth(g.User, g.Token)
+	} else {
+		req.Header.Set("Authorization", "token "+g.Token)
+	}
+	res, err := g.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		return fmt.Errorf("git GET %s: %s: %s", path, res.Status, strings.TrimSpace(string(b)))
+	}
+	const maxCompressed = 32 << 20
+	const maxExpanded = 128 << 20
+	compressed := &io.LimitedReader{R: res.Body, N: maxCompressed + 1}
+	z, err := gzip.NewReader(compressed)
+	if err != nil {
+		return err
+	}
+	defer z.Close()
+	expanded := &io.LimitedReader{R: z, N: maxExpanded + 1}
+	tr := tar.NewReader(expanded)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		// Git's global PAX commit metadata is not a repository file.
+		if h.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+		if h.Name == "fabric/" && h.Typeflag == tar.TypeDir {
+			continue
+		}
+		if !strings.HasPrefix(h.Name, "fabric/") {
+			return fmt.Errorf("unexpected Git archive entry %q", h.Name)
+		}
+		name := strings.TrimPrefix(h.Name, "fabric/")
+		if h.Typeflag == tar.TypeDir {
+			name = strings.TrimSuffix(name, "/")
+		}
+		if !validPath(name) || strings.Contains(name, "\\") {
+			return fmt.Errorf("invalid Git archive entry %q", h.Name)
+		}
+		if err := visit(name, h.Typeflag, tr); err != nil {
+			return err
+		}
+	}
+	// Drain past tar's end markers to validate the gzip checksum and enforce
+	// both transfer limits even when no wanted manifest occurs near the end.
+	if _, err := io.Copy(io.Discard, expanded); err != nil {
+		return err
+	}
+	if expanded.N == 0 || compressed.N == 0 {
+		return fmt.Errorf("Git archive exceeds size limit")
+	}
+	return nil
 }
 
 // Snapshot is files of the Fabric as Edit read them, each with the hash it had then.
