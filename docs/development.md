@@ -247,9 +247,13 @@ The three nested k3s processes also share the Docker VM's inotify instance limit
 An isolated Colima guest with `fs.inotify.max_user_instances=128` exhausted it while
 starting the laptop's containerd CRI plugin (`failed to create fsnotify watcher:
 too many open files`), despite a 1,048,576 file-descriptor limit. Provision at least
-1,024 inotify instances in the explicitly disposable VM; do not silently tune a
-shared Docker host. The launcher waits for a read-only writer Console response
-before creating its first site, because an available Door is not Console readiness.
+1,024 inotify instances persistently in the explicitly disposable VM; do not silently
+tune a shared Docker host. A one-off `sysctl -w` is lost on VM reboot: a later owned-lab
+reboot restored 128 and prevented Traefik's file watcher from starting, leaving the
+Console at HTTP 404 despite a valid route file. Restoring 1,024 and restarting the
+Door restored service; box revocation and clean uninstall then passed. The launcher
+waits for a read-only writer Console response before creating its first site,
+because an available Door is not Console readiness.
 
 `provider-contract` needs explicitly authorized bucket-scoped provider credentials and
 a deliberately denied credential; `rotation` needs a disposable B2 account key. `upgrade`
@@ -338,71 +342,58 @@ Python 3.14 importer fixture (Jinja2 3.1.6, PyYAML 6.0.3, MarkupSafe 3.0.4), ARM
 Swift/NoCloud ISO and main-only disposable Docker fabric jobs. Importer upstream input is
 `../homelabos` commit `411f2c6802a73aaf5517ed3b3ff01a083312d5c9`; CI uses
 checked-in fixture tests, never a moving upstream branch. Website root/subpath checks stay
-in `website.yml`. The default trusted-main integration job requires an **ephemeral, isolated**
-self-hosted Linux x64 runner labelled `wecolab-recovery`, privileged systemd containers,
-a local Docker engine, Python 3, and at least **30 GiB free in Docker's backing store**.
-The gate refuses insufficient space; it never prunes to make room. GitHub's
-[standard runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
-documents 14 GB storage, below the fabric prerequisite; actual capacity must be measured.
-Without the provisioned runner the default integration gate is unavailable, not a pass.
-An explicit hosted experiment runs the same suite and unchanged storage gate on
-`ubuntu-24.04`:
+in `website.yml`. The trusted-main integration job uses an ephemeral GitHub-hosted
+`ubuntu-24.04` runner by default, with privileged systemd containers, a local Docker
+engine and Python 3. It still requires **30 GiB free in Docker's backing store**:
+insufficient space is a failed prerequisite, never a pass or a reason to prune.
+GitHub's [standard runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
+documents 14 GB storage, so each job measures actual capacity rather than assuming
+that every hosted runner is sufficient.
 
 ```bash
-gh workflow run verification.yml --repo WeCoLabHQ/wecolab --ref main -f hosted_integration=true
+gh workflow run verification.yml --repo WeCoLabHQ/wecolab --ref main
 ```
 
-This opt-in does not change the default runner or prune preinstalled software to make
-room. `runner-capacity.json` records Docker filesystem space, CPU/RAM, cgroups, inotify
+`runner-capacity.json` records Docker filesystem space, CPU/RAM, cgroups, inotify
 and KVM device visibility; device visibility alone does not certify KVM workloads.
-Capacity and success/failure `result.json` artifacts are retained for 30 days, including
-the capacity report when the storage gate refuses the run.
+Capacity and success/failure `result.json` artifacts are retained for 30 days,
+including the capacity report when the storage gate refuses the run.
 
-The [2026-10-08 hosted trial](https://github.com/WeCoLabHQ/wecolab/actions/runs/37855204838)
-measured 4 CPUs, 15.61 GiB RAM and 83.75 GiB free in `/var/lib/docker`; no pruning was
-needed. The capacity gate, fabric bootstrap and `failed-backup` scenario passed,
-including historical and current database checksum readbacks. After writer takeover
-back to `pub`, `recreate` timed out at its initial database-ready prerequisite with
-`app absent or ambiguous`, before exercising recreation. `name-race`, `replay-lag`,
-`partition` and the final fabric tests were not reached. The Linux, catalog and ARM
-macOS jobs passed. This demonstrates usable hosted capacity, not a full integration
-pass or guaranteed capacity on subsequent runners. The hosted path remains opt-in;
-the recovery failure's root cause is not established by the retained evidence.
+The [2026-10-09 complete hosted run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37933951556)
+verified public snapshot `e2acb4028a39e8d196c60c295ac94c9ae26a52a7` before the
+default changed. All four jobs passed. Integration completed in 2h40m46s:
 
-A subsequent isolated handback reproduction captured the public Door still serving
-`home` at epoch 2 with `isWriter: true` after `pub` had taken epoch 3. The old gate
-accepted that response; the next deployment reached home's Console and was refused
-by its fenced Forgejo. Both the workflow handback gate and recovery preflight now
-require `site == "pub"` and `writer == "pub"` as well as `isWriter`; a generic writer
-response is not proof that routing has converged. The regression failed on stale
-writer responses before this change. The corrected live handback waited through
-the old route and completed `recreate`, including both historical and current
-database checksum readbacks. A full hosted pass is still required before changing
-the default runner.
+- `failed-backup`, `recreate`, `name-race`, `replay-lag` and `partition` each
+  retained a passing result, including database checksum readbacks.
+- The final fabric suite passed readiness, planned moves, forced recovery,
+  deletion, certificate renewal, home takeover and project propagation to pub
+  within the unchanged 180-second gate, takeover back to pub, box-certificate
+  revocation, and uninstall matching all three boxes' pre-install inventories.
+- The runner measured 4 CPUs, 15.61 GiB RAM, 83.75 GiB free Docker storage and
+  1,280 inotify instances. No pruning was needed. `/dev/kvm` was present but not
+  accessible to the runner; this run does not establish KVM workload support.
+
+The workflow handback gate and recovery preflight require `site == "pub"` and
+`writer == "pub"` as well as `isWriter`; a generic writer response is not proof
+that routing has converged. An isolated regression caught the public Door still
+serving home's superseded epoch after pub took over; the following deployment
+reached home's Console and was refused by its fenced Forgejo.
 
 The failed-backup drill compares product selection with the newest completed metadata
 after the denied attempt, not a baseline frozen before an automatic backup can finish.
 Expected and selected completion times, database protection state and `VaultFresh`
 are retained before the assertion; unknown protection remains a failure. The initial
 home standby must answer read-only before the drill can fence the old primary.
-The [subsequent hosted run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37879790679)
-completed `failed-backup`, `recreate` and `name-race`, including checksum readbacks.
-Its failed-backup evidence captured a newer completed automatic backup, distinct
-from both the initial baseline and the failed attempt, correctly selected by the product.
-It stopped in `replay-lag` after all 512 rows replayed but independent live WAL
-positions did not compare equal. Replay catch-up now uses one post-resume primary
-WAL position; later primary activity cannot move that target on every probe. The
-drill still requires the 512-row replay and a fresh measured `within-objective`
-recovery state before advancing. This is not yet a complete hosted pass.
+Replay catch-up uses one post-resume primary WAL position; later primary activity
+cannot move that target on every probe. The drill still requires all 512 rows to
+replay and a fresh measured `within-objective` recovery state before advancing.
 Promotion readiness observes writable state and an advanced PostgreSQL timeline
 together, inside the existing bounded wait. The old site cannot rejoin based only
 on a writable probe taken before a CNPG promotion restart.
 
-The [next hosted run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37894648381)
-again passed the first three scenarios, but stopped at the measured healthy-recovery
-baseline before replay was paused. It did not exercise promotion. Replay-lag artifacts
-now retain each rejected observation's state, reason, covered-position timestamp and
-exposure bound; the acceptance gates and waits are unchanged.
+Replay-lag artifacts retain each rejected observation's state, reason,
+covered-position timestamp and exposure bound; acceptance gates and waits remain
+bounded rather than skipping an unavailable healthy-recovery baseline.
 
 Site observation batches tenant workload and app resource reads, with at most four
 independent API reads in flight so network latency does not accumulate serially.
@@ -412,8 +403,8 @@ including slow inventory reads, before they can supply recovery bounds or databa
 identity. Console file-scope inspection reads one bounded immutable Git archive,
 including Git's global PAX metadata, and caches classifications only for that exact
 verified commit. Missing, malformed or incomplete evidence cannot inherit an earlier
-file-free classification. These paths have targeted live smoke coverage and regression
-checks; they do not replace the required full hosted run.
+file-free classification. These paths have targeted live smoke coverage,
+regression checks and the complete hosted run above.
 
 Writer lease release re-reads ownership after a resource-version conflict: canceling
 an in-flight renewal does not undo an API-server write. Conflict retries remain bounded,
@@ -433,7 +424,9 @@ to home's higher epoch, when peer reports failed before Flux caught up. A runnin
 Door now retains its highest observed valid writer claim; newer claims still win,
 and a remembered writer must remain a steward. The regression and live smoke keep
 home/10 selected while both peer status paths are unavailable and applied settings
-still say pub/9. This is not a full hosted integration pass.
+still say pub/9. The subsequent complete hosted run above passed propagation;
+the earlier failure's missing boundary evidence does not establish that this
+route regression was its only cause.
 
 Fresh manager installs wait for their named Kubernetes Node to exist before waiting
 for its Ready condition. A reachable API returning an empty Node list is not node
