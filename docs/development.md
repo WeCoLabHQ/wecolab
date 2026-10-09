@@ -406,6 +406,15 @@ without changing the rows. The drill now requests publication of the target's se
 instead of depending on the periodic archive timeout. Recovery-confidence assertions,
 row checks and deadlines remain unchanged.
 
+The [next default-runner run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37986908552)
+passed replay-lag, including the measured recovery-confidence transitions and matching
+restored data. Partition then received HTTP 409 when it submitted a pre-fault fencing
+preview after the writer takeover. All three force-recovery drills now recheck that
+the old container is stopped and obtain a current preview from the new writer before
+acknowledging force. Its archive identity and previous primary must still match what
+was fenced. A subsequent revision conflict remains a failure, not an automatic retry;
+the Console's compare-and-swap guard is unchanged.
+
 Site observation batches tenant workload and app resource reads, with at most four
 independent API reads in flight so network latency does not accumulate serially.
 Short peer requests share one bounded refresh instead of repeatedly canceling it; only successful

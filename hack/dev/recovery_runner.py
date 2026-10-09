@@ -233,6 +233,17 @@ class Runner:
         pod = pod or self.dbpod(site, name)
         return self.kubectl(site, '-n', self.ns, 'exec', pod, '-c', 'postgres', '--', 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', database or name, '-At', '-c', query).strip()
 
+    def force_fenced(self, before, site='home'):
+        self.require(self.docker('inspect','-f','{{.State.Running}}',self.box(before['PreviousPrimary'])).strip() == b'false',
+                     'old primary is no longer physically fenced')
+        # The pre-fault preview identifies what was fenced, not the new writer's revision.
+        preview = self.console('GET',f'/api/apps/{self.ns}/{self.app}/force-preview',site=site)
+        self.require(all(preview[key] == before[key] for key in ('ArchiveID','PreviousPrimary')),
+                     'fenced app identity or previous primary changed before force')
+        self.console('POST',f'/api/apps/{self.ns}/{self.app}/primary',
+                     {'To':site,'Force':True,'Fencing':dict(preview,Method='power-off',
+                      Evidence='Disposable old primary container stopped and inspected after writer takeover')},site=site)
+
     def sentinel(self, site='pub', name=None):
         name = name or self.app
         self.sql(site, name, 'CREATE TABLE IF NOT EXISTS public.wecolab_recovery (n bigint PRIMARY KEY, marker text NOT NULL)')
@@ -474,8 +485,7 @@ class Runner:
         # Home's writer is promoted explicitly while pub is powered off.
         self.docker('cp','install.sh',self.box('home')+':/root/install.sh')
         self.docker('exec',self.box('home'),'bash','/root/install.sh','takeover',timeout=300)
-        self.console('POST',f'/api/apps/{self.ns}/{self.app}/primary',{'To':'home','Force':True,
-                     'Fencing':dict(preview,Method='power-off',Evidence='Disposable pub container stopped and inspected before force')},site='home')
+        self.force_fenced(preview)
         self.wait('forced target writable',lambda: self.sql('home',self.app,'SELECT pg_is_in_recovery()') == b'f',1200)
         self.require(self.docker('inspect','-f','{{.State.Running}}',self.box('pub')).strip() == b'false', 'old primary reappeared before rebuild')
         self.sql('home', self.app, "INSERT INTO public.wecolab_recovery VALUES (258,'promoted')")
@@ -556,9 +566,7 @@ class Runner:
         self.docker('stop',self.box('pub'),timeout=150)
         self.docker('cp','install.sh',self.box('home')+':/root/install.sh')
         self.docker('exec',self.box('home'),'bash','/root/install.sh','takeover',timeout=300)
-        self.console('POST',f'/api/apps/{self.ns}/{self.app}/primary',
-                     {'To':'home','Force':True,'Fencing':dict(preview,Method='power-off',
-                      Evidence='Disposable old primary container stopped before timeline transition')},site='home')
+        self.force_fenced(preview)
         def promoted():
             timeline = int(self.sql('home',self.app,
                            'SELECT timeline_id FROM pg_control_checkpoint() WHERE NOT pg_is_in_recovery()') or b'0')
@@ -1203,9 +1211,7 @@ class Runner:
                              'old primary not physically fenced')
                 self.docker('cp','install.sh',self.box('home')+':/root/install.sh')
                 self.docker('exec',self.box('home'),'bash','/root/install.sh','takeover',timeout=300)
-                self.console('POST',f'/api/apps/{self.ns}/{self.app}/primary',
-                             {'To':'home','Force':True,'Fencing':dict(preview,Method='power-off',
-                              Evidence='Disposable pub container stopped and inspected before force')},site='home')
+                self.force_fenced(preview)
                 self.wait('home promoted and writable without a completed home backup',
                           lambda: self.sql('home',self.app,'SELECT pg_is_in_recovery()') == b'f',1200)
                 def home_failed():

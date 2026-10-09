@@ -374,7 +374,7 @@ class RecoverySafetyTests(unittest.TestCase):
                 r.sentinel = lambda: expected
                 r.backup = lambda **kw: None
                 r.restored = lambda *args, **kw: None
-                r.console = lambda *args, **kw: {'PreviousPrimary':'pub'}
+                r.console = lambda *args, **kw: {'ArchiveID':'original','PreviousPrimary':'pub'}
                 r.docker = lambda *args, **kw: b'false'
                 r.fence_database = lambda site: 'old-cluster'
                 r.resource = lambda *args, **kw: {'metadata':{'uid':'new-cluster'}}
@@ -402,6 +402,59 @@ class RecoverySafetyTests(unittest.TestCase):
                     with self.assertRaisesRegex(Refusal, 'committed'):
                         r.partition()
 
+    def test_force_reconfirms_fenced_identity_after_writer_takeover(self):
+        class Forced(Exception):
+            pass
+        for change in ('revision', 'archive', 'primary', 'after-preview', 'fence-lost'):
+            with self.subTest(change=change):
+                r = Runner('partition')
+                r.prefix = 'fixture'
+                r.deploy = lambda: None
+                r.sentinel = lambda: b'1|original'
+                r.backup = lambda: None
+                r.fence_database = lambda site: 'old-cluster'
+                r.sql = lambda *args, **kw: b'still-writable'
+                current = {'ArchiveID':'original', 'PreviousPrimary':'pub', 'ExpectedAppSHA':'before'}
+                state = {'writer':'pub', 'stopped':False, 'attempts':0}
+                def docker(*args, **kw):
+                    if args[:2] == ('stop', 'fixture-pub'):
+                        state['stopped'] = True
+                    elif args[0] == 'inspect':
+                        return b'false' if state['stopped'] else b'true'
+                    elif args[-1] == 'takeover':
+                        state['writer'] = 'home'
+                        current['ExpectedAppSHA'] = 'after-takeover'
+                        if change == 'archive':
+                            current['ArchiveID'] = 'recreated'
+                        elif change == 'primary':
+                            current['PreviousPrimary'] = 'another-primary'
+                        elif change == 'fence-lost':
+                            state['stopped'] = False
+                    return b''
+                r.docker = docker
+                def console(method, path, body=None, *, site='pub', **kw):
+                    if site != state['writer']:
+                        raise Refusal('fixture writer unavailable')
+                    if method == 'GET':
+                        preview = current.copy()
+                        if site == 'home':
+                            self.assertTrue(state['stopped'], 'reconfirmation requires the physical fence')
+                            if change == 'after-preview':
+                                current['ExpectedAppSHA'] = 'concurrent-edit'
+                        return preview
+                    if not body.get('Fencing'):
+                        return None
+                    state['attempts'] += 1
+                    if any(body['Fencing'][key] != value for key, value in current.items()):
+                        raise Refusal('fixture revision conflict')
+                    raise Forced()
+                r.console = console
+                with self.assertRaises(Forced if change == 'revision' else Refusal):
+                    r.partition()
+                self.assertEqual(state['stopped'], change != 'fence-lost')
+                self.assertEqual(state['attempts'], 1 if change in ('revision', 'after-preview') else 0,
+                                 'never force another incarnation/primary or retry an expired acknowledgement')
+
     def test_partition_stops_rejoin_if_old_fence_disappears(self):
         r = Runner('partition')
         r.prefix = 'fixture'
@@ -412,7 +465,7 @@ class RecoverySafetyTests(unittest.TestCase):
         r.sentinel = lambda: b'1|original'
         r.backup = lambda **kw: None
         r.restored = lambda *args, **kw: None
-        r.console = lambda *args, **kw: {'PreviousPrimary': 'pub'}
+        r.console = lambda *args, **kw: {'ArchiveID':'original', 'PreviousPrimary':'pub'}
         r.fence_database = lambda site: 'old-cluster'
         r.resource = lambda *args, **kw: next(clusters)
         def docker(*args, **kw):
@@ -541,13 +594,15 @@ class RecoverySafetyTests(unittest.TestCase):
                 def console(method, *args, **kw):
                     if method == 'POST':
                         state['promoted'] = True
-                    return {'PreviousPrimary':'pub'}
+                    return {'ArchiveID':'original','PreviousPrimary':'pub'}
                 r.console = console
                 def docker(*args, **kw):
                     if args[0] in ('stop','start') and args[1] == 'fixture-vault':
                         state['vault'] = args[0] == 'start'
                     if args[:2] == ('start','fixture-pub'):
                         raise RejoinAllowed()
+                    if args[0] == 'inspect':
+                        return b'false'
                     return b''
                 r.docker = docker
                 def sql(site, name, query, **kw):
