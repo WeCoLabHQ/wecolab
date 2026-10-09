@@ -546,13 +546,13 @@ class Runner:
         self.console('POST',f'/api/apps/{self.ns}/{self.app}/primary',
                      {'To':'home','Force':True,'Fencing':dict(preview,Method='power-off',
                       Evidence='Disposable old primary container stopped before timeline transition')},site='home')
-        self.wait('new timeline becomes writable',
-                  lambda: self.sql('home',self.app,'SELECT pg_is_in_recovery()') == b'f',1200)
-        self.require(int(self.sql('home',self.app,'SELECT timeline_id FROM pg_control_checkpoint()')) > previous_timeline,
-                     'promotion did not advance timeline')
+        def promoted():
+            timeline = int(self.sql('home',self.app,
+                           'SELECT timeline_id FROM pg_control_checkpoint() WHERE NOT pg_is_in_recovery()') or b'0')
+            return timeline if timeline > previous_timeline else None
+        promoted_timeline = self.wait('new timeline becomes writable',promoted,1200)
         self.docker('start',self.box('pub'),timeout=150)
         self.wait_standby_rebuild('pub', old_cluster)
-        promoted_timeline = int(self.sql('home',self.app,'SELECT timeline_id FROM pg_control_checkpoint()'))
         self.wait('rebuilt standby replays the promoted timeline and original rows',
                   lambda: int(self.sql('pub',self.app,'SELECT timeline_id FROM pg_control_checkpoint()')) == promoted_timeline and
                   self.sql('pub',self.app,'SELECT n,marker FROM public.wecolab_recovery ORDER BY n') == expected, 300)

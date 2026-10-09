@@ -394,6 +394,9 @@ positions did not compare equal. Replay catch-up now uses one post-resume primar
 WAL position; later primary activity cannot move that target on every probe. The
 drill still requires the 512-row replay and a fresh measured `within-objective`
 recovery state before advancing. This is not yet a complete hosted pass.
+Promotion readiness observes writable state and an advanced PostgreSQL timeline
+together, inside the existing bounded wait. The old site cannot rejoin based only
+on a writable probe taken before a CNPG promotion restart.
 
 Fresh manager installs wait for their named Kubernetes Node to exist before waiting
 for its Ready condition. A reachable API returning an empty Node list is not node

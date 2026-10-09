@@ -465,6 +465,69 @@ class RecoverySafetyTests(unittest.TestCase):
                     with self.assertRaises(ReplayVerified if valid else Refusal):
                         r.replay_lag()
 
+    def test_replay_lag_keeps_old_site_off_until_promoted_timeline_is_observed(self):
+        class RejoinAllowed(Exception):
+            pass
+        for mode in ('restart', 'unavailable', 'old-timeline', 'still-recovering'):
+            with self.subTest(mode=mode):
+                r = Runner('replay-lag')
+                r.prefix = 'fixture'
+                state = {'paused':False, 'vault':True, 'promoted':False, 'timeline_reads':0}
+                r.deploy = lambda: None
+                r.sentinel = lambda: b'1|original'
+                r.backup = lambda **kw: None
+                r.restored = lambda *args, **kw: None
+                r.dbpod = lambda site: 'replica'
+                r.fence_database = lambda site: 'old-cluster'
+                r.current = lambda: {'Protection':{
+                    'RecoveryPoint':{'State':'outside-objective' if state['paused'] else 'within-objective',
+                                     'ObservedAt':'2999-01-01T00:00:00Z'},
+                    'Database':{'State':'protected' if state['vault'] else 'unknown'}}}
+                def console(method, *args, **kw):
+                    if method == 'POST':
+                        state['promoted'] = True
+                    return {'PreviousPrimary':'pub'}
+                r.console = console
+                def docker(*args, **kw):
+                    if args[0] in ('stop','start') and args[1] == 'fixture-vault':
+                        state['vault'] = args[0] == 'start'
+                    if args[:2] == ('start','fixture-pub'):
+                        raise RejoinAllowed()
+                    return b''
+                r.docker = docker
+                def sql(site, name, query, **kw):
+                    if 'pg_wal_replay_pause' in query:
+                        state['paused'] = True
+                    elif 'pg_wal_replay_resume' in query:
+                        state['paused'] = False
+                    elif 'pg_control_checkpoint' in query:
+                        if not state['promoted']:
+                            return b'1'
+                        state['timeline_reads'] += 1
+                        if mode == 'unavailable' or mode == 'restart' and state['timeline_reads'] == 1:
+                            raise Refusal('the database system is shutting down')
+                        if mode == 'still-recovering' and 'pg_is_in_recovery' in query:
+                            return b''
+                        return b'1' if mode == 'old-timeline' else b'2'
+                    elif 'pg_is_in_recovery' in query:
+                        return b'f' if state['promoted'] and mode != 'still-recovering' else b't'
+                    elif 'pg_current_wal_lsn' in query:
+                        return b'0/30'
+                    elif 'pg_last_wal_replay_lsn' in query:
+                        return b't'
+                    elif 'count(*)' in query:
+                        return b'512' if state['vault'] and not state.get('outage_row') else b'513'
+                    elif query.startswith('INSERT') and 'archive-paused' in query:
+                        state['outage_row'] = True
+                    elif query.startswith('SELECT n,marker'):
+                        return b'1|original'
+                    return b''
+                r.sql = sql
+                with patch('recovery_runner.time.sleep'), \
+                     patch('recovery_runner.time.monotonic', side_effect=range(0, 100000, 10)):
+                    with self.assertRaises(RejoinAllowed if mode == 'restart' else Refusal):
+                        r.replay_lag()
+
     def test_replay_lag_refuses_permanently_unknown_measurements(self):
         r = Runner('replay-lag')
         r.prefix = 'fixture'
