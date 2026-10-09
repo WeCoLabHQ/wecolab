@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """No Docker calls: safety and artifact contract checks for disposable recovery runner."""
+import contextlib
 import json
 import os
 import pathlib
@@ -246,6 +247,63 @@ class RecoverySafetyTests(unittest.TestCase):
             return Result(f'server_name=cloud\nstatus=DONE\nsystemid=321\ntimeline=2\nend_time={completed}\n'.encode())
         r.signed_s3 = signed
         self.assertEqual(r.metadata()['BackupID'], 'a-new')
+
+    def test_failed_backup_requires_latest_completed_proof_and_ready_standby(self):
+        cases = [
+            ('concurrent completed backup', True, 'latest', 'protected', 'True', ('t',), True),
+            ('standby still bootstrapping', False, 'latest', 'protected', 'True', (None, 't'), True),
+            ('standby never appears', False, 'latest', 'protected', 'True', (None,), False),
+            ('standby is writable', False, 'latest', 'protected', 'True', ('f',), False),
+            ('failed backup selected', True, 'failed', 'protected', 'True', ('t',), False),
+            ('protection unknown', False, 'latest', 'unknown', 'True', ('t',), False),
+            ('vault not fresh', False, 'latest', 'protected', 'False', ('t',), False),
+        ]
+        class StandbyVerified(Exception):
+            pass
+        for label, concurrent, selected, protection, fresh, observations, valid in cases:
+            with self.subTest(label=label):
+                r = Runner('failed-backup')
+                prior = {'BackupID':'baseline', 'CompletedAt':'2026-10-09T01:00:00Z', 'Status':'DONE'}
+                latest = dict(prior, BackupID='automatic', CompletedAt='2026-10-09T01:01:00Z') if concurrent else prior
+                failed = {'BackupID':'failed', 'CompletedAt':'2026-10-09T01:02:00Z', 'Status':'FAILED'}
+                retry = {'BackupID':'retry', 'CompletedAt':'2026-10-09T01:03:00Z', 'Status':'DONE'}
+                state = {'backups':0, 'metadata':0, 'probes':0}
+                r.deploy = lambda: None
+                r.sentinel = lambda: b'1|original'
+                r.restored = lambda *args, **kw: None
+                r.failed_backup_uploads = lambda site: contextlib.nullcontext()
+                r.kubectl = lambda *args, **kw: b''
+                def backup():
+                    state['backups'] += 1
+                r.backup = backup
+                def metadata(*args, allow_failed=False, **kw):
+                    if allow_failed:
+                        return failed
+                    state['metadata'] += 1
+                    return retry if state['backups'] > 1 else prior if state['metadata'] == 1 else latest
+                r.metadata = metadata
+                r.current = lambda: {
+                    'Protection':{'Database':{'BackupCompletedAt':(failed if selected == 'failed' else latest)['CompletedAt'],
+                                             'ObservedAt':'2999-01-01T00:00:00Z', 'State':protection}},
+                    'Conditions':[{'type':'VaultFresh', 'status':fresh}]}
+                def resource(site, kind, name):
+                    if kind == 'backup':
+                        return {'spec':{'cluster':{'name':r.app+'-db'}}, 'status':{'phase':'failed'}}
+                    # This lookup begins the fencing phase. It must be unreachable
+                    # without valid recovery proof and an observed read-only standby.
+                    raise StandbyVerified()
+                r.resource = resource
+                def sql(*args):
+                    result = observations[min(state['probes'], len(observations)-1)]
+                    state['probes'] += 1
+                    if result is None:
+                        raise Refusal('CNPG primary not observed')
+                    return result.encode()
+                r.sql = sql
+                with patch('recovery_runner.time.sleep'), \
+                     patch('recovery_runner.time.monotonic', side_effect=range(0, 100000, 60)):
+                    with self.assertRaises(StandbyVerified if valid else Refusal):
+                        r.failed_backup()
 
     def test_partition_rejects_lost_or_changed_original_rows(self):
         expected = b'\n'.join(f'{n}|original'.encode() for n in range(1,257))

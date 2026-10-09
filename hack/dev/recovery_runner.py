@@ -1137,7 +1137,10 @@ class Runner:
                                  lambda: m if (m:=self.metadata(allow_failed=True))['Status'] == 'FAILED' and
                                  m['BackupID'] != prior['BackupID'] else None,180)
             failure_observed_at = dt.datetime.now(dt.timezone.utc)
-            prior_time = dt.datetime.fromisoformat(prior['CompletedAt'].replace('Z','+00:00'))
+            # An automatic backup may finish after the initial baseline snapshot.
+            # Compare against the newest DONE metadata after the denied attempt.
+            eligible = self.metadata()
+            eligible_time = dt.datetime.fromisoformat(eligible['CompletedAt'].replace('Z','+00:00'))
             def selected():
                 app = self.current()
                 evidence = app['Protection']['Database']
@@ -1149,11 +1152,12 @@ class Runner:
             selected_time = dt.datetime.fromisoformat(evidence['BackupCompletedAt'].replace('Z','+00:00'))
             self.operations.append('observed failed-backup-product-eligibility '+json.dumps(
                 {'SelectedCompletedAt':evidence['BackupCompletedAt'],'BackupID':prior['BackupID'],
-                 'ExpectedCompletedAt':prior['CompletedAt'],'DatabaseEvidence':evidence,'VaultFresh':freshness,
+                 'ExpectedBackupID':eligible['BackupID'],'ExpectedCompletedAt':eligible['CompletedAt'],
+                 'DatabaseEvidence':evidence,'VaultFresh':freshness,
                  'FailedBackupID':observed['BackupID'],'FailedMetadataObservedAt':failure_observed_at.isoformat(),
                  'ProtectionObservedAt':evidence['ObservedAt']},sort_keys=True))
-            self.require(selected_time == prior_time and evidence['State'] == 'protected' and freshness['status'] == 'True',
-                         'product accepted failed backup instead of prior completed recovery proof')
+            self.require(selected_time == eligible_time and evidence['State'] == 'protected' and freshness['status'] == 'True',
+                         'product did not select the latest completed recovery proof after failed backup')
         self.backup()
         retry = self.metadata()
         self.require(retry['BackupID'] not in (prior['BackupID'], observed['BackupID']) and retry['Status'] == 'DONE',
@@ -1162,8 +1166,8 @@ class Runner:
         # A forced move creates a new primary archive on home. Unlike the previous
         # generation on pub it has no eligible base backup yet; pub remains physically
         # fenced until its first attempted home backup has failed.
-        self.require(self.sql('home',self.app,'SELECT pg_is_in_recovery()') == b't',
-                     'home must be a standby before failed-only archive drill')
+        self.wait('home is a standby before failed-only archive drill',
+                  lambda: self.sql('home',self.app,'SELECT pg_is_in_recovery()') == b't')
         old_cluster = self.resource('pub','cluster',self.app+'-db')['metadata']['uid']
         def pvc_ids():
             items = json.loads(self.kubectl('pub','-n',self.ns,'get','pvc','-l',
