@@ -479,7 +479,7 @@ class RecoverySafetyTests(unittest.TestCase):
         for label, replay, confidence, valid in cases:
             with self.subTest(label=label):
                 r = Runner('replay-lag')
-                state = {'phase':'baseline', 'primary_reads':0}
+                state = {'phase':'baseline', 'primary_reads':0, 'archived_replay':0x20}
                 r.deploy = lambda: None
                 r.sentinel = lambda: b'1|original'
                 r.backup = lambda: None
@@ -498,6 +498,8 @@ class RecoverySafetyTests(unittest.TestCase):
                         state['phase'] = 'resumed'
                     elif query.startswith('SELECT count'):
                         return b'512'
+                    elif 'pg_switch_wal' in query:
+                        state['archived_replay'] = replay
                     elif 'pg_current_wal_lsn' in query:
                         state['primary_reads'] += 1
                         return b'0/30' if state['primary_reads'] == 1 else b'0/40'
@@ -505,8 +507,8 @@ class RecoverySafetyTests(unittest.TestCase):
                         if '>=' in query:
                             high, low = query.split("'")[1].split('/')
                             target = int(high,16) << 32 | int(low,16)
-                            return b't' if replay >= target else b'f'
-                        return f'0/{replay:X}'.encode()
+                            return b't' if state['archived_replay'] >= target else b'f'
+                        return f"0/{state['archived_replay']:X}".encode()
                     return b''
                 r.sql = sql
                 def docker(*args, **kw):

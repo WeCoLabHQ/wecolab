@@ -384,9 +384,10 @@ after the denied attempt, not a baseline frozen before an automatic backup can f
 Expected and selected completion times, database protection state and `VaultFresh`
 are retained before the assertion; unknown protection remains a failure. The initial
 home standby must answer read-only before the drill can fence the old primary.
-Replay catch-up uses one post-resume primary WAL position; later primary activity
-cannot move that target on every probe. The drill still requires all 512 rows to
-replay and a fresh measured `within-objective` recovery state before advancing.
+Replay catch-up captures one post-resume primary WAL position and switches WAL so
+the segment containing that target can be archived. Later primary activity cannot
+move the target on every probe. The drill still requires all 512 rows, replay through
+that fixed position and a fresh measured `within-objective` recovery state.
 Promotion readiness observes writable state and an advanced PostgreSQL timeline
 together, inside the existing bounded wait. The old site cannot rejoin based only
 on a writable probe taken before a CNPG promotion restart.
@@ -394,6 +395,16 @@ on a writable probe taken before a CNPG promotion restart.
 Replay-lag artifacts retain each rejected observation's state, reason,
 covered-position timestamp and exposure bound; acceptance gates and waits remain
 bounded rather than skipping an unavailable healthy-recovery baseline.
+
+The [subsequent default-runner run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37976315354)
+passed failed-backup, recreation and name-race, then stopped in replay-lag: all 512
+rows were present, but the newer fixed WAL target had not replayed within 120 seconds.
+An owned PostgreSQL 18.6 archive-only reproduction with a five-minute archive timeout
+matched all 512 rows while replay stayed at `0/5000000`, short of target `0/50000F8`,
+for the full 120-second gate. Switching WAL made that same target replay in 1.6 seconds
+without changing the rows. The drill now requests publication of the target's segment
+instead of depending on the periodic archive timeout. Recovery-confidence assertions,
+row checks and deadlines remain unchanged.
 
 Site observation batches tenant workload and app resource reads, with at most four
 independent API reads in flight so network latency does not accumulate serially.

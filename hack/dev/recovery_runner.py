@@ -528,6 +528,8 @@ class Runner:
             self.sql('home',self.app,'SELECT pg_wal_replay_resume()',pod=replica)
         resumed_at = dt.datetime.now(dt.timezone.utc)
         replay_target = self.sql('pub',self.app,'SELECT pg_current_wal_lsn()').decode()
+        # Archive-only replicas cannot replay a target in an open WAL segment.
+        self.sql('pub',self.app,'SELECT pg_switch_wal()')
         self.wait('replica catches up',lambda: self.sql('home',self.app,'SELECT count(*) FROM public.wecolab_recovery') == b'512',1200)
         # Later primary WAL must not move the catch-up target on every probe.
         self.wait('post-resume primary write position replayed',
