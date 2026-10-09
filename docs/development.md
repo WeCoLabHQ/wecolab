@@ -380,6 +380,13 @@ the old route and completed `recreate`, including both historical and current
 database checksum readbacks. A full hosted pass is still required before changing
 the default runner.
 
+The [next hosted run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37874603511)
+stopped earlier, inside `failed-backup`'s recovery-proof eligibility assertion.
+Eligibility observations now retain the expected and selected completion times,
+database protection state and `VaultFresh` condition before the assertion, so a
+failed result includes the decision inputs. This does not relax the assertion or
+turn unknown protection into a pass.
+
 The development vault is credential-free/emulated. Its presence alone proves neither an
 application-data restore nor B2 compliance retention, production S3 dial policy,
 identity-provider enforcement, physical fencing or native Virtualization.framework boot.

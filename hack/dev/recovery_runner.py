@@ -1147,12 +1147,13 @@ class Runner:
             # Vault scans run five minutes after completion; allow the next scan and its projection.
             evidence, freshness = self.wait('product-selected recovery proof after failed backup',selected,600)
             selected_time = dt.datetime.fromisoformat(evidence['BackupCompletedAt'].replace('Z','+00:00'))
-            self.require(selected_time == prior_time and evidence['State'] == 'protected' and freshness['status'] == 'True',
-                         'product accepted failed backup instead of prior completed recovery proof')
-            self.operations.append('verified failed-backup-product-eligibility '+json.dumps(
+            self.operations.append('observed failed-backup-product-eligibility '+json.dumps(
                 {'SelectedCompletedAt':evidence['BackupCompletedAt'],'BackupID':prior['BackupID'],
+                 'ExpectedCompletedAt':prior['CompletedAt'],'DatabaseEvidence':evidence,'VaultFresh':freshness,
                  'FailedBackupID':observed['BackupID'],'FailedMetadataObservedAt':failure_observed_at.isoformat(),
                  'ProtectionObservedAt':evidence['ObservedAt']},sort_keys=True))
+            self.require(selected_time == prior_time and evidence['State'] == 'protected' and freshness['status'] == 'True',
+                         'product accepted failed backup instead of prior completed recovery proof')
         self.backup()
         retry = self.metadata()
         self.require(retry['BackupID'] not in (prior['BackupID'], observed['BackupID']) and retry['Status'] == 'DONE',
