@@ -631,7 +631,7 @@ YAML
   systemctl enable "$unit" >/dev/null 2>&1
   systemctl start "$unit"
   if [ "$role" = manager ]; then
-    for _ in $(seq 60); do kubectl get nodes >/dev/null 2>&1 && break; sleep 2; done
+    for _ in $(seq 60); do kubectl get node "$name" >/dev/null 2>&1 && break; sleep 2; done
     kubectl wait --for=condition=Ready "node/$name" --timeout=300s >/dev/null
   fi
   kvm_label

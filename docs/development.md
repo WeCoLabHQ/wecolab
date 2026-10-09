@@ -387,6 +387,10 @@ database protection state and `VaultFresh` condition before the assertion, so a
 failed result includes the decision inputs. This does not relax the assertion or
 turn unknown protection into a pass.
 
+Fresh manager installs wait for their named Kubernetes Node to exist before waiting
+for its Ready condition. A reachable API returning an empty Node list is not node
+registration; both registration and Ready waits remain bounded.
+
 The development vault is credential-free/emulated. Its presence alone proves neither an
 application-data restore nor B2 compliance retention, production S3 dial policy,
 identity-provider enforcement, physical fencing or native Virtualization.framework boot.

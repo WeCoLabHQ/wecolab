@@ -378,7 +378,10 @@ func TestInstallSyncRecovery(t *testing.T) {
 // Run the installer against a scratch service directory, including the real role and identity checks.
 func TestInstallInterruptedK3s(t *testing.T) {
 	for _, role := range []string{"manager", "node"} {
-		for _, scenario := range []string{"cached", "owned-service", "foreign-binary", "identity-conflict", "installer-fails"} {
+		for _, scenario := range []string{"cached", "owned-service", "foreign-binary", "identity-conflict", "installer-fails", "delayed-registration", "missing-registration"} {
+			if role == "node" && strings.HasSuffix(scenario, "-registration") {
+				continue
+			}
 			t.Run(role+"/"+scenario, func(t *testing.T) {
 				dir := scratchBox(t)
 				for _, p := range []string{"etc/rancher/k3s", "etc/systemd/system", "usr/local/bin", "cache"} {
@@ -418,7 +421,22 @@ K3S_INSTALL_COMMIT=test K3S_INSTALL_SHA256=` + fmt.Sprintf("%x", sha256.Sum256([
 firewall() { touch "$FIREWALL_OK"; }
 apparmor() { :; }
 kvm_label() { :; }
-kubectl() { :; }
+NODE_READS=0 NODE_REGISTERED=
+kubectl() {
+ [[ "$REGISTRATION" == *-registration ]] || return 0
+ case "$1 $2" in
+  "get nodes") printf '[]\n';;
+  "get node")
+   [ "$3" = home-box ] || return 1
+   NODE_READS=$((NODE_READS+1))
+   [[ "$REGISTRATION" = delayed-registration && "$NODE_READS" -ge 3 ]] || return 1
+   NODE_REGISTERED=1;;
+  "wait --for=condition=Ready")
+   [[ "$3" = node/home-box && "$NODE_REGISTERED" = 1 ]] || return 1
+   touch "$STATE/node-ready";;
+  *) return 1;;
+ esac
+}
 sleep() { :; }
 fetch() { printf '#!/bin/sh\nexit 0\n' > "$2"; }
 sh() {
@@ -430,13 +448,19 @@ install_k3s
 `
 				writeFile(t, dir+"/run", run, 0o755)
 				env := []string{"PATH=" + dir + "/bin:" + dir + "/usr/local/bin:" + os.Getenv("PATH"), "EVENTS=" + dir + "/events", "UNITS=" + dir + "/etc/systemd/system", "FIREWALL_OK=" + dir + "/fw-ok", "INSTALL_LOG=" + dir + "/installer", "INSTALL_FAIL=" + dir + "/fail"}
+				env = append(env, "REGISTRATION="+scenario)
 				if scenario == "installer-fails" {
 					writeFile(t, dir+"/fail", "1", 0o600)
 				}
 				out, ok := runOn(t, dir, env, "bash", dir+"/run")
-				expected := scenario == "cached" || scenario == "owned-service"
+				expected := scenario == "cached" || scenario == "owned-service" || scenario == "delayed-registration"
 				if ok != expected {
 					t.Fatalf("first run success=%v: %s", ok, out)
+				}
+				if scenario == "delayed-registration" {
+					if _, err := os.Stat(dir + "/state/node-ready"); err != nil {
+						t.Fatalf("manager installation did not observe its registered Node becoming Ready: %v", err)
+					}
 				}
 				log, _ := os.ReadFile(dir + "/installer")
 				if scenario == "cached" && !strings.Contains(string(log), "skip=true") {
