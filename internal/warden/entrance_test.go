@@ -187,6 +187,72 @@ func TestEntranceRoutes(t *testing.T) {
 	}
 }
 
+func TestEntranceKeepsHighestWriterClaim(t *testing.T) {
+	statuses := map[string]*SiteStatus{
+		"pub":  {Writer: "pub", Epoch: 1},
+		"home": {Writer: "home", Epoch: 2},
+	}
+	e := entranceFixture(t, statuses)
+	transport := e.Peers.HTTP.Transport
+	unreachable := map[string]bool{}
+	e.Peers.HTTP.Transport = roundTrip(func(r *http.Request) (*http.Response, error) {
+		if unreachable[r.URL.Hostname()] {
+			return nil, fmt.Errorf("peer unavailable")
+		}
+		return transport.RoundTrip(r)
+	})
+	check := func(want string) {
+		t.Helper()
+		e.Peers.cache = nil // each round observes the changed peer availability
+		if err := e.Sync(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(e.RoutesDir, "console.yml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var route struct {
+			HTTP traefikHTTP `json:"http"`
+		}
+		if err := yaml.Unmarshal(b, &route); err != nil {
+			t.Fatal(err)
+		}
+		servers := route.HTTP.Services["console"].LoadBalancer.Servers
+		if len(servers) != 1 || servers[0]["url"] != want {
+			t.Fatalf("Console route: got %v, want %s", servers, want)
+		}
+	}
+
+	check("http://10.77.1.1:30800")
+	unreachable["10.77.1.1"] = true
+	check("http://10.77.1.1:30800") // pub still reports the superseded epoch
+	unreachable["10.77.0.1"] = true
+	check("http://10.77.1.1:30800") // Flux still says pub/1; neither peer answers
+
+	statuses["pub"].Epoch = 3
+	delete(unreachable, "10.77.0.1")
+	check("http://10.77.0.1:30800") // a newer claim must still move the route
+	unreachable["10.77.0.1"] = true
+	delete(unreachable, "10.77.1.1")
+	check("http://10.77.0.1:30800") // home's now-stale epoch cannot take it back
+
+	statuses["home"].Epoch = 3
+	check("http://10.77.1.1:30800") // the lower name wins equal epochs
+	unreachable["10.77.1.1"] = true
+	delete(unreachable, "10.77.0.1")
+	check("http://10.77.1.1:30800") // keep the winning tie when that peer is silent
+
+	home := &v1alpha1.Site{}
+	if err := e.Client.Get(context.Background(), client.ObjectKey{Name: "home"}, home); err != nil {
+		t.Fatal(err)
+	}
+	home.Spec.Steward = false
+	if err := e.Client.(client.Client).Update(context.Background(), home); err != nil {
+		t.Fatal(err)
+	}
+	check("http://10.77.0.1:30800") // remembered authority cannot outlive stewardship
+}
+
 // Git alone names the site an app's users go to: with its primary silent, a site of the app that says
 // it is active, and publishes its own boxes, gets no server.
 func TestEntranceFollowsGitPrimary(t *testing.T) {

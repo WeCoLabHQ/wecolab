@@ -420,6 +420,21 @@ an in-flight renewal does not undo an API-server write. Conflict retries remain 
 and a successor's lease is never released. Lease and custody regressions use an API
 fixture that enforces Kubernetes resource-version compare-and-swap.
 
+The [2026-10-09 hosted run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37912741547)
+passed all five recovery scenarios, including writable timeline advancement before
+the old site rejoined, and the Linux, catalog and ARM macOS jobs. The final fabric
+suite passed planned moves, forced recovery, deletion and certificate renewal, then
+failed when a project created after home's takeover did not appear at pub within
+180 seconds. That failure now reports each site's Git head/claim, applied writer
+and Flux revisions/conditions without dumping credentials. The deadline is unchanged.
+
+A separate owned-lab trace caught the Door returning to pub after already routing
+to home's higher epoch, when peer reports failed before Flux caught up. A running
+Door now retains its highest observed valid writer claim; newer claims still win,
+and a remembered writer must remain a steward. The regression and live smoke keep
+home/10 selected while both peer status paths are unavailable and applied settings
+still say pub/9. This is not a full hosted integration pass.
+
 Fresh manager installs wait for their named Kubernetes Node to exist before waiting
 for its Ready condition. A reachable API returning an empty Node list is not node
 registration; both registration and Ready waits remain bounded.

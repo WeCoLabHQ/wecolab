@@ -54,7 +54,8 @@ type Entrance struct {
 	serial uint32
 	zone   string
 
-	skipped string // what the last Sync left out, logged when it changes (Run's goroutine alone)
+	skipped     string // what the last Sync left out, logged when it changes (Run's goroutine alone)
+	writerClaim Claim  // highest observed authority; Run's goroutine alone
 }
 
 // Router priorities. Traefik's default is the rule's length, so a longer tenant rule would outrank the
@@ -374,9 +375,10 @@ func (e *Entrance) Sync(ctx context.Context) error {
 
 // writer is the site whose Console the Door routes to: the Fabric's writer, or a steward that took
 // over and whose commit has not reached this site yet. As at the writer itself, only stewards' own
-// reports count and only a steward can be claimed (Effective).
+// reports count and only a steward can be claimed (Effective). Missing peer answers cannot restore
+// a superseded writer while Flux catches up; remembered authority still requires stewardship.
 func (e *Entrance) writer(ctx context.Context, s *Settings, sites []v1alpha1.Site) string {
-	stewards, claims := map[string]bool{}, []Claim{}
+	stewards, claims := map[string]bool{}, []Claim{e.writerClaim}
 	for _, site := range sites {
 		if site.Spec.Steward {
 			stewards[site.Name] = true
@@ -385,7 +387,8 @@ func (e *Entrance) writer(ctx context.Context, s *Settings, sites []v1alpha1.Sit
 			}
 		}
 	}
-	return Effective(Claim{Writer: s.Writer, Epoch: s.Epoch}, claims, stewards).Writer
+	e.writerClaim = Effective(Claim{Writer: s.Writer, Epoch: s.Epoch}, claims, stewards)
+	return e.writerClaim.Writer
 }
 
 // appRoutes are the apps' routes, each to where its primary answers, and what was left out and why:
