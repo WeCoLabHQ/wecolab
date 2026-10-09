@@ -97,6 +97,60 @@ class RecoverySafetyTests(unittest.TestCase):
             self.assertTrue(result_path.is_file(), 'unexpected failure lost its evidence')
             self.assertEqual(json.loads(result_path.read_text())['Outcome'], 'failed')
 
+    def test_preflight_rejects_a_writer_other_than_the_required_pub(self):
+        owner = 'disposableowner123'
+        values = {'WECOLAB_DEV_PREFIX':'disposable', 'WECOLAB_DEV_OWNER':owner,
+                  'WECOLAB_DEV_NETWORK':'disposable-net', 'WECOLAB_DEV_SUBNET':'198.19.0.0/24'}
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, values):
+            cache = pathlib.Path(root)/'disposable'
+            cache.mkdir()
+            (cache/'.wecolab-owner').write_text(owner)
+            r = Runner('recreate')
+            def docker(*args, **kwargs):
+                if args[0] == 'network':
+                    return json.dumps([{'Labels':{'wecolab.dev.owner':owner},
+                                        'IPAM':{'Config':[{'Subnet':r.subnet}]}}]).encode()
+                if args[0] == 'inspect':
+                    name = args[1]
+                    volume = name if name.endswith('-vault') else name+'-var'
+                    return json.dumps([{
+                        'Config':{'Labels':{'wecolab.dev.owner':owner}},
+                        'State':{'Running':True},
+                        'NetworkSettings':{'Networks':{r.network:{}}},
+                        'Mounts':[{'Type':'volume','Name':volume},
+                                  {'Type':'bind','Destination':'/src','RW':False},
+                                  {'Type':'bind','Destination':'/cache','RW':True}]}]).encode()
+                if args[0] == 'volume' or args[0] == 'exec' and args[2] == 'cat':
+                    return owner.encode()
+                if args[0] == 'exec' and args[2] == 'stat':
+                    return b'43:1729\n43:1729\n'
+                if args[0] == 'version':
+                    return b'28.0.4'
+                if args[0] == 'exec' and args[2:4] == ('k3s','--version'):
+                    return b'k3s version v1.36.4+k3s1'
+                if 'pods' in args:
+                    return json.dumps({'items':[{'spec':{'containers':[
+                        {'image':'ghcr.io/cloudnative-pg/plugin-barman-cloud:v0.15.0'}]}}]}).encode()
+                return b'dev'
+            responses = [
+                {'site':'home','writer':'home','epoch':2,'isWriter':True},
+                {'site':'pub','writer':'home','epoch':2,'isWriter':True},
+                {'site':'home','writer':'pub','epoch':3,'isWriter':True},
+                {'isWriter':True},
+            ]
+            for settings in responses:
+                with self.subTest(settings=settings):
+                    def console(method, path):
+                        if path == '/api/settings':
+                            return settings
+                        return {'sites':[{'Name':site,'Ready':True,'Boxes':[{'Ready':True}]}
+                                         for site in ('pub','home')]}
+                    with patch('recovery_runner.pathlib.Path', return_value=cache.parent), \
+                         patch.object(r, 'docker', side_effect=docker), \
+                         patch.object(r, 'console', side_effect=console):
+                        with self.assertRaisesRegex(Refusal, 'pub must be'):
+                            r.preflight()
+
     def test_provider_requires_unexpired_retention_before_delete(self):
         future = '2999-01-01T00:00:00Z'
         for deadline in ('2000-01-01T00:00:00Z', None, '2999-01-01T00:00:00', 'invalid', future):

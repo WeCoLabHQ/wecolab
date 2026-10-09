@@ -369,6 +369,17 @@ macOS jobs passed. This demonstrates usable hosted capacity, not a full integrat
 pass or guaranteed capacity on subsequent runners. The hosted path remains opt-in;
 the recovery failure's root cause is not established by the retained evidence.
 
+A subsequent isolated handback reproduction captured the public Door still serving
+`home` at epoch 2 with `isWriter: true` after `pub` had taken epoch 3. The old gate
+accepted that response; the next deployment reached home's Console and was refused
+by its fenced Forgejo. Both the workflow handback gate and recovery preflight now
+require `site == "pub"` and `writer == "pub"` as well as `isWriter`; a generic writer
+response is not proof that routing has converged. The regression failed on stale
+writer responses before this change. The corrected live handback waited through
+the old route and completed `recreate`, including both historical and current
+database checksum readbacks. A full hosted pass is still required before changing
+the default runner.
+
 The development vault is credential-free/emulated. Its presence alone proves neither an
 application-data restore nor B2 compliance retention, production S3 dial policy,
 identity-provider enforcement, physical fencing or native Virtualization.framework boot.

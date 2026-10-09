@@ -146,7 +146,7 @@ jobs:
               docker exec "$WECOLAB_DEV_PREFIX-pub" bash /root/install.sh takeover
               for attempt in $(seq 1 60); do
                 if docker exec "$WECOLAB_DEV_PREFIX-pub" curl -fsSk -H 'Host: console.dev.wecolab.test' https://127.0.0.1/api/settings |
-                   jq -e '.isWriter == true' >/dev/null; then break; fi
+                   jq -e '.site == "pub" and .writer == "pub" and .isWriter == true' >/dev/null; then break; fi
                 if [[ "$attempt" == 60 ]]; then exit 1; fi
                 sleep 5
               done

@@ -174,7 +174,10 @@ class Runner:
             if site != 'vault':
                 self.require(self.cache_mount_owned(site, box), 'container has foreign cache mount: '+name)
                 self.require(box.get('State',{}).get('Running'), 'fabric box stopped: '+site)
-        self.require(self.console('GET', '/api/settings').get('isWriter'), 'pub must be the disposable writer before starting')
+        # The public Door can still route to the previous writer after takeover.
+        settings = self.console('GET', '/api/settings')
+        self.require(settings.get('isWriter') and settings.get('site') == 'pub' and settings.get('writer') == 'pub',
+                     'pub must be the disposable writer served by the public Console before starting')
         state = self.console('GET', '/api/state')
         self.require({x['Name'] for x in state['sites']} >= {'pub', 'home'}, 'pub/home sites missing')
         self.require(all(s['Ready'] and all(b['Ready'] for b in s['Boxes']) for s in state['sites'] if s['Name'] in ('pub','home')),
