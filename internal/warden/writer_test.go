@@ -264,15 +264,19 @@ func testSite(name string, steward bool, ip string, boxes ...string) v1alpha1.Si
 // Taking over is a commit at the new writer; until its Flux applies it, the cluster there (and every
 // other site) still names the old writer. The new writer leads from its own copy at once.
 func TestSyncLeadsByItsOwnCopy(t *testing.T) {
+	home, pub := testSite("home", true, "10.77.1.1"), testSite("pub", true, "10.77.0.1")
 	cp := &fakeCopy{head: "1111111111111111111111111111111111111111", exists: true, collab: true,
-		files: map[string]string{SettingsPath: settingsFile(t, "home", 2, "")}}
+		files: map[string]string{
+			SettingsPath:             settingsFile(t, "home", 2, ""),
+			"fabric/sites/home.yaml": siteFile(t, home),
+			"fabric/sites/pub.yaml":  siteFile(t, pub),
+		}}
 	fj := httptest.NewServer(cp)
 	defer fj.Close()
 	pr := peer(SiteStatus{Writer: "pub", Epoch: 1}, nil)
 	defer pr.Close()
 	cluster := &corev1.ConfigMap{Data: map[string]string{"zone": "fab.example.org", "network": "10.77.0.0/16", "writer": "pub", "epoch": "1"}}
 	cluster.Name, cluster.Namespace = SettingsName, SystemNS
-	home, pub := testSite("home", true, "10.77.1.1"), testSite("pub", true, "10.77.0.1")
 	c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(cluster, &home, &pub).WithObjects(testReadyForgejo(t)...).Build()
 	hc := &http.Client{Transport: toServer{pr.URL}}
 	w := &Writer{Client: c, Site: "home", Git: &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: fj.Client()},
@@ -379,6 +383,37 @@ func TestRevokeDecidesInGit(t *testing.T) {
 	cp.mu.Unlock()
 	if err := w.revoke(ctx, []v1alpha1.Site{home}); err == nil || cp.commits != commits {
 		t.Fatalf("without this site's own Site, nothing is revoked: %v", err)
+	}
+}
+
+func TestRevokeDoesNotWaitForAppliedBoxRemoval(t *testing.T) {
+	later := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	pr := peer(SiteStatus{}, map[string][]Issued{"home-b": {{fp("b"), later}}})
+	defer pr.Close()
+	cluster := &corev1.ConfigMap{Data: map[string]string{"zone": "fab.example.org", "network": "10.77.0.0/16", "writer": "home"}}
+	cluster.Name, cluster.Namespace = SettingsName, SystemNS
+	home := testSite("home", true, "10.77.1.1", "home-b")
+	cp := &fakeCopy{head: "1111111111111111111111111111111111111111", exists: true, collab: true, files: map[string]string{
+		SettingsPath:             settingsFile(t, "home", 1, ""),
+		"fabric/sites/home.yaml": siteFile(t, testSite("home", true, "10.77.1.1")),
+	}}
+	fj := httptest.NewServer(cp)
+	defer fj.Close()
+	w := &Writer{Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(cluster, &home).Build(), Site: "home",
+		Git: &fabric.Git{URL: fj.URL, Token: "t", Repo: "fabric/fabric", HTTP: fj.Client()}, HTTP: &http.Client{Transport: toServer{pr.URL}}}
+	if err := w.revoke(context.Background(), []v1alpha1.Site{home}); err != nil {
+		t.Fatal(err)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := yaml.Unmarshal([]byte(cp.file(SettingsPath)), cm); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := ParseSettings(cm.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.Blocklisted) != 1 || settings.Blocklisted[0].Fingerprint != fp("b") || !settings.Blocklisted[0].Until.Equal(later) {
+		t.Fatalf("a Git-deleted box's renewal must be revoked before Flux applies its removal: %+v", settings.Blocklisted)
 	}
 }
 

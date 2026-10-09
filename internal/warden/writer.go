@@ -347,8 +347,8 @@ func Revoke(list []Revoked, boxes map[string]bool, issued map[string][]Issued, n
 
 // revoke blocklists in the Fabric every certificate issued for a box that has left it (renewals and the
 // join certificates the stewards have seen recorded, as they publish them), and drops entries past their
-// expiry (docs/plans/2026-09-29-hardening.md, R7). The cluster's copy only says whether to look; what is
-// committed is decided against the Sites and settings in Git.
+// expiry (docs/plans/2026-09-29-hardening.md, R7). Git decides membership and the current blocklist;
+// waiting for an applied Site to lose a box would delay revocation by another Flux reconciliation.
 func (w *Writer) revoke(ctx context.Context, sites []v1alpha1.Site) error {
 	issued := map[string][]Issued{}
 	for _, ip := range Stewards(sites) {
@@ -361,20 +361,7 @@ func (w *Writer) revoke(ctx context.Context, sites []v1alpha1.Site) error {
 			issued[box] = append(issued[box], l...)
 		}
 	}
-	set, err := ReadSettings(ctx, w.Client)
-	if err != nil {
-		return err
-	}
 	now := time.Now()
-	boxes := map[string]bool{}
-	for _, s := range sites {
-		for _, b := range s.Spec.Boxes {
-			boxes[b.Name] = true
-		}
-	}
-	if _, changed := Revoke(set.Blocklisted, boxes, issued, now); !changed {
-		return nil
-	}
 	files, err := w.Git.List(ctx, "fabric/sites")
 	if err != nil {
 		return err

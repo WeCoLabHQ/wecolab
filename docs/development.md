@@ -428,6 +428,24 @@ still say pub/9. The subsequent complete hosted run above passed propagation;
 the earlier failure's missing boundary evidence does not establish that this
 route regression was its only cause.
 
+The [first ordinary push after the runner cutover](https://github.com/WeCoLabHQ/wecolab/actions/runs/37954291333)
+passed all recovery drills, project propagation and both writer takeovers, but timed
+out waiting for the removed laptop's certificate in both stewards' blocklists. Dev
+certificates last one hour, so the currently installed certificate can be a renewal
+rather than the one recorded at join. Writer revocation now checks membership and
+the blocklist in Git directly, without an early return based on an applied Site
+that still contains the removed box. The inverse guard remains: a box still in Git
+cannot be revoked just because an applied Site has already dropped it.
+
+A deterministic regression failed before this change. In an owned live fabric,
+Site application was held suspended after removing a box with a renewed certificate.
+The old Warden failed the unchanged 180-second gate despite a steward publishing
+that renewal. With the corrected Warden, both stewards applied its blocklist entry
+63 seconds after rollout while their Site objects still contained the removed box.
+Site reconciliation was then resumed. Failure diagnostics now include the expected
+fingerprint, applied certificate inventories/blocklists, Git heads/claims and Flux
+revisions/conditions; the acceptance gate and deadline are unchanged.
+
 Fresh manager installs wait for their named Kubernetes Node to exist before waiting
 for its Ready condition. A reachable API returning an empty Node list is not node
 registration; both registration and Ready waits remain bounded.

@@ -44,6 +44,25 @@ writers_follow() {
   done
   writer_is "$writer" "$epoch"
 }
+propagation_boundary() {
+  local b address
+  for b in pub home; do
+    echo "    propagation boundary at $b:"
+    docker exec "$PREFIX-$b" k3s kubectl --request-timeout=15s -n flux-system get gitrepositories,kustomizations -o json |
+      jq '[.items[] | select(.metadata.name=="fabric" or .metadata.name=="system" or .metadata.name=="crds") |
+        {kind, name:.metadata.name, generation:.metadata.generation,
+         revision:(.status.artifact.revision // .status.lastAppliedRevision),
+         observedGeneration:.status.observedGeneration, conditions:.status.conditions}]' || true
+    docker exec "$PREFIX-$b" k3s kubectl --request-timeout=15s -n wecolab-system get configmap fabric -o json |
+      jq '.data | {writer,epoch,blocklist}' || true
+    docker exec "$PREFIX-$b" k3s kubectl --request-timeout=15s get site home -o json |
+      jq '{site:.metadata.name, boxes:[.spec.boxes[] | {name,certs}]}' || true
+    address=$(docker exec "$PREFIX-$b" ip -j -4 addr show dev nebula1 |
+      jq -er '[.[].addr_info[] | select(.family=="inet") | .local] | if length==1 then .[0] else error("one mesh address required") end') || continue
+    docker exec "$PREFIX-$b" curl -fsS --max-time 15 "http://$address:8093/fabric/commits/0000000000000000000000000000000000000000" |
+      jq '{head,onMain,claim}' || true
+  done
+}
 notes_move_ready() {
   local state
   state=$(app notes) || return
@@ -169,20 +188,7 @@ docker exec "$PREFIX-pub" curl -fsS -X POST "http://$home_ip:30800/api/settings/
 until_ 300 "every site and the public Console follow home at next epoch" writers_follow home "$((epoch+1))"
 console POST /api/projects '{"Name":"after-takeover"}' | jq -c .
 if ! until_ 180 "a commit at home reaches pub" docker exec "$PREFIX-pub" k3s kubectl get ns after-takeover; then
-  for b in pub home; do
-    echo "    propagation boundary at $b:"
-    docker exec "$PREFIX-$b" k3s kubectl --request-timeout=15s -n flux-system get gitrepositories,kustomizations -o json |
-      jq '[.items[] | select(.metadata.name=="fabric" or .metadata.name=="system" or .metadata.name=="crds") |
-        {kind, name:.metadata.name, generation:.metadata.generation,
-         revision:(.status.artifact.revision // .status.lastAppliedRevision),
-         observedGeneration:.status.observedGeneration, conditions:.status.conditions}]' || true
-    docker exec "$PREFIX-$b" k3s kubectl --request-timeout=15s -n wecolab-system get configmap fabric -o json |
-      jq '.data | {writer,epoch}' || true
-    address=$(docker exec "$PREFIX-$b" ip -j -4 addr show dev nebula1 |
-      jq -er '[.[].addr_info[] | select(.family=="inet") | .local] | if length==1 then .[0] else error("one mesh address required") end') || continue
-    docker exec "$PREFIX-$b" curl -fsS --max-time 15 "http://$address:8093/fabric/commits/0000000000000000000000000000000000000000" |
-      jq '{head,onMain,claim}' || true
-  done
+  propagation_boundary
   exit 1
 fi
 docker cp install.sh "$PREFIX-pub:/root/install.sh"
@@ -194,7 +200,11 @@ if [ "$FROM" -le 7 ]; then
 step "7b. removing a box blocks its certificate"
 mac_fp=$(docker exec "$PREFIX-mac" nebula-cert print -json -path /etc/nebula/host.crt | jq -r '.[0].fingerprint')
 console DELETE /api/sites/home/boxes/home-mac | jq -c .
-until_ 180 "mac's certificate is in the blocklist at pub and home" sh -c "for b in pub home; do docker exec $PREFIX-\$b k3s kubectl -n wecolab-system get cm fabric -o jsonpath='{.data.blocklist}' | grep -q $mac_fp || exit 1; done"
+if ! until_ 180 "mac's certificate is in the blocklist at pub and home" sh -c "for b in pub home; do docker exec $PREFIX-\$b k3s kubectl -n wecolab-system get cm fabric -o jsonpath='{.data.blocklist}' | grep -q $mac_fp || exit 1; done"; then
+  printf '    expected certificate fingerprint: %s\n' "$mac_fp"
+  propagation_boundary
+  exit 1
+fi
 until_ 120 "the Fabric no longer has mac" mac_gone
 fi
 
