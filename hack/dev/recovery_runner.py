@@ -517,9 +517,11 @@ class Runner:
         finally:
             self.sql('home',self.app,'SELECT pg_wal_replay_resume()',pod=replica)
         resumed_at = dt.datetime.now(dt.timezone.utc)
+        replay_target = self.sql('pub',self.app,'SELECT pg_current_wal_lsn()').decode()
         self.wait('replica catches up',lambda: self.sql('home',self.app,'SELECT count(*) FROM public.wecolab_recovery') == b'512',1200)
-        self.wait('idle replay equals primary',lambda: self.sql('pub',self.app,'SELECT pg_current_wal_lsn()') ==
-                  self.sql('home',self.app,'SELECT pg_last_wal_replay_lsn()'),120)
+        # Later primary WAL must not move the catch-up target on every probe.
+        self.wait('post-resume primary write position replayed',
+                  lambda: self.sql('home',self.app,f"SELECT pg_last_wal_replay_lsn() >= '{replay_target}'::pg_lsn") == b't',120)
         recovered = self.wait('measured healthy recovery after replay resumes',lambda: measured(resumed_at),180)
         self.operations.append('verified recovery-confidence-transitions '+json.dumps(
             {'BeforePause':baseline,'Paused':lag,'AfterResume':recovered},sort_keys=True))

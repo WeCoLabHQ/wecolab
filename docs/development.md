@@ -380,12 +380,20 @@ the old route and completed `recreate`, including both historical and current
 database checksum readbacks. A full hosted pass is still required before changing
 the default runner.
 
-The [next hosted run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37874603511)
-stopped earlier, inside `failed-backup`'s recovery-proof eligibility assertion.
-Eligibility observations now retain the expected and selected completion times,
-database protection state and `VaultFresh` condition before the assertion, so a
-failed result includes the decision inputs. This does not relax the assertion or
-turn unknown protection into a pass.
+The failed-backup drill compares product selection with the newest completed metadata
+after the denied attempt, not a baseline frozen before an automatic backup can finish.
+Expected and selected completion times, database protection state and `VaultFresh`
+are retained before the assertion; unknown protection remains a failure. The initial
+home standby must answer read-only before the drill can fence the old primary.
+The [subsequent hosted run](https://github.com/WeCoLabHQ/wecolab/actions/runs/37879790679)
+completed `failed-backup`, `recreate` and `name-race`, including checksum readbacks.
+Its failed-backup evidence captured a newer completed automatic backup, distinct
+from both the initial baseline and the failed attempt, correctly selected by the product.
+It stopped in `replay-lag` after all 512 rows replayed but independent live WAL
+positions did not compare equal. Replay catch-up now uses one post-resume primary
+WAL position; later primary activity cannot move that target on every probe. The
+drill still requires the 512-row replay and a fresh measured `within-objective`
+recovery state before advancing. This is not yet a complete hosted pass.
 
 Fresh manager installs wait for their named Kubernetes Node to exist before waiting
 for its Ready condition. A reachable API returning an empty Node list is not node

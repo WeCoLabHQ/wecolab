@@ -415,6 +415,56 @@ class RecoverySafetyTests(unittest.TestCase):
             r.reconcile_database_fence('pub', 'old-cluster')
         self.assertFalse(running['pub'], 'a lost fence must leave the old site powered off')
 
+    def test_replay_lag_uses_a_fixed_write_position_and_fresh_measurement(self):
+        cases = [
+            ('primary keeps advancing', 0x38, 'within-objective', True),
+            ('replay behind committed target', 0x20, 'within-objective', False),
+            ('post-resume measurement unknown', 0x38, 'unknown', False),
+        ]
+        class ReplayVerified(Exception):
+            pass
+        for label, replay, confidence, valid in cases:
+            with self.subTest(label=label):
+                r = Runner('replay-lag')
+                state = {'phase':'baseline', 'primary_reads':0}
+                r.deploy = lambda: None
+                r.sentinel = lambda: b'1|original'
+                r.backup = lambda: None
+                r.dbpod = lambda site: 'replica'
+                def current():
+                    condition = ('outside-objective' if state['phase'] == 'paused' else
+                                 confidence if state['phase'] == 'resumed' else 'within-objective')
+                    return {'Protection':{'RecoveryPoint':{'State':condition, 'ObservedAt':'2999-01-01T00:00:00Z'}}}
+                r.current = current
+                def sql(site, name, query, **kw):
+                    if 'pg_is_in_recovery' in query:
+                        return b't'
+                    if 'pg_wal_replay_pause' in query:
+                        state['phase'] = 'paused'
+                    elif 'pg_wal_replay_resume' in query:
+                        state['phase'] = 'resumed'
+                    elif query.startswith('SELECT count'):
+                        return b'512'
+                    elif 'pg_current_wal_lsn' in query:
+                        state['primary_reads'] += 1
+                        return b'0/30' if state['primary_reads'] == 1 else b'0/40'
+                    elif 'pg_last_wal_replay_lsn' in query:
+                        if '>=' in query:
+                            high, low = query.split("'")[1].split('/')
+                            target = int(high,16) << 32 | int(low,16)
+                            return b't' if replay >= target else b'f'
+                        return f'0/{replay:X}'.encode()
+                    return b''
+                r.sql = sql
+                def docker(*args, **kw):
+                    # Advancing to the archive-outage phase requires verified replay.
+                    raise ReplayVerified()
+                r.docker = docker
+                with patch('recovery_runner.time.sleep'), \
+                     patch('recovery_runner.time.monotonic', side_effect=range(0, 100000, 10)):
+                    with self.assertRaises(ReplayVerified if valid else Refusal):
+                        r.replay_lag()
+
     def test_replay_lag_refuses_permanently_unknown_measurements(self):
         r = Runner('replay-lag')
         r.prefix = 'fixture'
