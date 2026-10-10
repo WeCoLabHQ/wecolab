@@ -125,9 +125,16 @@ import { url } from "../lib/paths";
           The <a href={url("docs/development/")}>development guide</a> describes
           the code, tests and a Docker-based fabric: a public site, a home site
           behind a simulated NAT, a laptop node and an object-storage vault. It
-          needs about 15 GB free in Docker's disk. The same installer runs
-          inside those containers as on real boxes, with documented
-          substitutions for things a laptop cannot provide.
+          runs privileged containers; allow at least 30 GiB free in Docker's
+          backing store for the full checks. The same installer runs inside those
+          containers as on real boxes, with documented substitutions for things a
+          laptop cannot provide.
+        </p>
+        <p>
+          Before running the commands below, follow the guide to set a unique
+          resource prefix and owner, and choose an unused network subnet. Keep
+          those settings for the whole run; teardown removes only resources
+          labelled for that owner.
         </p>
         <div
           class="command-block"
@@ -143,8 +150,8 @@ make dev-down</code></pre>
         </div>
         <p class="command-caption">
           These are the guide's setup, end-to-end check and teardown commands.
-          Read it first for the environment, what the checks cover, and how to
-          reload code at each site while developing.
+          The end-to-end check includes uninstall: explore the lab before running
+          it. The guide also covers reloading code at each site while developing.
         </p>
       </div>
     </section>

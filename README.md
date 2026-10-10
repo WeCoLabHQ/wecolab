@@ -1,67 +1,37 @@
 # WeCoLab
 
-**Website:** https://wecolabhq.github.io/wecolab/
+**A cooperative cloud for your own hardware.**
 
-A cooperative cloud for every place you and your collaborators run machines: homelabs, offices, a small
-business's server room, a rented box. Run an app at a site you own, keep a live copy at another site, keep
-an immutable third copy nobody can delete, and when a site dies the other site's copy becomes the app,
-without two writers ever existing.
+WeCoLab lets you and people you trust pool servers, homelabs and spare computers to host apps together.
+Each location controls what it shares; you manage apps and capacity through a browser.
 
-WeCoLab starts working with two sites, keeps working when any one site is gone, and gets stronger with
-every site that joins. There is no hub: every site holds the whole desired state and runs its own share.
+[Website](https://wecolabhq.github.io/wecolab/) · [Try locally](#try-locally) · [Documentation](https://wecolabhq.github.io/wecolab/docs/)
 
-It also gives people a desktop in the browser: a **Workspace** is a full Linux desktop that runs in its own
-VM (Kata Containers) on any box with KVM, reached only from your people mesh
-([docs/console.md](docs/console.md#workspaces)).
+- **Share on your terms.** Choose how much CPU, memory and storage to offer your collaborators.
+- **Run apps across locations.** Deploy containerized apps from the Console, without putting every machine in one place.
+- **Keep another copy.** PostgreSQL-backed apps can have a standby at another location, with operator-controlled recovery rather than automatic failover.
 
-A *fabric* is one such cooperative: its sites, people, apps and keys. *The Fabric*, capitalised, is the
-Git repository holding its desired state. These and every other word WeCoLab uses, with their
-Kubernetes equivalents, are in [docs/glossary.md](docs/glossary.md).
+![WeCoLab Console showing three sites and the controls for sharing their capacity](docs/images/console-sites.png)
 
-![The Console's overview of a fabric of three sites, all ready, two of them stewards](docs/images/console-overview.png)
+*The Console's sites and resource-sharing view. Names and addresses shown are example data.*
 
-The Console, where every change is a commit to the Fabric ([docs/console.md](docs/console.md)). Names and
-addresses in the pictures are examples.
+## Try locally
 
-## What runs where
+**WeCoLab is in development; no release has been published yet.** Start with the
+[disposable Docker lab](docs/development.md#a-whole-fabric-on-one-laptop), not a production machine.
+It creates two sites, a laptop node and an object-storage vault on one machine, then prints site and node status.
 
-| Piece | What it is | Where |
-|---|---|---|
-| **The Fabric** | a Git repository holding the whole desired state | a full copy at every site (Forgejo); one copy takes writes |
-| **Flux** | applies the site's own copy of the Fabric | every site |
-| **Warden** | this repository's controller: each site's role for each app, from Git; quotas, certificates, status | every site |
-| **Console** | the web interface; every change it makes is a commit | every steward; the writer's is the one in use |
-| **Nebula** | the mesh between boxes | every box |
-| **The Door** | public entrance: TLS for app names, forwards to each app's primary site | public sites |
-| **Names** | the fabric's own DNS zone | public sites |
-| **NetBird** | the mesh for people's phones and laptops | the first public site |
-| **CloudNativePG** | each app's PostgreSQL, primary at one site, standbys elsewhere | the operator at every site; databases at the sites of database apps |
-| **The vault** | object storage under Object Lock: WAL archive and backups | outside the fabric (B2, S3, R2, ...) |
-| **Kata Containers** | a VM of its own for each workspace (a desktop in the browser, by Selkies) | boxes with KVM, amd64 |
+The lab uses privileged Docker containers. Allow at least **30 GiB free in Docker's backing store**
+for the full checks. Read the guide first for the required ownership settings, network selection and cleanup.
+This is a development environment, not a production installation.
 
-## Start
+For real machines, the [installation guide](docs/install.md) explains prerequisites and release verification.
+Do not run an installer from a moving branch as root; installation requires verified, immutable release artifacts.
 
-On a fresh Linux box with a public address, delegate the DNS zone, then download an **immutable
-release candidate**, verify its GitHub Actions attestation against `wecolabhq/wecolab`'s release
-workflow and its artifact digests, and only then run its local `install.sh` as root. Never pipe the
-moving `main` installer or the Console's join endpoint into `sudo`. The exact download, trust
-anchor, first-site and join commands are in [docs/install.md](docs/install.md). No release has
-been published by this remediation; a candidate is not a production-tested release.
+## Learn more
 
-## Documentation
+- [Documentation](https://wecolabhq.github.io/wecolab/docs/) — the full guides, including the [Console](docs/console.md), [architecture](docs/architecture.md) and [operations](docs/operations.md).
+- [Contribute](https://wecolabhq.github.io/wecolab/contribute/) — development, documentation, app integrations and recovery drills.
+- [Questions and issues](https://github.com/WeCoLabHQ/wecolab/issues) — ask for help or report a problem.
 
-- [docs/glossary.md](docs/glossary.md): every term, with its Kubernetes or standard equivalent
-- [docs/architecture.md](docs/architecture.md): how it fits together, and why
-- [docs/install.md](docs/install.md): a fresh fabric, start to finish
-- [docs/console.md](docs/console.md): using the Console: deploy, move and delete apps, storage, domains, people
-- [docs/secrets.md](docs/secrets.md): every key, who makes it, where it lives
-- [docs/operations.md](docs/operations.md): switchover, failover, rebuilds, adding and removing boxes, the writer
-- [docs/security.md](docs/security.md): what a workload can and cannot do to a box
-- [docs/decisions.md](docs/decisions.md): the choices this is built on and when to revisit them
-- [docs/development.md](docs/development.md): the code, tests, and a whole fabric on one laptop
-- [mac/README.md](mac/README.md): WeCoLab for Mac, a Mac as a laptop node
-
-## License
-
-WeCoLab is free software under the [GNU Affero General Public License v3.0](LICENSE): you may use, study,
-change and share it, and whoever runs a changed WeCoLab for others must offer them its source.
+Licensed under the [GNU Affero General Public License v3.0](LICENSE).
