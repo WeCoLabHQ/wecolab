@@ -373,6 +373,15 @@ default changed. All four jobs passed. Integration completed in 2h40m46s:
   1,280 inotify instances. No pruning was needed. `/dev/kvm` was present but not
   accessible to the runner; this run does not establish KVM workload support.
 
+The [ordinary-push run completed 2026-10-10](https://github.com/WeCoLabHQ/wecolab/actions/runs/37996865924)
+verified public snapshot `25283cd46316ea67689249fbc3305a599180489b` on the default
+`ubuntu-24.04` runner after the corrections described below. All four jobs passed;
+integration completed in 2h35m52s. All five recovery artifacts passed with matching
+database checksums, and every final fabric check passed, including renewed-certificate
+revocation at both stewards and uninstall matching all three pre-install inventories.
+Measured capacity was again 4 CPUs, 15.61 GiB RAM and 83.75 GiB free Docker storage.
+No capacity, timeout, fencing, recovery-confidence or data-integrity gate was waived.
+
 The workflow handback gate and recovery preflight require `site == "pub"` and
 `writer == "pub"` as well as `isWriter`; a generic writer response is not proof
 that routing has converged. An isolated regression caught the public Door still
