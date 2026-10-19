@@ -4,7 +4,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 fail() { printf 'release: %s\n' "$*" >&2; exit 1; }
 repo=wecolabhq/wecolab
-workflow="$repo/.github/workflows/release.yml"
+workflow="WeCoLabHQ/wecolab/.github/workflows/release.yml"
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
 manifest_check() {
   local dir=$1 manifest file expected actual

@@ -30,6 +30,10 @@ jobs:
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: dist/release/release.json
+      - name: Verify the attested candidate as an installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/release.sh verify dist/release "$GITHUB_SHA"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ github.sha }}

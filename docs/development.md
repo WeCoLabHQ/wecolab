@@ -509,6 +509,12 @@ root execution. Intentionally swap an artifact, omit a platform or reject the si
 throwaway checkout to prove refusal. A public GitHub Release and native embedding/actual
 multiarch installs require separate authorization and disposable-system observation.
 
+The signer workflow identity is case-sensitive:
+`WeCoLabHQ/wecolab/.github/workflows/release.yml` must match the certificate,
+even though GitHub repository URLs accept a lowercase owner. The candidate
+workflow runs the same consumer verification after attestation and refuses
+to upload a candidate that fails it.
+
 For an existing fabric: use the **new verified release Warden binary**, invoked on the
 writer manager with a kubeconfig and Forgejo admin/write token; the old container binary
 cannot run this protocol. Snapshot the Fabric and recovery card offline, independently

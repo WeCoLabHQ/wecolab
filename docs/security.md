@@ -43,7 +43,7 @@ partial-install and provider-failure observations remain release gates beyond un
 The supported production bootstrap is **not** `curl main/install.sh | sudo bash` or the
 Console's unverified `/join.sh` pipe. Download a specific release's manifest and all
 platform artifacts, verify GitHub attestation for repository `wecolabhq/wecolab`,
-signer `wecolabhq/wecolab/.github/workflows/release.yml`, source ref `refs/heads/main`
+signer `WeCoLabHQ/wecolab/.github/workflows/release.yml`, source ref `refs/heads/main`
 and the independently expected 40-hex source commit, then check every artifact digest
 before invoking the local installer with root privileges ([exact commands](install.md)).
 A published tag, attestation and digest checks establish the expected release bytes, not

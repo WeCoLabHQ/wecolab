@@ -54,7 +54,7 @@ chmod 700 "$HOME/wecolab-release"
 gh release download "$RELEASE_TAG" -R wecolabhq/wecolab -D "$HOME/wecolab-release" \
   -p 'release.json' -p 'source.tar.gz' -p 'install.sh' -p 'VERSION' -p 'warden-*' -p 'console-*'
 gh attestation verify "$HOME/wecolab-release/release.json" -R wecolabhq/wecolab \
-  --signer-workflow wecolabhq/wecolab/.github/workflows/release.yml \
+  --signer-workflow WeCoLabHQ/wecolab/.github/workflows/release.yml \
   --source-ref refs/heads/main --source-digest "$SOURCE_COMMIT" --deny-self-hosted-runners
 git clone https://github.com/wecolabhq/wecolab.git "$HOME/wecolab-source"
 git -C "$HOME/wecolab-source" checkout --detach "$SOURCE_COMMIT"
