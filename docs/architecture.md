@@ -19,10 +19,10 @@ before claiming a tested recovery path.
 
 - **fabric** (lowercase): the whole cooperative, meaning its sites, people, apps and keys. **The Fabric**
   (capitalised): the Git repository that holds the fabric's desired state, with a full copy at every site.
-- **Box**: one Linux machine, or the small Linux VM a Mac runs. Every box runs Nebula and k3s on the host.
+- **Box**: one Linux machine, or one profile's Linux VM on a Mac. Every box runs Nebula and k3s on the host.
 - **Site**: one k3s cluster, owned by one project (usually one collaborator's). Its first box is the site's
-  **manager** (the k3s server); more boxes join it as **nodes** (k3s agents). A Mac is a node whose work
-  yields while its person uses it.
+  **manager** (the k3s server); more boxes join it as **nodes** (k3s agents). A Mac VM joins as a node whose
+  work yields while its person uses the Mac.
 - **Public site**: a site whose manager has a public address. It runs the **Door** (public entrance),
   **Names** (the fabric's DNS zone) and a Nebula **lighthouse and relay**. The first site of a fabric is
   always public. The first public site also runs the NetBird server for people's devices;
@@ -56,6 +56,24 @@ before claiming a tested recovery path.
                   │ WAL archive and base backups (object storage, Object Lock) │
                   └──────────────────────────► the vault ◄─────────────────────┘
 ```
+
+### Mac node runtime
+
+The menu-bar app and `wecolab-node` CLI share one per-user LaunchAgent,
+`wecolab-runner`. Each node profile has its own invite, stable guest identity,
+disk and resource settings; the runner owns a separate sandboxed `wecolab-vm`
+worker and network backend for each running profile. Profiles can target
+different fabrics, subject to the Mac's combined resource budget.
+
+Closing the window leaves the app and VMs running. Explicit **Quit / ⌘Q**
+coordinates shutdown of every VM, including CLI-started nodes, and waits for
+worker exit before quitting. The runner stays idle afterward; opening the UI
+alone does not restart stopped nodes. A GUI crash does not kill its workers.
+
+This is not a host-network isolation guarantee. Default `isolated` profiles
+cannot start in this build; `localNetwork` is only for explicitly trusted
+fabrics. See the [Mac guide](../mac/README.md) and
+[Mac trust boundary](security.md#mac-vm-and-host-boundary).
 
 ## Projects, people and shared capacity
 

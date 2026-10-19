@@ -38,6 +38,29 @@ policy and operator edits are not overwritten during uninstall. Privileged suppo
 are verified before placement and only install-owned copies are removed. Actual reboot,
 partial-install and provider-failure observations remain release gates beyond unit tests.
 
+## Mac VM and host boundary
+
+The Linux workload rules above are not a firewall protecting the Mac from a
+fabric's administrators: they control their guest as root. **Untrusted/friend
+fabrics cannot start in this build.** The default `isolated` policy rejects
+startup before provisioning. Explicitly selecting `localNetwork` is appropriate
+only for a trusted fabric; it does not guarantee exclusion of the Mac, LAN
+devices or other VMs. Do not use it to bypass the strict-mode blocker.
+
+Each VM worker is App-Sandboxed and receives a capability for its own profile
+directory. Its network child inherits that sandbox. The guest's writable
+host-guest channel is a fixed-size 16 MiB image, not an unbounded host directory.
+The app, CLI and provisioning runner are trusted same-user host processes; this
+is not isolation from another process running as that user. App Sandbox and the
+user-space network filter are not substitutes for verified OS-enforced network
+isolation, nor guarantees against hypervisor or OS vulnerabilities.
+
+The runner admits VMs against combined maximum CPU/memory reservations plus
+per-worker overhead; these are admission limits, not hard quotas on every host
+allocation. Local stop/reset/remove actions do not revoke remote fabric
+membership. Remove the box in its Console as described in the
+[Mac guide](../mac/README.md#not-done-yet) before deleting its identity.
+
 ## Release and privileged supply chain
 
 The supported production bootstrap is **not** `curl main/install.sh | sudo bash` or the

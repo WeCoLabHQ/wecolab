@@ -87,6 +87,9 @@ started headlessly through the CLI. **Open WeCoLab at login** controls the UI
 login item. A user LaunchAgent owns the runner, independent of the UI, and
 appears under macOS Login Items/background permissions.
 
+Reopening the app alone leaves stopped nodes stopped. Choose **Start node** or
+use `wecolab-node up --node NAME-OR-ID` to start one again.
+
 Resource admission reserves each preparing/running/stopping VM's maximum idle
 CPUs and memory, plus 1 GiB per worker. The combined budget leaves one logical
 CPU and 4 GiB memory for the host. These are admission limits, not a hard quota
@@ -136,6 +139,29 @@ directory and LaunchAgent. Always use a disposable root for smoke tests, never
 the existing node. Keep the installed app/CLI path stable while its runner is
 registered. Another client connects to an already registered runner rather than
 replacing it with its own build.
+
+### Updating a shared-runner installation
+
+For an installation that already uses the shared runner:
+
+1. **Quit WeCoLab** and confirm all nodes are stopped with
+   `wecolab-node status --json`. If Quit reports a failure, resolve it before
+   replacing executables. Keep other clients from starting nodes during the update.
+2. With the GUI closed, unload the default-root runner:
+
+   ```bash
+   launchctl bootout "gui/$(id -u)/io.wecolab.runner"
+   ```
+
+3. Replace the app and any separately installed CLI and its three helpers with
+   the complete `make sign` package, keeping their installed paths stable.
+4. Reopen the app. It registers the updated runner; profiles whose auto-start
+   setting is enabled may start because this is a new runner launch.
+
+Replacing files alone does not replace an already running supervisor. For a
+custom `--root`, use that root's hashed service label from its LaunchAgent plist,
+not the default service above. Do not delete profile state, reset, or re-enroll
+an existing VM as part of a host-app update.
 
 ## What happens
 

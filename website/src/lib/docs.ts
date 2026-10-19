@@ -98,7 +98,7 @@ export const docs: Doc[] = [
     title: "WeCoLab for Mac",
     source: "mac/README.md",
     group: "Development",
-    summary: "Building the Apple Silicon Mac node from source.",
+    summary: "Build and manage Mac node profiles, background operation, shutdown and trust limits.",
   },
   {
     slug: "hardening",

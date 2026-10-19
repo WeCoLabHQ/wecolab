@@ -59,12 +59,13 @@ import { url } from "../lib/paths";
         <div class="lane-copy">
           <h3>Understand the idle Mac.</h3>
           <p>
-            The <a href={url("docs/mac/")}>Mac node</a> runs a Debian VM and
-            joins its owner's site over Nebula. It reserves a baseline of
-            resources, allows more when idle, and makes room again when the
-            person returns. Work on its join and reset experience, resource
-            reporting, or the awkward transitions between active, idle, sleep
-            and disconnect. Idle capacity is not a place for a database.
+            The <a href={url("docs/mac/")}>Mac app and CLI</a> share a runner
+            with one Debian VM per node profile. Each VM joins its selected site
+            over Nebula and makes room when the person returns. Work on profile
+            lifecycle, coordinated Quit, resource reporting, or transitions
+            between active, idle, sleep and disconnect. Strict isolation for
+            untrusted fabrics remains blocked; idle capacity is not a place
+            for a database.
           </p>
         </div>
         <span class="lane-kind">Swift / Lifecycle</span>
@@ -107,7 +108,7 @@ import { url } from "../lib/paths";
           <p>
             The Go code reconciles site and app state from Git, handles roles
             and moves, and refuses destructive steps without evidence. The Swift
-            code owns the Mac VM and its host-guest boundary. If either is your
+            code owns the Mac runner, VM workers and host-guest boundary. If either is your
             kind of work, start with a behavior you can explain and reproduce
             rather than a sweeping rewrite. The{" "}
             <a href={url("docs/security/")}>security model</a> is worth reading

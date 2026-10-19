@@ -173,11 +173,20 @@ under Offers, with enough storage (a database takes 20Gi, each volume 5Gi).
 ## 5. Add boxes to a site
 
 In **Sites**, on the site's card, choose **Add a box** (the site's owners and admins see it). On another
-Linux box at that site, run the command it shows. For a Mac, choose **Add a Mac** and paste the invite
-into WeCoLab for Mac (mac/README.md); a Mac cannot join on a Linux box's invite, nor a Linux box on a
-Mac's. Work runs on a Mac only while nobody is using it, and only apps placed there through a
+Linux box at that site, run the command it shows. For a Mac, choose **Add a Mac**, then use **Add node**
+in [WeCoLab for Mac](../mac/README.md#use) and confirm the invite's exact Console. Each profile has
+its own VM, invite, identity, disk and resource settings; profiles may target different fabrics.
+A Mac cannot join on a Linux box's invite, nor a Linux box on a Mac's.
+
+**Only trusted fabrics can start Mac nodes in this build.** Default `isolated` profiles remain
+blocked before provisioning. Enable `localNetwork` only when you trust the fabric's administrators
+with access to the Mac's network; it does not guarantee Mac/LAN or peer-VM exclusion.
+
+Work runs on a Mac only while nobody is using it, and only apps placed there through a
 best-effort offer; databases never run there. A box's name is `<site>-<host>`, unique across the
-fabric: a second box with the same host name is refused.
+fabric. New Mac profiles get stable, distinct guest hostnames; changing a profile's display name
+does not rename its box. Closing the Mac window keeps VMs running; **Quit / ⌘Q** stops all profiles,
+including CLI-started nodes. See [Mac node operations](operations.md#mac-node-lifecycle).
 
 ## 6. Invite people
 

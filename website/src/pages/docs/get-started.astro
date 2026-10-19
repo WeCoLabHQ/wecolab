@@ -76,9 +76,11 @@ const doc = (slug: string) => docHref(docs.find((item) => item.slug === slug)!);
         <p>
           A vault is needed before a project's first app with a database;
           Backblaze B2 is the tested provider, and other S3-compatible Object
-          Lock stores require manual bucket setup. On Apple Silicon, the Mac
-          node is built from source and joins through a Debian VM, not as the
-          first site.
+          Lock stores require manual bucket setup. On Apple Silicon, build
+          WeCoLab for Mac from source and add a profile for each node. Each runs
+          its own Debian VM and joins an existing site, not the first site.
+          Only trusted-LAN profiles can start in this build; strict-isolation
+          profiles remain blocked.
         </p>
         <a class="text-link" href={`${doc("install")}#3-sign-in`}>
           Set up storage ↗

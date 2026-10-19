@@ -201,9 +201,10 @@ import { url } from "../lib/paths";
         </h2>
       </div>
       <p>
-        Set a base allocation for the Linux VM, then let it use more when you're
-        away. Eligible best-effort apps run while the Mac is idle, and give way
-        when you return.
+        Give each node profile its own Linux VM and resource settings. Eligible
+        best-effort apps run while the Mac is idle and give way when you return.
+        This build supports explicitly trusted LAN networking only; strict
+        isolation for untrusted fabrics remains blocked.
       </p>
     </div>
     <div class="idle-panel" id="idle-demo">
@@ -288,7 +289,7 @@ import { url } from "../lib/paths";
           </p>
         </div>
         <p class="idle-small">
-          Example profiles, not live metrics: 2 base CPUs, 6 idle CPUs. The VM
+          Example resource settings, not live metrics: 2 base CPUs, 6 idle CPUs. The VM
           keeps its 6 CPUs; while you're active its memory goes back to macOS
           and its apps move off, so it sits quiet.
         </p>

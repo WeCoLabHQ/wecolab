@@ -429,8 +429,10 @@ whether its person is active or idle.
 
 - **Add a box** (members of the site's project, and admins) shows a join command for another Linux box at
   that site. Run it as root on the box. A box's name is `<site>-<host>`, unique across the fabric.
-- **Add a Mac** shows an invite to paste into WeCoLab for Mac ([mac/README.md](../mac/README.md)). A Mac
-  cannot join on a Linux box's invite, nor a Linux box on a Mac's.
+- **Add a Mac** shows an invite for **Add node** in [WeCoLab for Mac](../mac/README.md#use).
+  Each profile needs its own invite and confirmation of the exact Console. A Mac cannot join on a
+  Linux box's invite, nor a Linux box on a Mac's. Only explicitly trusted `localNetwork` profiles
+  can start in this build; default strict-isolation profiles remain blocked.
 - **Remove**, on a non-manager box, takes it out of the Fabric and puts its join certificates on the
   fabric's blocklist; the writer also blocklists its reported renewals. Other boxes apply the
   blocklist at their next successful sync, normally within the hour. Offline or failing boxes retain
@@ -451,12 +453,21 @@ Join commands and invites are shown once, work once, and last a day.
 
 ### Laptops
 
-A Mac joins as a laptop node: WeCoLab for Mac runs a small Linux VM that joins the site. Only best-effort
-work runs on it: the apps without a database of projects whose every offer held at that site, directly or
-through a pool, is best effort ([Offers and pools](#offers-and-pools)). An offer that names boxes must name
-the Mac's. The site owner's own apps and every database stay off it. Its pods start only while its person is
-idle, and are evicted a minute after they return. Its capacity is best effort, so Resources counts it
-apart from what the site always has.
+Each Mac profile joins as a separate laptop node: its own Linux VM, guest identity and disk,
+managed by the app and CLI through one background runner. Profiles can join different fabrics;
+this does not guarantee network isolation between them. The fabric's administrators control its
+guest as root, so only trusted fabrics may use this build's `localNetwork` mode.
+
+Only best-effort work runs on a laptop node: the apps without a database of projects whose every
+offer held at that site, directly or through a pool, is best effort
+([Offers and pools](#offers-and-pools)). An offer that names boxes must name that profile's box.
+The site owner's own apps and every database stay off it. Its pods start only while its person is
+idle, and are evicted a minute after they return. Its capacity is best effort, so Resources counts
+it apart from what the site always has.
+
+Closing the Mac window leaves nodes running; **Quit WeCoLab / ⌘Q** shuts down every profile,
+including nodes started through the CLI. The app waits for shutdown and stays open if it fails.
+See [Mac node operations](operations.md#mac-node-lifecycle) for restart and login behavior.
 
 ### Add a site
 

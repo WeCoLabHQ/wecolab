@@ -33,9 +33,22 @@ go vet ./...
 go test -race -count=1 ./...
 make dist                         # Linux amd64 and arm64 binaries, mutates join.sh if stale
 python3 -m unittest discover -s hack -p 'test_catalog_import.py'
-cd mac && swift test               # arm64 macOS 14+ (CI uses macOS 15)
+make -C mac test                   # Swift tests and Go backend race tests; arm64 macOS 14+
+make -C mac test-sandbox           # build/sign package and exercise a signed VM worker
 make crds                          # regenerate api deep copies and bundled CRDs after API changes
 ```
+
+Mac development uses the Go toolchain specified by `mac/network/go.mod`. The
+signed-worker smoke checks a disposable Application Support directory capability
+and confirms strict startup remains blocked without booting a VM. It does not
+prove real guest enrollment or the GUI's lifecycle.
+
+For native lifecycle changes, use a disposable `--root PATH` and signed app/helper
+package: check that closing the window leaves the VM running, explicit Quit waits
+for all workers (including CLI-started nodes), failed shutdown keeps the app open,
+and a GUI crash does not kill a VM. The runner must remain idle after successful
+Quit until an explicit start or its next launch. Keep production profiles out of
+these smoke runs. See the [Mac guide](../mac/README.md) for setup and upgrade steps.
 
 The decisions that must never go wrong are pure functions with table tests: an app's role at a site and
 its database patches (`RoleAt`, `DBPatch` in `internal/warden/role.go`), moves (`PlannedMove`,
@@ -339,7 +352,8 @@ other values, commit history or publication metadata.
 
 `.github/workflows/verification.yml` has independent Linux Go/race/shell/amd64+arm64,
 Python 3.14 importer fixture (Jinja2 3.1.6, PyYAML 6.0.3, MarkupSafe 3.0.4), ARM macOS
-Swift/NoCloud ISO and main-only disposable Docker fabric jobs. Importer upstream input is
+Swift/NoCloud ISO, Go network race and signed-worker sandbox checks, and main-only
+disposable Docker fabric jobs. Importer upstream input is
 `../homelabos` commit `411f2c6802a73aaf5517ed3b3ff01a083312d5c9`; CI uses
 checked-in fixture tests, never a moving upstream branch. Website root/subpath checks stay
 in `website.yml`. The trusted-main integration job uses an ephemeral GitHub-hosted

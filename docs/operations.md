@@ -110,6 +110,34 @@ files on that site's volumes have no copy elsewhere and are gone.
 
 **Add a site, add a box.** See install.md, steps 4 and 5.
 
+### Mac node lifecycle
+
+The app and CLI control the same per-user runner and node profiles. **Start node /
+Stop node**, `wecolab-node up --node NAME-OR-ID`, and
+`wecolab-node down --node NAME-OR-ID` affect one profile;
+use `wecolab-node list` to identify it. Source builds place the CLI and its three
+required helpers in `mac/dist/`. See the [Mac guide](../mac/README.md#use) for
+complete commands and the trusted-LAN restriction.
+
+| Action | Result |
+|---|---|
+| Close the app window | The menu-bar app and VMs keep running. |
+| Quit WeCoLab / ⌘Q | Requests shutdown of every profile, including CLI-started VMs, and waits for worker exit and disk ownership release before exiting. |
+| Shutdown fails or cannot be confirmed | Quit is cancelled; the app stays open with an error. Inspect node status before retrying. |
+| App crashes or is force-quit | The runner preserves the VMs; this is not a way to stop them. |
+
+During coordinated shutdown, status remains available but app/CLI changes are
+rejected. After Quit, the runner stays idle. Reopening the app does not restart
+stopped VMs: choose **Start node** or use the CLI. **Open WeCoLab at login**
+controls the UI login item; per-profile auto-start settings apply when the
+runner next launches, such as at login. Quit does not erase those preferences.
+
+Quitting or stopping a VM preserves its disk and enrollment. For an upgrade,
+follow [the shared-runner update procedure](../mac/README.md#updating-a-shared-runner-installation);
+do not reset a VM or delete its profile to update the app.
+
+### Other box operations
+
 **Boxes for workspaces.** install.sh labels a box that has `/dev/kvm` `wecolab.io/kvm=true`, when it joins
 and at every converge (`sudo bash install.sh` on the box), so a box whose virtualization was turned on later
 gets it from a converge. On amd64 the label brings the kata-deploy DaemonSet (`kube-system`), which installs

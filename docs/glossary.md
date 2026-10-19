@@ -42,15 +42,16 @@ RPO. For those the last column says *upstream*.
 
 | Term | What it is | Kubernetes / standard equivalent |
 |---|---|---|
-| Box | One Linux machine of a site, or the Debian VM a Mac runs. It runs Nebula and k3s on the host. Named `<site>-<host>`, unique across the fabric. | A Kubernetes node (the machine) |
+| Box | One Linux machine of a site, or one Mac profile's Debian VM. It runs Nebula and k3s on the host. Named `<site>-<host>`, unique across the fabric. | A Kubernetes node (the machine) |
 | Manager | A site's first box. It runs the k3s server, Warden's status and, at a steward, the certificate service. It cannot be removed as an individual box; an admin can remove an eligible entire site from the Fabric, but its old manager's disk and copy are not remotely erased. | A k3s server node (control plane that also runs work) |
 | Node | Any box that joins a site after its manager. | A k3s agent (worker node) |
 | KVM box | A box whose kernel offers hardware virtualization (`/dev/kvm`). install.sh labels it, and on amd64 Kata Containers is installed there, so workspaces can run on it. | A node labelled `wecolab.io/kvm=true` |
 | Kata Containers | Runs a pod in its own small VM with its own kernel, on a KVM box; WeCoLab uses its Cloud Hypervisor runtime for workspaces. | A RuntimeClass (`kata-clh`), installed by the kata-deploy DaemonSet |
-| Laptop node | A node running in WeCoLab for Mac's VM. Only best-effort work runs there, and only while its person is not using the Mac. | A worker labelled `wecolab.io/laptop=true` and tainted `wecolab.io/laptop` and `wecolab.io/idle` |
+| Laptop node | A node running in one WeCoLab for Mac profile's VM. Only best-effort work runs there, and only while its person is not using the Mac. | A worker labelled `wecolab.io/laptop=true` and tainted `wecolab.io/laptop` and `wecolab.io/idle` |
+| Mac node profile | One node's stable local ID, guest hostname, fabric invite, enrollment, disk and resource settings. A Mac can have several profiles; changing a display name does not change guest identity. | Per-VM configuration and storage |
 | Idle, active, idle taint | Whether the Mac's person is using it. While they are active, the node agent keeps the `wecolab.io/idle` taint on the node, which evicts best-effort pods after a minute. | A node taint (NoSchedule, NoExecute) |
-| Reservation, idle profile | What a Mac gives its VM: the reservation always, while WeCoLab runs; the idle profile, a larger size, only while nobody touches the Mac. | VM resource settings, like Docker Desktop's |
-| Host-guest channel | The `share/` folder on the Mac, mounted at `/wecolab` in the VM. It carries the mode file, the join log and `nebula.json`. | A virtio-fs shared folder |
+| Reservation, idle profile | A VM's active memory reservation and larger idle settings. The VM boots with its maximum CPU/memory size; ballooning returns excess memory while the person is active. The runner admits nodes against their combined maxima plus overhead. Not the same as a Mac node profile. | Per-VM resource settings and aggregate admission limits |
+| Host-guest channel | Each profile's `share/`, a mounted fixed-size 16 MiB image exposed at `/wecolab` in its VM. It carries the mode file, join log and `nebula.json`. | A bounded virtio-fs shared filesystem |
 | Nebula | The encrypted network between boxes (`10.77.0.0/16`, one `/24` per site). All traffic between sites crosses it. | *Upstream*: an overlay VPN |
 | Nebula address | A box's address on Nebula: `10.77.<site index>.<box number>`. WeCoLab for Mac calls it "Mesh address". | An overlay IP |
 | Site index, `nextBox` | A site's number in the Nebula network, and the number its next box gets. Box numbers are never reused. | IP address management (IPAM) |
@@ -152,4 +153,5 @@ RPO. For those the last column says *upstream*.
 | NetBird | The people mesh's server and client. | *Upstream* NetBird |
 | Traefik, CoreDNS | The Door's proxy and Names' DNS server. | *Upstream* Traefik, CoreDNS |
 | SOPS, age | The encryption of every secret in the Fabric. | *Upstream* SOPS, age |
-| WeCoLab for Mac, `wecolab-node` | The Mac menu-bar app and its CLI. They run a Debian VM that joins a site as a laptop node. | None; like Docker Desktop's VM |
+| WeCoLab for Mac, `wecolab-node` | The Mac menu-bar app and CLI, both clients of one background runner. Each profile's Debian VM joins a site as a laptop node. Closing the window keeps nodes running; explicit Quit shuts down all of them. | Desktop and command-line clients |
+| `wecolab-runner`, `wecolab-vm` | The per-user background supervisor and per-profile sandboxed VM worker. The runner owns worker lifecycles independently of the UI and stays idle after a successful app Quit. | A user LaunchAgent and per-VM helper processes |
