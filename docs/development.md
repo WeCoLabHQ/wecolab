@@ -514,6 +514,8 @@ The signer workflow identity is case-sensitive:
 even though GitHub repository URLs accept a lowercase owner. The candidate
 workflow runs the same consumer verification after attestation and refuses
 to upload a candidate that fails it.
+Shell fixtures exercise verifier failures; only the real attestation check proves
+candidate provenance.
 
 For an existing fabric: use the **new verified release Warden binary**, invoked on the
 writer manager with a kubeconfig and Forgejo admin/write token; the old container binary

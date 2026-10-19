@@ -551,6 +551,9 @@ func TestInstallAppArmorOwnership(t *testing.T) {
 			p := profiles + "/cri-containerd.apparmor.d"
 			if tc.original {
 				writeFile(t, p, "original policy\n", 0o640)
+				if err := os.Chmod(p, 0o640); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if tc.loaded {
 				writeFile(t, dir+"/loaded", "cri-containerd.apparmor.d (enforce)\n", 0o600)
