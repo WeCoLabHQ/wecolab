@@ -1067,7 +1067,8 @@ create() {
   if [ ! -f "$STATE/card-printed" ]; then
     (umask 077
      { echo "WeCoLab recovery card for $ZONE, $(date -u +%F)"
-       echo "With this key and any copy of the Fabric, the whole fabric can be rebuilt (docs/operations.md)."
+       echo "This key decrypts secrets in a retained copy of the Fabric."
+       echo "Automatic fabric rebuild is not implemented; see docs/operations.md for the recovery limits."
        echo "Keep it offline. Anyone holding it can read every secret of the fabric."
        echo; jq -r .recoveryKey "$st"; } > "$card")
     touch "$STATE/card-printed"

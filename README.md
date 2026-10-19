@@ -13,7 +13,7 @@ Each location controls what it shares; you manage apps and capacity through a br
 
 ![WeCoLab Console showing three sites and the controls for sharing their capacity](docs/images/console-sites.png)
 
-*The Console's sites and resource-sharing view. Names and addresses shown are example data.*
+*The current Console's sites and resource-sharing view, illustrated with example identities, sites and status data—not a live deployment.*
 
 ## Try locally
 

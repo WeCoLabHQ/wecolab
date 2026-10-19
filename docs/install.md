@@ -1,8 +1,9 @@
 # A fresh fabric, start to finish
 
-This is the whole path from nothing to two sites running a replicated app. Every step after the first
-command happens in the Console or by pasting a one-time invite. WeCoLab's own words (fabric, site, box,
-steward, writer, Door, vault, project, offer) are explained in the [glossary](glossary.md).
+This is the path from a new box to two sites running a replicated app. The verified release download
+and root installer run on each Linux box; subsequent fabric changes happen in the Console or with a
+one-time invite. WeCoLab's own words (fabric, site, box, steward, writer, Door, vault, project, offer)
+are explained in the [glossary](glossary.md).
 
 ## What you need
 
@@ -38,16 +39,18 @@ below).
 ## 2. Install the first site
 
 On the public box, first obtain the exact release tag and **40-hex source snapshot commit**
-from the published release announcement. No release was published as part of this remediation:
-these commands are usable only after an authorized release exists. Install `gh` (GitHub CLI),
+from the authorized release announcement. These commands require a published, attested
+release; a tag alone is not proof. Install `gh` (GitHub CLI),
 `jq`, `shasum`, `git`, `curl` and `bash` in your unprivileged account. Download all seven
 release payloads and the manifest to a directory that only you can write; the tag identifies
 the download, while the expected commit and attestation establish trust independently:
 
 ```bash
+set -euo pipefail
 RELEASE_TAG='<announced-immutable-tag>'
 SOURCE_COMMIT='<announced-40-hex-public-snapshot-commit>'
 mkdir -m 700 -p "$HOME/wecolab-release"
+chmod 700 "$HOME/wecolab-release"
 gh release download "$RELEASE_TAG" -R wecolabhq/wecolab -D "$HOME/wecolab-release" \
   -p 'release.json' -p 'source.tar.gz' -p 'install.sh' -p 'VERSION' -p 'warden-*' -p 'console-*'
 gh attestation verify "$HOME/wecolab-release/release.json" -R wecolabhq/wecolab \
@@ -56,6 +59,7 @@ gh attestation verify "$HOME/wecolab-release/release.json" -R wecolabhq/wecolab 
 git clone https://github.com/wecolabhq/wecolab.git "$HOME/wecolab-source"
 git -C "$HOME/wecolab-source" checkout --detach "$SOURCE_COMMIT"
 bash "$HOME/wecolab-source/hack/release.sh" verify "$HOME/wecolab-release" "$SOURCE_COMMIT"
+chmod 700 "$HOME/wecolab-release"/warden-{amd64,arm64} "$HOME/wecolab-release"/console-{amd64,arm64}
 sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh"
 ```
 
@@ -114,9 +118,10 @@ Then, in about ten minutes, it:
    people mesh as the Door;
 9. prints the Console's address and where the recovery card is.
 
-The recovery card holds the recovery key's private half. With it and any copy of the Fabric, the whole
-fabric can be rebuilt. It is written once to `/root/wecolab-recovery-card.txt`, readable only by root, and
-never printed. Copy it somewhere offline, then delete the file with
+The recovery card holds the recovery key's private half. It can decrypt secrets in a copy of the
+Fabric, but rebuilding a fabric from the card is **not built yet** ([operations.md](operations.md#backups-and-restore)).
+It is written once to `/root/wecolab-recovery-card.txt`, readable only by root, and never printed.
+Copy it somewhere offline, then delete the file with
 `shred -u /root/wecolab-recovery-card.txt`.
 
 If the install stops partway, run it again. Once the box belongs to a fabric, running the script with no
@@ -184,7 +189,7 @@ under Pending invites. Then they sign in to the Console.
 To reach apps published on the mesh from a phone or laptop, they install NetBird, choose the self-hosted
 server `https://mesh.fab.example.org` and sign in with the same account; the device is theirs and goes
 when they do. SSH keys a person adds in the Console (**Add a site**, Your SSH keys) reach root on the
-boxes of the sites their projects own within the hour (an admin's, every box).
+boxes of the sites their projects own at the next successful hourly sync (an admin's, every box).
 
 ## 7. Deploy
 

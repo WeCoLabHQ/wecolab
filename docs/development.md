@@ -382,6 +382,16 @@ revocation at both stewards and uninstall matching all three pre-install invento
 Measured capacity was again 4 CPUs, 15.61 GiB RAM and 83.75 GiB free Docker storage.
 No capacity, timeout, fencing, recovery-confidence or data-integrity gate was waived.
 
+The [2026-10-11 run](https://github.com/WeCoLabHQ/wecolab/actions/runs/38094543162)
+of snapshot `8491e46d422c9695f06cad7d2c32f741509ab418` later failed the unchanged
+180-second box-certificate blocklist gate. Both sites had fetched the new Git revision,
+but Flux's dependent Kustomizations had not all applied it: one site's settings still
+named the previous writer and had an empty blocklist. The other site applied the expected
+fingerprint at the deadline. This establishes delayed application, not a proven cause
+for the controller delay; the retained artifact lacks the relevant controller logs and
+events. No timeout, schema dependency or revocation requirement was relaxed.
+Earlier passing runs do not certify this snapshot or an installed fabric.
+
 The workflow handback gate and recovery preflight require `site == "pub"` and
 `writer == "pub"` as well as `isWriter`; a generic writer response is not proof
 that routing has converged. An isolated regression caught the public Door still
@@ -536,6 +546,7 @@ operator shell, run the **verified new** Warden on the writer manager:
 
 ```bash
 WARDEN="$HOME/wecolab-release/warden-amd64"   # use warden-arm64 on arm64
+chmod 700 "$WARDEN"                        # only after authenticating this release
 "$WARDEN" upgrade --stage begin --snapshot /path/to/offline-fabric-copy \
   --recovery-material /path/to/offline-recovery-card --backup-proof /path/to/proof.json \
   --local-site home

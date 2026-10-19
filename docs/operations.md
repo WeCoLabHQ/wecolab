@@ -1,15 +1,16 @@
 # Operations
 
-What a person does, and what the fabric does in answer. Everything here starts in the Console unless it
-says otherwise; every change it makes is a commit you can read in the Fabric's history. WeCoLab's own
-words (site, box, steward, writer, handover, vault, Door) are explained in the [glossary](glossary.md).
+What a person does, and what the fabric does in answer. Most actions start in the Console unless
+noted; fabric configuration changes are committed to Git, while host setup and local reconciliation
+are not. WeCoLab's own words (site, box, steward, writer, handover, vault, Door) are explained in the
+[glossary](glossary.md).
 
 Commands on a box use a **verified local release**, never a moving branch or an unverified
 `/join.sh` response. Follow [install.md](install.md#2-install-the-first-site) to authenticate
 the source commit, manifest and payload digests before root execution. Keep that directory:
 
 ```bash
-sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh" <argument>
+sudo WECOLAB_BIN="$HOME/wecolab-release" bash "$HOME/wecolab-release/install.sh" '<argument>'
 ```
 
 ## Apps
@@ -127,13 +128,15 @@ Its Warden starts the Door, Names, a lighthouse and a relay there, and every box
 lighthouses at its next sync. Then add its name server at your DNS host. The zone numbers name servers by
 address, not by join order, so check which one is `ns2` first (install.md, Optional).
 
-**Remove a box.** Sites → the site → the box → Remove. The box leaves the Fabric, and the same commit puts
-the certificates it joined with on the fabric's blocklist; the writer's revocation loop adds every renewal
-a steward signed for it. Every box drops them at its next sync, within the hour, and no steward renews the
-box again. Its address is never given to another box. Its site's Warden deletes its Kubernetes node once
-the site's copy of the Fabric no longer lists the box; a node younger than ten minutes is left alone, so a
-box joining right now is never mistaken for one that left. A site's manager cannot be removed this way: it
-leaves with its site.
+**Remove a box.** Evacuate its workloads and site-local volumes first: the Fabric does not
+replicate those files. Sites → the site → the box → Remove commits the removal and adds its
+join certificates to the blocklist; the writer's revocation loop adds every renewal a
+steward signed for it. Every box drops blocked certificates at its next sync, normally
+within the hour; an offline box keeps its last blocklist until it reconnects or its own
+certificate expires. Its address is never given to another box. Its site's Warden deletes
+its Kubernetes node after the site's copy of the Fabric no longer lists the box and the node has
+been unready for ten minutes. It does not drain the box first. A site's manager cannot be removed this way: it
+leaves with its site. Uninstall on the removed box when safe to access it.
 
 **Remove a site.** Sites → the site → Remove site (admins). It is refused for the writer, for a steward
 (Stop being a steward first: that commit re-encrypts the fabric's secrets without it), for the site that
@@ -145,14 +148,20 @@ first). Otherwise one commit:
 - takes the site off every app it held a standby for, and drops the offers it made;
 - puts the certificates of all its boxes on the blocklist.
 
-From there the writer stops pushing the Fabric to it, the Door and Names stop naming it, and every box
-drops its certificates at its next sync, within the hour: the site is off the mesh and receives nothing
-more. Then the Console rotates the vault key of every project whose database apps had a standby there
-(Rotate a vault key, below), since each of those apps' Secrets carried a copy of it. The site that left is
-no longer one of the apps' sites, so the old key is not kept for it: it is deleted at B2 as soon as the
-sites that remain report the new one. What the site already holds stays there: its copy of the Fabric up
-to that commit, its databases and volumes, and anything it could decrypt. Nothing in WeCoLab can reach
-into a site that has left.
+From there the writer stops pushing the Fabric to the removed site, and the Door and Names stop
+naming it. Connected boxes apply the blocklist at their next sync (normally within the hour);
+an offline box retains the blocklist it last received until it reconnects or its certificate
+expires. The removed site receives no further Fabric updates.
+
+After removal, check the Console's result for **Not rotated** projects. The Console
+attempts to rotate the vault key of every project whose active database apps held a
+standby there, but removal commits even when a provider rotation fails. For any failure,
+restore provider access and rotate that project's vault key in Storage; do not assume the
+old key was revoked. For a successful rotation, the old key remains usable until the
+writer has checked current app Secrets and fresh reports from the remaining sites, then
+confirmed provider deletion. What the site already holds stays there: its Fabric copy
+up to that commit, its databases and volumes, and anything it could decrypt. Nothing in
+WeCoLab can reach into a site that has left.
 
 **Rotate a vault key.** Storage → Rotate key commits a strictly increasing `key-version`
 and `mutation-revision` with the new bucket-scoped key and the retiring key IDs. The writer
@@ -176,7 +185,7 @@ keep old keys valid. Hand-entered vaults still require provider-side manual rota
    NetBird's service token and the storage account key were readable there. *Not built yet: rotating
    the CA and the tokens.* Rotate the storage account key at Backblaze now, and enter the new one in
    Settings. A fabric whose steward left on bad terms is safest rebuilt.
-3. Remove their site (above). Their boxes are off the mesh within the hour.
+3. Remove their site (above). Connected boxes apply its certificate blocklist at their next successful sync; this is not independent fencing.
 4. Remove each of their people (Members → Remove): Console access, bindings at every site, SSH keys
    and their devices on the people mesh go.
 5. Their projects' apps on your sites are yours to keep or Delete (Apps); withdraw any offers you made
@@ -287,7 +296,7 @@ accepts them, and keeps the old ones as `.bak`. Certificates last thirty days.
 **SSH keys.** A member's SSH keys (Console → Add a site → Your SSH keys) reach every box of the sites
 their projects own, and admins' keys reach every box, in a marked block of root's `authorized_keys` that
 each sync rewrites. Lines outside the block are the box's own. Removing or blocking a person removes their
-key within the hour.
+key at the next successful hourly sync. Offline or failing boxes retain their previous keys.
 
 **Rotate the Nebula CA.** *Not built yet; the CA lasts five years.* Settings → Rotate the Nebula CA. The
 new CA joins every box's bundle at the next sync; boxes are re-signed by it at their next renewal; the
@@ -332,10 +341,12 @@ Database prerequisites, local files, measured recovery and operational readiness
 separate. Persistent volumes are site-local and have no general WeCoLab backup.
 
 **Record a verified drill.** After an isolated runner has actually restored and read back
-data, retain its sanitized result and run the verified binary:
+data, retain its sanitized result and run the **verified release binary** (amd64 example;
+use `warden-arm64` on an arm64 host):
 
 ```bash
-warden record-restore --namespace <project> --app <app> --evidence /private/drill-result.json
+chmod 700 "$HOME/wecolab-release/warden-amd64"  # only after authenticating this release
+"$HOME/wecolab-release/warden-amd64" record-restore --namespace '<project>' --app '<app>' --evidence /private/drill-result.json
 ```
 
 The operator's kubeconfig authenticates the actor and App update permission. Writer Git
@@ -388,26 +399,40 @@ every box. Use the immutable version from the verified release's `VERSION`:
 
 1. Use the verified release's four Linux binaries, not an unreviewed source build. Set
    `<tag>` below to its `VERSION` value (the source snapshot's short commit).
-2. Make images with the verified `warden image`, once for each machine type (`amd64`,
-   `arm64`), and the matching verified SOPS payload:
+2. On the host holding the verified release and both verified SOPS payloads, run the
+   release's **host-architecture** Warden binary to make images for each target
+   architecture (`a=amd64`, then `a=arm64`). For an amd64 build host:
 
    ```bash
-   a=amd64 v=<tag> sops=/var/lib/wecolab/bin/sops-v3.13.3.linux.$a
-   warden image --name ghcr.io/wecolabhq/warden:$v --arch $a --out warden-$v-$a.tar "$HOME/wecolab-release/warden-$a"=/warden $sops=/usr/local/bin/sops
-   warden image --name ghcr.io/wecolabhq/console:$v --arch $a --out console-$v-$a.tar "$HOME/wecolab-release/console-$a"=/console $sops=/usr/local/bin/sops
+   v="$(cat "$HOME/wecolab-release/VERSION")"
+   a=amd64
+   sops="/var/lib/wecolab/bin/sops-v3.13.3.linux.$a"
+   chmod 700 "$HOME/wecolab-release/warden-amd64"  # verified binary for the build host
+   "$HOME/wecolab-release/warden-amd64" image --name "ghcr.io/wecolabhq/warden:$v" --arch "$a" --out "warden-$v-$a.tar" "$HOME/wecolab-release/warden-$a=/warden" "$sops=/usr/local/bin/sops"
+   "$HOME/wecolab-release/warden-amd64" image --name "ghcr.io/wecolabhq/console:$v" --arch "$a" --out "console-$v-$a.tar" "$HOME/wecolab-release/console-$a=/console" "$sops=/usr/local/bin/sops"
    ```
 
-3. On every box, copy the two tarballs for its machine type to `/var/lib/rancher/k3s/agent/images/`,
-   import them, and pin them so k3s keeps them:
+   On an arm64 build host invoke `warden-arm64` instead. The `--arch` value and
+   embedded Console/Warden/SOPS binaries must match the **target**, not the
+   builder. `warden image` packages the supplied files; it does not authenticate them.
+
+3. On every box, copy the two tarballs for **its** architecture to
+   `/var/lib/rancher/k3s/agent/images/`, import both and pin both image references
+   so k3s keeps them. For an amd64 box (`arm64` boxes use `a=arm64`):
 
    ```bash
-   k3s ctr images import /var/lib/rancher/k3s/agent/images/warden-<tag>-amd64.tar
-   k3s ctr images label ghcr.io/wecolabhq/warden:<tag> io.cri-containerd.pinned=pinned
+   v="$(cat "$HOME/wecolab-release/VERSION")"
+   a=amd64
+   for image in warden console; do
+     k3s ctr images import "/var/lib/rancher/k3s/agent/images/$image-$v-$a.tar"
+     k3s ctr images label "ghcr.io/wecolabhq/$image:$v" io.cri-containerd.pinned=pinned
+   done
    ```
 
-   and the same for the Console's. On each steward's manager, also copy all four tarballs to
-   `/var/lib/wecolab/dist/`: its Console hands them to boxes that join later, and a join without them
-   stops.
+   Each box needs the verified release's `VERSION` value; do not infer it from an
+   existing binary. On each steward's manager, also copy all four tarballs to
+   `/var/lib/wecolab/dist/`: its Console hands them to boxes that join later, and
+   a join without them stops.
 4. On the writer manager, follow the documented `begin → schemas → migrate → platform →
    complete` sequence with the verified new binary, operator kubeconfig and private
    Forgejo credentials. `begin` checks the exact writer-Git App/site inventory, offline

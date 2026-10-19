@@ -25,7 +25,8 @@ before claiming a tested recovery path.
   yields while its person uses it.
 - **Public site**: a site whose manager has a public address. It runs the **Door** (public entrance),
   **Names** (the fabric's DNS zone) and a Nebula **lighthouse and relay**. The first site of a fabric is
-  always public. The first public site also runs **NetBird** for people's devices.
+  always public. The first public site also runs the NetBird server for people's devices;
+  its box runs the NetBird client.
 - **Steward**: a site trusted with the fabric itself: it holds the fabric-level secrets (the Nebula CA
   key among them), renews certificates, runs a Console and can become the writer. The first site is a
   steward; the fabric's owner or an admin decides which other sites are. A site that is not a steward
@@ -91,8 +92,8 @@ keeps running what it has.
 Every change to the Fabric, the Console's and Warden's alike, is a conditional edit (`fabric.Edit`): the
 files are read from the writer's copy with their hashes, the change is decided from them, and the commit
 is made only if none of the files it changes changed meanwhile; otherwise they are read and the change
-decided again. The copy Flux applied to a site's cluster lags Git by up to a minute and is never the basis
-of a change.
+decided again. The copy Flux applied to a site's cluster lags Git and may be delayed by an offline site
+or unsuccessful reconciliation; it is never the basis of a Git mutation.
 
 Public and mesh routes use owner claims changed in the same commit as the App. A shared
 placement revision fences decisions against concurrent Site/Offer/Pool/App changes.
@@ -273,7 +274,8 @@ archiving WAL with fresh same-history primary/replay measurements proving the ob
 
 Before step 4 the move may be retargeted to another standby, or cancelled by moving back to the old
 primary. After it, a planned move elsewhere is refused, because another site promoting with the same token
-would fork the history: move again when this one is done, or force. No data is lost.
+would fork the history: move again when this one is done, or force. A completed token handover is designed
+to preserve committed database writes; it does not transfer site-local files or stand in for a restore drill.
 
 **Forced move.** The operator independently powers off or fully write-isolates the old
 history-bearing primary, then submits the fencing method/evidence against a writer-Git
@@ -417,11 +419,13 @@ a steward is added or removed it re-encrypts every sealed file in the same commi
 ## The Console
 
 The Console is the web interface, served through the Door at `console.<zone>`. It runs at every steward;
-the writer's is the one routed and the only one that accepts changes. Every change is decided from the
-Fabric as Git holds it, tried first as a dry run as the signed-in person against its site's API, and
-committed with `fabric.Edit` with that person as the author; then it asks its site's Flux to fetch the
-commit at once. Only new objects and the secrets it stores are also written straight to the local API. It
-reads live state from every site's published status.
+the writer's is the one publicly routed and the one that accepts ordinary changes. Desired-state changes
+are decided from the Fabric as Git holds it and committed conditionally with `fabric.Edit`, attributed
+to the signed-in person. App workloads are dry-run as that person's Kubernetes identity; other
+member- and project-checked actions can run as the Console. It asks local Flux to fetch a new commit
+at once. New objects and the secrets it stores may also be written straight to the local API.
+It reads live state from every site's published status. A steward's local Console can initiate a
+deliberate writer takeover even when it is not the current writer.
 
 Who someone is comes from their sign-in; what they may do comes from their Member, read again on every
 API request, so a person blocked, removed or demoted loses it at once. The session cookies are
@@ -454,16 +458,16 @@ and gets back its certificate, its site's settings and, for a new site, its plac
 
 | Lost | What keeps working | What stops | Recovery |
 |---|---|---|---|
-| A site that is not the writer | every other site, every app whose primary is elsewhere | apps whose primary was there, until moved | force the primary elsewhere; the site rebuilds its databases from the vault when it returns |
-| The writer | every site keeps running what it has | every change, moves included; a planned move in flight waits for it | switch the writer to another steward (docs/operations.md) |
-| The only public site | apps keep running at their sites; Nebula tunnels that exist stay up | public names, new people signing in, new Nebula discovery | add a second public site before it matters (people's sign-in stays at the first) |
-| A lighthouse | existing tunnels | finding hosts not already talked to | a second public site is a second lighthouse |
-| A box's certificate expires | nothing on that box's tunnels | the box drops off the fabric | remove the box, run `install.sh uninstall` on it (its k3s data goes), and join again with a new invite; not possible for a site's manager yet |
-| Every steward | apps keep running | all changes | a new box, the recovery card and any copy of the Fabric (not built yet) |
+| A site that is not the writer | every other site, every app whose primary is elsewhere | apps whose primary was there, until moved | independently fence its old write path before a forced move; the returning site's database rebuilds only after current-history survivor proof, and its local files do not move |
+| The writer | each site keeps running what it has | changes and move steps wait for a writer | manually take over on another steward; custody of divergent Git refs must succeed before the old writer is recreated |
+| The only public site | apps keep running at their sites; existing Nebula tunnels may stay up | public names, new people signing in, new Nebula discovery | add a second public site before it matters (people's sign-in remains at the first) |
+| A lighthouse | existing tunnels | discovering hosts not already contacted | a second public site provides a second lighthouse |
+| A box's certificate expires | no traffic on that box's tunnels | the box drops off the fabric | remove a non-manager box, run `install.sh uninstall` on it (its k3s data goes), and join again with a new invite; a manager cannot be removed as an individual box |
+| Every steward | apps keep running from their last applied state | all changes | the recovery card and a surviving copy of the Fabric could support rebuilding, but an automated recovery tool is not built |
 
 ## Versions
 
-Pinned in the install script and the Fabric's `system/`; checked quarterly. As of 2026-09-28:
+Pinned in the install script and the Fabric's `system/`; checked quarterly. These are source pins, not observations of versions currently installed on any host (checked against source on 2026-10-18):
 
 | Component | Version | Notes |
 |---|---|---|
@@ -478,4 +482,5 @@ Pinned in the install script and the Fabric's `system/`; checked quarterly. As o
 | Traefik | 3.7.13 | the Door |
 | CoreDNS | 1.14.7 | Names; the zone file is written by the entrance Warden |
 | NetBird server | 0.79.0 | unattended first run through `POST /api/setup` |
+| NetBird host client | 0.80.0 | `install.sh` downloads the box client separately from the 0.79.0 server image |
 | Kata Containers | 4.2.0 | kata-deploy rendered without Helm's hooks (`hack/kata-render.sh`); Cloud Hypervisor only |

@@ -1,5 +1,10 @@
 # WeCoLab for Mac
 
+Requires an Apple Silicon Mac running macOS 14 or newer and a site already
+created on a supported Linux box. Build from this checkout with Swift 6 and
+Apple's signing tools; the ad-hoc-signed build is for the Mac that built it,
+not a notarized release for other Macs.
+
 A Mac cannot run k3s, so this runs one small Debian VM through Virtualization.framework and, inside it,
 the standard join (`install.sh`). The Mac becomes a laptop node of its owner's site, over Nebula.
 Paste an invite (Console: Sites → your site → Add a Mac), set what the Mac contributes, press Start node.
@@ -8,7 +13,7 @@ Paste an invite (Console: Sites → your site → Add a Mac), set what the Mac c
 WeCoLabCore/      the VM logic, no UI
   Config.swift      config model, invite check, paths, lock, reading what the guest publishes
   Provision.swift   Debian image download + SHA512 check, sparse grow, NoCloud seed (user-data), reset
-  NodeVM.swift      the VM actor: devices, start/stop, balloon + priority when the person is active
+  NodeVM.swift      the VM actor: devices, start/stop, memory balloon + activity mode
 wecolab-node/     headless CLI on the same core
 WeCoLab/          SwiftUI menu bar app and its main window
 Plugins/          compiles ../install.sh into WeCoLabCore at build time
@@ -72,11 +77,13 @@ The CLI does the same, headless:
 ```bash
 dist/wecolab-node up --invite - --cpus 2 --memory 4 --disk 20 --idle-cpus 6 --idle-memory 12
                              # --invite - reads the invite from stdin (paste it), never from the command
-                             # line, where every process can read it; stays in the foreground; flags left
-                             # out keep their saved value; the first start asks to confirm the invite's Console
-dist/wecolab-node status     # both profiles, VM, mode, Nebula address, join progress (last lines of the join log)
-dist/wecolab-node down       # asks the guest to power off; forces it after 60 s (also stops the app's VM)
-dist/wecolab-node reset      # deletes the guest and the invite; remove the box in the Console first
+                             # line, where every process can read it; stays in the foreground; omitted
+                             # flags keep saved values; the first start asks to confirm the invite's Console
+dist/wecolab-node status     # profiles, VM, mode, Nebula address, join progress (last lines of the join log)
+dist/wecolab-node down       # signals the running app or CLI, waits up to 90 s for it to exit;
+                             # the VM asks the guest to power off and forces it after 60 s
+dist/wecolab-node reset      # deletes the guest and invite, keeps downloaded image and settings;
+                             # remove the old box in the Console and wait for node deletion first
 ```
 
 The app and the CLI share `config.json`. Only one VM runs per user (`vm.pid` is a lock), so they never share
@@ -112,8 +119,15 @@ prove guest boot; the release gate still requires a disposable ARM VM with a thr
 invite/fabric, observing cloud-init `wecolab-join`, its log, Nebula and node-agent, then
 removing only that VM and its throwaway identity.
 
-`guest-version` records which WeCoLab for Mac made `disk.img`. v1 kept a NetBird guest at the same paths;
-a disk without the stamp, or a share with v1's `netbird.json`, is not started until it is reset.
+`guest-version` is the VM disk's compatibility generation (`2`), not the app's release
+version or a report of the guest's installed Warden version. The app bundle's Info.plist
+reports version `0.1` (build `1`); `wecolab-node status` reports config, VM and join state,
+not a software release version. Installing a newer host app does not replace a current
+guest's seed, embedded installer or installed guest software: `Provision.run` reuses its
+disk and only grows it if requested. Do not reset a live VM to "upgrade" it; that
+deletes its disk and identity and requires removing and rejoining its box. A v1 NetBird
+guest at the same paths, a disk without the current stamp, or a share with v1's
+`netbird.json`, cannot start until reset.
 
 The VM: the idle profile's CPUs and memory, EFI boot, virtio disk + seed, NAT network with a fixed MAC
 (cloud-init binds the network config to it), a memory balloon, entropy, a virtio console to `console.log`,
@@ -180,12 +194,14 @@ holder runs no apps.
 
 ## Not done yet
 
-- No download progress; the first start is a silent 3 GiB wait.
+- No download progress bar; the first start shows a download status message but not progress through the 3 GiB image.
 - Going from idle to active, the balloon asks for everything above the reservation back at once, while the
   taint's drain takes up to a minute.
 - When the Mac sleeps the node goes NotReady; nothing drains it first.
-- Leaving a site: `down`, remove the box in the Console (Sites → the site → the box → Remove), which
-  blocks its Nebula certificates, then `reset`. The Console does not delete its Kubernetes node yet: a
-  member of the site's project deletes it on the site's manager (`kubectl delete node <site>-mac-…`).
+- Leaving a site: `down`, remove the box in the Console (Sites → the site → the box → Remove),
+  wait for its site's Warden to delete the Kubernetes node, then `reset`. The same box
+  name cannot be rejoined while its old node remains. Certificate blocklisting reaches
+  other boxes at their next successful sync (normally within an hour); offline or failing boxes
+  retain earlier blocklists. Removing a box is not instant isolation.
 - A join whose answer was lost after the Console accepted it keeps retrying with a spent invite; the log
-  says so, and the way out is to remove the box, reset and add the Mac again.
+  says so, and the way out is to remove the box, wait for node deletion, reset and add the Mac again.

@@ -1,9 +1,10 @@
 # The Console
 
 The Console is WeCoLab's web interface, at `https://console.<zone>`. It shows what every site reports
-about itself. Every change you make in it is a commit to the Fabric (the Git repository holding the
-cooperative's desired state), with you as the author; each site's Flux applies the commit and its Warden
-does the rest. This guide follows the pages in the order people meet them. Site, box, project, vault,
+about itself. Desired-state changes are conditional commits to the Fabric (the Git repository holding
+the cooperative's desired state), attributed to you; each site's Flux applies its local copy and Warden
+does the rest. External provider actions and browser-only appearance settings are not Git commits.
+This guide follows the pages in the order people meet them. Site, box, project, vault,
 steward, writer, the Door and the other WeCoLab terms are explained, with their Kubernetes equivalents, in
 the [glossary](glossary.md). [operations.md](operations.md) says what the fabric does in answer to each
 action.
@@ -36,9 +37,10 @@ A member sees their projects' apps, domains, vaults and volumes, every site, eve
 that concern their projects. The members of the project that owns a site also add and remove that site's
 boxes and Macs, and make, key and withdraw its offers. Anyone signed in saves their own SSH keys.
 
-The Console acts as you: its calls to its site's Kubernetes API carry your identity, so the RBAC Warden
-binds from the Member records has the last word. A few steps it takes as itself once it has checked your
-role and projects, such as invites, offers, keys and domains.
+For app resources the Console dry-runs against its site's Kubernetes API as you, so the RBAC Warden
+binds from Member records and admission policy can refuse them. Other steps run as the Console
+after it checks your role and projects, such as invites, offers, keys and domains; remote sites'
+admission and scheduling remain authoritative.
 
 ## Signing in
 
@@ -66,6 +68,10 @@ Door restarts. The change may have been made anyway: refresh and look before try
 
 The Overview separates operational readiness from data protection.
 
+![The current Console Overview with example sites and no deployed apps](images/console-overview.png)
+
+*Console illustrations use example identities, sites and status data, not a live installation.*
+
 Four counts, then a line for every app and every site:
 
 - **Sites ready**: sites whose Warden answered, of all sites.
@@ -82,7 +88,10 @@ one-time-secret dialogs are not rebuilt by polling.
 
 ## Deploy an app
 
-![Deploy an app: the catalog, each entry with its category, its database, volumes and validation](images/console-deploy.png)
+![The current catalog showing distinct upstream validation and WeCoLab certification labels](images/console-deploy.png)
+
+*The checked-in catalog rendered by the actual Console UI; the surrounding identity and site data
+are examples. Rendering a recipe does not prove that it deploys or restores successfully.*
 
 **Deploy an app** (or **+ Deploy** at the top) turns a catalog entry or a container image into an App:
 the Fabric's record of one application, its sites, its primary and its hostname.
@@ -297,10 +306,13 @@ the Apps page has them, that is for the app's first standby, not necessarily the
 **Planned switchover.** An app with a database whose primary is healthy, with Force not ticked. On Change
 primary the Console checks StandbyStaged for the target and, for a new move, PrimaryHealthy, WithinRPO and
 that the primary is writable; when one fails it refuses and names it. VaultFresh and Routed do not stop a
-move. The old primary then stops taking writes and hands a token to the target, which promotes with it
-(CloudNativePG's demotion and promotion token). No database data is lost. The app is stopped from the
-commit until the handover is done, typically under two minutes. Files on its volumes stay at the old
-primary. The Overview counts the app under Moving, and Promotion says Demoting, then Promoting.
+move. The old primary then stops taking writes and hands a CloudNativePG demotion token to the
+target, which promotes with it. A completed token handover is designed to preserve committed
+database writes, but the Console's preflight is not a restore test and cannot certify future
+recovery. The app is stopped from the commit until the handover is done; duration
+depends on observed database and archive progress.
+Files on its volumes stay at the old primary. The Overview counts the app under Moving, and Promotion
+says Demoting, then Promoting.
 
 **Forced failover.** Independently power off or fully write-isolate the old history-bearing
 primary first; inability to contact it is not fencing. Tick Force, choose the isolation
@@ -342,9 +354,9 @@ closing asks before clearing it and removes the secret from the DOM.
 **Delete app**, then confirm. The Console marks the App deleted in the Fabric. The Door stops serving it,
 its card shows deleting, and every site's Warden removes its part: the Deployment, the database and the
 volumes. Once every site of the app reports nothing left, the writer removes the App from the Fabric; a
-site that is down holds it until it is back. The vault keeps the backups: nobody can delete them before
-their Object Lock expires.
-The same name can be deployed again once the App is gone.
+site that is down holds it until it is back. The vault retains backups under their Object Lock
+retention; this deletion does not restore or transfer files held only on local volumes.
+The same name can be deployed again once the App is gone, with a new database ArchiveID.
 
 ## Storage
 
@@ -407,7 +419,7 @@ box is one of its machines, a k3s node; the site's first box is its manager (the
 
 ### The Sites page
 
-![The Sites page: a public writer site and two others, their boxes, and the offers between them](images/console-sites.png)
+The Sites page shows each site's current status; a past screenshot cannot establish its installed version.
 
 Each site's card shows its owner and its tags (steward, writer, public), whether it answers and which
 WeCoLab version it runs, its Nebula network, and its public address if it has one. Its boxes follow, each
@@ -419,15 +431,21 @@ whether its person is active or idle.
   that site. Run it as root on the box. A box's name is `<site>-<host>`, unique across the fabric.
 - **Add a Mac** shows an invite to paste into WeCoLab for Mac ([mac/README.md](../mac/README.md)). A Mac
   cannot join on a Linux box's invite, nor a Linux box on a Mac's.
-- **Remove**, on a box, takes it out of the Fabric and puts its certificates on the fabric's blocklist;
-  every box drops them at its next sync, within the hour. The site's Warden then deletes the box's
-  Kubernetes node. Its disk keeps its data. A site's manager cannot be removed this way.
+- **Remove**, on a non-manager box, takes it out of the Fabric and puts its join certificates on the
+  fabric's blocklist; the writer also blocklists its reported renewals. Other boxes apply the
+  blocklist at their next successful sync, normally within the hour. Offline or failing boxes retain
+  their earlier blocklists. The site's Warden deletes the unlisted Kubernetes Node after it has been
+  unready for ten minutes; it does not drain the box first. Its disk and data remain. A site's manager
+  cannot be removed this way.
 - **Make a steward** and **Stop being a steward** (admins) re-encrypt the fabric's secrets for the new set
   of stewards. Neither shows for the writer, and the last steward cannot stop.
-- **Remove site** (admins) takes a whole site out of the fabric: its boxes' certificates are blocked, it
-  leaves every app it held a standby for, its offers go, and the vault keys its apps carried are rotated.
-  It is refused for the writer, a steward, the site running NetBird, and a site that is still an app's
-  primary ([operations.md](operations.md#sites-and-boxes), "When a collaborator leaves").
+- **Remove site** (admins) takes an eligible whole site out of the fabric: its boxes'
+  certificates are blocked, it leaves every app it held a standby for, and its offers go.
+  Vault key rotation is attempted for affected projects and the response names any failures;
+  verify and resolve those before treating its former access as revoked. The removed
+  site's copy of the Fabric, data and previously decrypted secrets are not remotely erased.
+  Removal is refused for the writer, a steward, the site running NetBird, or an app's
+  primary or handover origin ([operations.md](operations.md#sites-and-boxes)).
 
 Join commands and invites are shown once, work once, and last a day.
 
@@ -446,8 +464,10 @@ Admins create a site on **Add a site**: its name, its owner (the project whose p
 whether it is a steward (trusted with the whole fabric: its secrets, the Nebula CA, and taking over as
 writer), and whether its first box has a public address (it then becomes another entrance: a Door, a name
 server and a lighthouse). The join command is shown once and works once, for a day. Run it as root on the
-site's first box. In about five minutes the box has Nebula, k3s and its copy of the Fabric, and the site
-turns Ready on Sites when its Warden answers. Make at least two sites stewards, so either can be lost.
+site's first box. When its Warden starts reporting status, Sites shows it as Ready;
+that is operational readiness, not proof of a successful restore or a fixed join time.
+Make at least two sites stewards so a surviving one can attempt manual writer takeover;
+this alone does not replicate site-local files or guarantee zero database loss.
 [install.md](install.md) has the whole path.
 
 ### Your SSH keys
@@ -487,9 +507,10 @@ one live link until the person accepts. **Cancel** removes the invite and the Me
 - **Projects**: change which projects they belong to.
 - **Make admin**, **Make member**: change their role.
 - **Block** keeps their record and ends what they may do: Console access at once, their devices on the
-  people mesh, and their SSH keys on every box at its next sync, within the hour. **Unblock** gives it back.
-- **Remove** deletes them, and their NetBird account and devices with them. Their keys leave the boxes
-  within the hour.
+  people mesh, and their SSH keys on every box at its next successful sync, normally within the hour.
+  **Unblock** gives access back.
+- **Remove** deletes them, and their NetBird account and devices with them. Their SSH keys leave each
+  box at its next successful sync; offline or failing boxes retain the earlier keys.
 
 The owner has no actions.
 

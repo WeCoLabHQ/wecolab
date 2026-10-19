@@ -78,9 +78,10 @@ import { url } from "../lib/paths";
             database restore. Record what the operator sees, what must be
             decided by a person, and where the{" "}
             <a href={url("docs/operations/")}>operations guide</a> needs a
-            clearer path. A forced move can lose writes not yet archived. Some
-            recovery paths described in the docs are still unfinished, so a
-            reproducible drill is especially useful.
+            clearer path. A forced move can lose writes not yet archived,
+            and database recovery does not restore site-local files. Local
+            drills exercise these paths; image-specific restore and
+            real-provider retention still need their own evidence.
           </p>
         </div>
         <span class="lane-kind">Recovery / Operations</span>

@@ -41,7 +41,7 @@ export const docs: Doc[] = [
     title: "Architecture",
     source: "docs/architecture.md",
     group: "Concepts",
-    summary: "The fabric, its components, replication and recovery.",
+    summary: "Independent sites, replication and operator-controlled recovery.",
   },
   {
     slug: "glossary",
@@ -56,7 +56,7 @@ export const docs: Doc[] = [
     source: "docs/console.md",
     group: "Concepts",
     summary:
-      "Using the web interface to manage sites, apps, people and storage.",
+      "Manage sites, apps, people and storage; imported catalog entries are not certified deployments.",
   },
   {
     slug: "secrets",
@@ -70,7 +70,7 @@ export const docs: Doc[] = [
     title: "Operations",
     source: "docs/operations.md",
     group: "Operations",
-    summary: "Site changes, app moves, failover and rebuilds.",
+    summary: "Site changes, app moves, operator-fenced recovery and rebuilds.",
   },
   {
     slug: "security",

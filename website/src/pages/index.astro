@@ -19,9 +19,11 @@ import { url } from "../lib/paths";
         <span>One cloud.</span>
       </h1>
       <p class="hero-description">
-        Run your apps across the machines you and your collaborators already own:
-        homelabs, offices, a small business's server room. Keep a standby at another
-        site, back up to storage nobody can delete, and keep control of every site.
+        Run your apps across machines you and your collaborators already own:
+        homelabs, offices, a small business's server room. PostgreSQL-backed
+        apps can keep a standby at another site and archive database history
+        to an Object Lock vault. Recovery needs an operator; site-local files
+        do not follow the database.
       </p>
       <div class="hero-actions">
         <a class="button" href={url("docs/get-started/")}>
@@ -160,8 +162,10 @@ import { url } from "../lib/paths";
             <h3>Put that capacity to work.</h3>
             <p>
               Deploy a container or catalog app through the Console. Choose
-              where it runs. For PostgreSQL-backed apps, add a standby at
-              another site and archive to an external vault.
+              where it runs. Catalog imports are not WeCoLab-certified
+              deployments. PostgreSQL-backed apps can keep a standby at
+              another site and archive to an external vault; verify backup
+              evidence and plan operator-controlled recovery.
             </p>
             <a href={url("docs/console/")}>
               Take a tour of the Console <span aria-hidden="true">↗</span>
@@ -172,13 +176,13 @@ import { url } from "../lib/paths";
       <figure class="console-shot">
         <img
           src={url("images/console-sites.png")}
-          alt="The Console's Sites page: a public writer site and two others, their boxes and the offers between them"
+          alt="The current Console's Sites page with three example sites, their boxes and resource-sharing controls"
           width="1440"
           height="900"
           loading="lazy"
         />
         <figcaption>
-          The Console of a fabric with three sites. Names and addresses are examples.
+          Current Console UI with example identities, sites and status data—not a live deployment.
         </figcaption>
       </figure>
     </div>

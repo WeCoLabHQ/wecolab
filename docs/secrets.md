@@ -19,7 +19,7 @@ WeCoLab's own words (site, box, steward, writer, vault) are explained in the [gl
 
 | Secret | Made by | Lives | Readable by |
 |---|---|---|---|
-| **The recovery key** (age) | install | public half in `keys/recovery.age.pub`; private half on the recovery card only | whoever holds the card |
+| **The recovery key** (age) | install | public half in `keys/recovery.age.pub`; private half on the offline recovery card after the root-only file is copied and deleted | whoever holds the card can decrypt Fabric secrets; fabric rebuild from the card is not built yet |
 | **A site's age key** | that site's join | private half in the site's `flux-system/sops-age` Secret; public half in `keys/<site>.age.pub` | that site |
 | **The Nebula CA key** | install | `secrets/nebula-ca.sops.yaml` | stewards, the recovery key |
 | **A box's Nebula key** | that box | `/etc/nebula/host.key`, mode 0600; only the public key leaves the box | that box |
@@ -62,7 +62,7 @@ decrypted is ever written back to Git.
 | NetBird's service token | the writer, two months before it expires: the new token is committed, the old one deleted a day after |
 | The object storage account key | enter the new one in Settings; revoke the old one at the provider |
 | A project's vault key | Storage → Rotate key commits a strictly increasing `key-version` and `mutation-revision` with the new key; each database app's encrypted Secret receives the current version. The writer repairs interrupted app rekeys from Git, including apps added during rotation. Retirement waits for each current Git database app Secret and a newly fetched report from every intended site with the exact current key ID **and** version. A durable `retirement-phase` claim pauses rotation and affected app mutations while the writer verifies each provider deletion; after a restart it checks/deletes remaining claimed keys again. Never delete the only live key or infer deletion from a timed-out provider response. |
-| A box's Nebula key | remove the box in the Console and delete its Kubernetes node, run the install script with `uninstall` on it (what k3s held there, volumes and databases included, goes with it), and join it again with a new invite: the join makes a new key. A site's manager cannot be removed, so its key cannot be rotated yet |
+| A box's Nebula key | remove the box in the Console and wait for its site's Warden to delete the unlisted Kubernetes node after ten minutes unready; run the install script with `uninstall` on it (what k3s held there, volumes and databases included, goes with it), and join it again with a new invite: the join makes a new key. A site's manager cannot be removed, so its key cannot be rotated yet |
 | The Nebula CA | *Not built yet* (the CA lasts five years): a new CA is to join every box's bundle, boxes are re-signed at their next renewal, the old CA leaves a certificate lifetime later |
 | A site's age key, Forgejo tokens, the Console's session key, NetBird's own keys, the recovery key | *Not built yet.* |
 
@@ -79,6 +79,7 @@ a timeout is recorded as an error and retried on the writer's next tick, not suc
 ## When a key is lost
 
 - **One site's age key**: that site cannot decrypt new commits. Re-keying a site is not built yet.
-- **Every steward**: the fabric keeps running but nothing can change. Rebuilding from the recovery card is
-  not built yet (docs/operations.md, "Rebuild from the recovery card").
+- **Every steward**: the fabric keeps running but cannot accept new writer commits. The recovery card
+  decrypts secrets in a retained Fabric copy, but rebuilding the fabric from it is not built yet
+  (docs/operations.md, "Rebuild from the recovery card").
 - **The recovery card**: nothing is lost while a steward lives. Rotating the recovery key is not built yet.

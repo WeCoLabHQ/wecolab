@@ -39,9 +39,12 @@ Each app's PostgreSQL (CloudNativePG) archives its WAL and base backups to objec
 Object Lock; standbys at other sites replay from there. A site rebuilt from the vault gets a new
 archive generation, because Object Lock never empties the old archive.
 
-- **Why:** no site-to-site data path to secure or debug; the third copy nobody can delete comes for
-  free. The recovery point is the archive timeout, about a minute.
-- **Revisit when:** someone needs seconds of recovery point: add streaming over Nebula.
+- **Why:** no site-to-site database transport to secure or debug; the vault supplies an independently
+  retained copy when its backup and retention requirements are actually met. The archive timeout is
+  not a recovery-point guarantee: current same-history replay measurements determine whether the
+  configured objective is met, exceeded or unknown.
+- **Revisit when:** archive replay cannot meet a workload's measured recovery objective; evaluate
+  streaming over Nebula without discarding backup, fencing or restore-readback requirements.
 
 ## 4. Two meshes: Nebula for boxes, NetBird for people
 
@@ -79,17 +82,20 @@ Codes are shown once and kept only as hashes.
 
 ## 7. The Console writes only commits
 
-Every change is decided from the Fabric as Git holds it (decision 15), tried first as a dry run, as the
-signed-in person, against the local cluster's API, so Kubernetes RBAC still decides who may do what, and
-then committed to the Fabric with that person as the author. The Fabric's history is the audit log.
+Every change is decided from the Fabric as Git holds it (decision 15) and committed with the actor's
+identity. App resources are also dry-run against the local Kubernetes API as the signed-in person,
+so RBAC and admission policy can refuse them. Other actions, such as invitations and capacity offers,
+use the Console's role and project checks. The Fabric's history records desired-state changes;
+external provider operations and local browser preferences are not Git commits.
 
 ## 8. Platform components come from the Fabric too
 
 Nebula and k3s are installed by the join script; Forgejo and Flux are bootstrapped by it; everything
 else (CloudNativePG, the Barman Cloud plugin, Warden, the site entrance, policies, the Door and DNS at
-public sites) is in the Fabric's `system/` folder and applied by Flux. A new site installs everything
-else from its own copy of the Fabric, and an upgrade is a commit: `warden upgrade` writes a version's
-`system/` and `crds/` into the Fabric.
+public sites) is in the Fabric's `system/` folder and applied by Flux. Platform upgrades use the staged
+`warden upgrade` protocol: verified artifacts, offline recovery material and restore evidence,
+old-writer credential fencing, then schema, migration, platform and completion gates.
+See [the upgrade procedure](operations.md#upgrades); a same-tag binary reload is not a schema migration.
 
 ## 9. The writer is chosen by a person, and Git fences the old one
 
@@ -115,8 +121,10 @@ A site is a steward when the fabric's admins trust it with the fabric: the Nebul
 service tokens, every app's secrets, and the right to become the writer. A collaborator's site that only
 contributes capacity is not a steward: it decrypts only the secrets of the apps placed on it.
 
-- **Why:** a person contributing a box should not be able to read every project's secrets. Two stewards
-  are enough to survive losing either.
+- **Why:** a person contributing a box should not be able to read every project's secrets. With a
+  surviving, up-to-date steward, an operator can recover writer coordination after losing the other.
+  This is not automatic takeover or a guarantee of lossless database recovery; site-local files
+  still require their own replication or restore procedure.
 
 ## 12. Data is never deleted by a commit dropping a file
 
@@ -152,17 +160,17 @@ everything else is shown, never acted on. Database roles come from the App's spe
 One primitive, `fabric.Edit`: read the files from the writer's copy with their hashes, decide, and commit
 only if none of the files it changes changed meanwhile (Forgejo refuses a stale hash with 409, a create
 where the file now exists with 422, and a commit whose branch moved); on a conflict read and decide again.
-Every Console change and every Warden commit goes through it. The cluster's copy, which Flux applies up to
-a minute behind Git, is for pages and for acting on, never the basis of a change. Allocation happens inside
-the edit: a box's address from its site's `nextBox` (numbers are never reused), a new site's index from the
-Sites in Git, the writer's epoch from `system/base/fabric.yaml` in Git. A decision that rests on files read
-but not changed (a box name unique across every Site) cannot be conditioned on them, so the Console admits
-one join at a time.
+Every Console change and every Warden commit goes through it. The cluster's copy, which Flux applies
+asynchronously and may lag, is for pages and reconciliation, never the basis of a Git mutation.
+Allocation is decided inside the edit: a box's address from its site's `nextBox` (numbers are never
+reused), a site's index from the Sites in Git, and the writer's epoch from the Fabric's settings.
+Shared route claims, placement revisions and encrypted vault revisions make cooperating edits
+conflict when they depend on the same cross-resource invariant.
 
-- **Why:** changes decided from the cluster copy and written blind made every write last-writer-wins: two
-  joins got the same box address and the second erased the first box, a later change to an App undid a
-  move, a key could be redeemed twice.
-- **Revisit when:** a second process must commit decisions that span files it does not change.
+- **Why:** changes decided from the cluster copy and written blind made every write last-writer-wins:
+  two joins could take the same address, a later change could undo a move, and a key could be redeemed
+  twice. Independent App files also need shared claims to prevent competing routes.
+- **Boundary:** direct administrator writes outside these conditional-edit records bypass their guarantees.
 
 ## 16. Names are data, never syntax
 
@@ -182,7 +190,7 @@ command line.
 A site deletes its copy of an app's database, to rebuild it or because the app left the site, only when
 Git says it holds nothing a move still needs (it is not the primary, not a planned move's origin, and no
 handover waits for a token) and the primary reports itself the primary, writable, healthy, promoted with
-the handover's token if Git has one, and with a base backup in its vault (`MayDestroy`). The primary can
+the handover's token if Git has one, and with validated completed backup evidence in its vault (`MayDestroy`). The primary can
 never be removed from an app's sites. A database missing where the app's history is held is never made
 again empty: the primary makes one by initdb only while Git shows no sign it was ever made (no archive
 generation, no handover) and Flux never made one at that site. Otherwise the app's delivery there stays
@@ -191,9 +199,9 @@ suspended with a `DatabaseMissing` condition until a person moves the primary.
 - **Why:** destructive steps acted on local views. A forced move to a site that never had the database
   started an empty primary; the old primary then saw a writable primary with a backup and was rebuilt from
   it, losing the real history. "Highly recoverable over highly available."
-- **Revisit when:** a forced move back to a former primary must not count that site's old base backup: the
-  check accepts any base backup under the primary's current archive, and would then need the backup's
-  timeline.
+- **Boundary:** a backup timestamp alone does not establish usable recovery. Completed backup metadata,
+  archive identity and current database-history checks must pass; an actual restore/readback is a
+  separate proof, and site-local files are not protected by the database archive.
 
 ## 18. Each component holds only what it uses
 
@@ -232,9 +240,9 @@ its DNS-challenge endpoint takes only requests with basic auth from files inside
 - Revocation is a loop at the writer: every certificate issued for a box that is no longer in any Site
   (the join certificates recorded on the Box, and the renewals stewards publish) goes into the fabric's
   blocklist in Git, and expired entries leave it. Every box applies the blocklist at its next sync.
-- SSH keys come from Members: every hour each box rewrites a marked block of root's `authorized_keys`
-  with the keys of the fabric's admins and of the members of the project that owns its site, so a person
-  removed or blocked loses access within the hour.
+- SSH keys come from Members: each successful hourly box sync rewrites a marked block of root's
+  `authorized_keys` with the keys of the fabric's admins and of the members of the project that owns
+  its site. Offline or failing boxes retain earlier keys until they sync; removal is not physical fencing.
 - People's devices join NetBird by signing in, so they belong to their person; no setup keys for people.
   RBAC bindings are owned by their Member and are deleted with it.
 - The writer renews NetBird's service token two months before it expires.
@@ -296,11 +304,12 @@ is a public identity.
 Removing a site is one conditional commit: the site, its key and secret, its place in every app and its
 offers go, and its boxes' certificates join the blocklist. The rest follows from Git: the writer stops
 pushing to it, the Door stops naming it, boxes drop its certificates. Each site's Warden deletes the
-nodes of boxes its Site no longer lists. Vault keys its apps carried are rotated: the new key is
-committed with the old one marked retiring, and the writer deletes the old key at B2 once every site of
-the project's database apps reports the new one. The site that left is not among them, so it is not
-waited for; a site that remains and does not answer is, since deleting the key it still archives with
-would stop its archive.
+nodes of boxes its Site no longer lists after they have been unready for ten minutes.
+Vault-key rotation is attempted for affected database projects after removal is committed; failures
+are returned to the operator and must be resolved. A successful rotation commits the new key with
+the old one marked retiring. Retirement waits for fresh reports of the exact current key ID and
+version from every intended site and for current app Secrets to agree. A remaining site that does
+not answer blocks retirement so its archive is not cut off.
 
 - **Why:** a collaborator can leave on bad terms. Everything they could reach must stop being reachable, and
   every step must follow from what Git says rather than from asking a site that is no longer trusted.
@@ -341,3 +350,33 @@ KubeVirt is not built.
   per-app neighborhoods match how our sites already coordinate.
 - **Cloudflare Tunnel:** the Door and our own DNS replace it; Cloudflare stays only as the domain's DNS
   host, for the one-time delegation.
+- **NVIDIA Run:ai:** useful reference for shared AI infrastructure, not a default fabric
+  dependency. Its centralized control plane adds its own identity, project, policy and
+  workload-management services; it does not replace WeCoLab's site ownership, mesh or
+  data-recovery model. Its published system requirements are substantial for a small
+  cooperative. The source is Apache-2.0, with separate third-party and trademark terms.
+  - **Useful capabilities:** fair-share queues, borrowing and reclaiming idle capacity,
+    workload priorities and preemption, fractional GPUs, gang scheduling, and explanations
+    of why a workload is waiting. Our current Offer and Pool quota fields cover CPU,
+    memory and storage, not GPU allocations.
+  - **Preferred experiment:** evaluate the standalone **KAI Scheduler** as an optional
+    per-site scheduler when collaborators have a concrete shared-GPU workload. It can
+    coexist with Kubernetes' default scheduler; opted-in workloads set
+    `schedulerName: kai-scheduler` and a `kai.scheduler/queue` label. WeCoLab would retain
+    ownership, authorization, offers, site selection and recovery. No integration has
+    been implemented or compatibility tested.
+  - **Boundaries:** Run:ai v3.0 documents NVIDIA GPUs on Linux, not Apple Silicon/Metal
+    GPU pooling. Its support matrix lists RKE2 but not k3s and excludes workstations;
+    these are support limits, not proof that an unsupported deployment cannot run.
+    GPU fractions are not by themselves a tenant-isolation guarantee: KAI includes a
+    sharing mode without runtime GPU-memory enforcement.
+  - **Revisit when:** one GPU-equipped site has contention between at least two projects.
+    First prove quota enforcement, borrowing/reclamation, preemption, GPU-memory
+    isolation and coexistence with existing workloads on that disposable site.
+    Do not infer cross-site distributed-training performance or safe laptop-GPU sharing.
+  - **Sources:** [Run:ai](https://github.com/dsx-ai-factory/run-ai),
+    [architecture](https://docs.nvidia.com/run-ai/self-hosted/documentation/getting-started/architecture),
+    [requirements](https://docs.nvidia.com/run-ai/self-hosted/documentation/installation-and-configuration/system-requirements/infrastructure-requirements),
+    [support matrix](https://docs.nvidia.com/run-ai/self-hosted/documentation/installation-and-configuration/support-matrix),
+    [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler) and its
+    [queue/GPU-sharing quick start](https://github.com/kai-scheduler/KAI-Scheduler/blob/main/docs/quickstart/README.md).
