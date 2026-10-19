@@ -12,8 +12,6 @@ public struct NodeConfig: Codable, Equatable, Sendable {
     public var idleMinutes = 5
     public var idleCPUs = 2
     public var idleMemoryGiB = 4
-    public var startAtLogin = false
-    public var startNodeOnLaunch = false
     public var invite = ""
 
     public init() {}
@@ -27,16 +25,19 @@ public struct NodeConfig: Codable, Equatable, Sendable {
         idleMinutes = try c.decode(Int.self, forKey: .idleMinutes)
         idleCPUs = try c.decodeIfPresent(Int.self, forKey: .idleCPUs) ?? cpus
         idleMemoryGiB = try c.decodeIfPresent(Int.self, forKey: .idleMemoryGiB) ?? memoryGiB
-        startAtLogin = try c.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? false
-        startNodeOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .startNodeOnLaunch) ?? false
         invite = try c.decode(String.self, forKey: .invite)
     }
 
-    public static func load(_ paths: Paths = .user) -> NodeConfig {
-        (try? JSONDecoder().decode(NodeConfig.self, from: Data(contentsOf: paths.config))) ?? NodeConfig()
+    public static func load(_ paths: Paths) throws -> NodeConfig {
+        try paths.validateFiles()
+        let config = try JSONDecoder().decode(NodeConfig.self, from: Data(contentsOf: paths.config))
+        try config.validate()
+        return config
     }
 
-    public func save(_ paths: Paths = .user) throws {
+    public func save(_ paths: Paths) throws {
+        try validate()
+        try paths.validateFiles()
         try paths.prepare()
         try JSONEncoder().encode(self).write(to: paths.config, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: paths.config.path)
@@ -50,6 +51,9 @@ public struct NodeConfig: Codable, Equatable, Sendable {
         }
         guard idleCPUs >= cpus, idleMemoryGiB >= memoryGiB else {
             throw NodeError("when idle the node gets at least what is always reserved: \(cpus) CPUs and \(memoryGiB) GiB memory")
+        }
+        guard diskGiB <= 4096, idleCPUs <= 256, idleMemoryGiB <= 1024 else {
+            throw NodeError("node resources exceed supported limits")
         }
     }
 }
@@ -89,9 +93,10 @@ public struct NodeError: LocalizedError {
     public init(_ message: String) { errorDescription = message }
 }
 
-/// Everything lives in ~/Library/Application Support/WeCoLab (`user`); tests use a directory of their own.
+/// A single VM's files. The user location is only the legacy import source and runner store.
 public struct Paths: Sendable {
-    let root: URL
+    public let root: URL
+    public init(root: URL) { self.root = root.standardizedFileURL }
     public static let user = Paths(root: URL.applicationSupportDirectory.appending(path: "WeCoLab", directoryHint: .isDirectory))
 
     public var config: URL { root.appending(path: "config.json") }
@@ -107,9 +112,28 @@ public struct Paths: Sendable {
     public var guestVersion: URL { root.appending(path: "guest-version") }
     /// Shared with the guest over virtio-fs, mounted there at /wecolab.
     public var share: URL { root.appending(path: "share", directoryHint: .isDirectory) }
+    public var channelImage: URL { root.appending(path: "channel.dmg") }
 
     func prepare() throws {
-        try FileManager.default.createDirectory(at: share, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var info = stat()
+        if lstat(root.path, &info) == 0 {
+            guard info.st_mode & S_IFMT == S_IFDIR else { throw NodeError("profile directory must be a real directory") }
+        } else {
+            guard errno == ENOENT else { throw NodeError("cannot inspect profile directory") }
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+    }
+
+    func validateFiles() throws {
+        try prepare()
+        for url in [config, image, disk, seed, efiVars, machineID, macAddress, console, guestVersion, share, channelImage, lock] {
+            var info = stat()
+            if lstat(url.path, &info) == 0 {
+                guard info.st_mode & S_IFMT == (url == share ? S_IFDIR : S_IFREG) else {
+                    throw NodeError("invalid or symbolic-link guest path: \(url.lastPathComponent)")
+                }
+            } else if errno != ENOENT { throw NodeError("cannot inspect guest path") }
+        }
     }
 }
 
@@ -121,11 +145,15 @@ public func guestHostname(_ shortName: String = SCDynamicStoreCopyLocalHostName(
     return "mac-" + (trimmed.isEmpty ? "node" : trimmed)
 }
 
-/// One VM per user: a lock file that holds the running process's PID and is released when that process exits.
+/// Per-profile lock, held until its worker exits.
 public enum VMLock {
-    public static func acquire(_ paths: Paths = .user) throws -> Int32 {
+    public static func acquire(_ paths: Paths) throws -> Int32 {
         try paths.prepare()
-        let fd = open(paths.lock.path, O_RDWR | O_CREAT, 0o600)
+        var info = stat()
+        if lstat(paths.lock.path, &info) == 0 {
+            guard info.st_mode & S_IFMT == S_IFREG else { throw NodeError("invalid VM lock") }
+        } else if errno != ENOENT { throw NodeError("cannot inspect VM lock") }
+        let fd = open(paths.lock.path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw NodeError("cannot open \(paths.lock.path)") }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
             close(fd)
@@ -140,8 +168,8 @@ public enum VMLock {
     public static func release(_ fd: Int32) { close(fd) }
 
     /// The PID of the process running the VM, or nil when none is.
-    public static func holder(_ paths: Paths = .user) -> pid_t? {
-        let fd = open(paths.lock.path, O_RDONLY)
+    public static func holder(_ paths: Paths) -> pid_t? {
+        let fd = open(paths.lock.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         if flock(fd, LOCK_SH | LOCK_NB) == 0 { return nil }
@@ -152,7 +180,10 @@ public enum VMLock {
 /// Reads a file in the share. The guest owns the share, so the name may be a symlink to anything on the
 /// Mac (disk.img, say), a FIFO, or a file that keeps growing: only a regular file is read, never through a
 /// symlink, and only its last `limit` bytes, as printable text.
-public func readShare(_ name: String, in dir: URL = Paths.user.share, limit: Int) -> String? {
+public func readShare(_ name: String, in dir: URL, limit: Int) -> String? {
+    guard name.wholeMatch(of: /[A-Za-z0-9][A-Za-z0-9._-]*/) != nil, limit >= 0, limit <= 1 << 20 else { return nil }
+    var directory = stat()
+    guard lstat(dir.path, &directory) == 0, directory.st_mode & S_IFMT == S_IFDIR else { return nil }
     let fd = open(dir.appending(path: name).path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
     guard fd >= 0 else { return nil }
     defer { close(fd) }
@@ -185,15 +216,15 @@ public struct GuestStatus: Equatable, Sendable {
         joinLog.split(separator: "\n").last { !$0.hasPrefix("wecolab-join exit=") && !$0.hasPrefix("==> wecolab-join") }.map(String.init) ?? ""
     }
 
-    public static func read(from dir: URL = Paths.user.share) -> GuestStatus {
+    public static func read(_ paths: Paths) -> GuestStatus {
         var s = GuestStatus()
-        if let text = readShare("nebula.json", in: dir, limit: 4096),
+        if let text = readShare("nebula.json", in: paths.share, limit: 4096),
            let nb = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] {
             s.meshIP = printable(nb["ip"] as? String ?? "")  // JSON escapes can spell what readShare removed
             s.meshName = printable(nb["name"] as? String ?? "")
             s.meshConnected = nb["connected"] as? Bool ?? false
         }
-        if let log = readShare("wecolab-join.log", in: dir, limit: 16 << 10) {
+        if let log = readShare("wecolab-join.log", in: paths.share, limit: 16 << 10) {
             s.joinLog = log
             // The guest retries a failed join; only the last attempt counts.
             if let exit = log.matches(of: /wecolab-join exit=(\d+)/).last {

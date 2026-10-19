@@ -65,9 +65,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Require the supported native architecture
         run: test "$(uname -m)" = arm64
-      - name: Native tests including NoCloud ISO inspection
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: mac/network/go.mod
+          cache: true
+          cache-dependency-path: mac/network/go.sum
+      - name: Native tests including NoCloud ISO and network race checks
         working-directory: mac
-        run: swift test
+        run: make test
+      - name: Build, verify and exercise the signed worker sandbox
+        working-directory: mac
+        run: make test-sandbox
   integration:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04

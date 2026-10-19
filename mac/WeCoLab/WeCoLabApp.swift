@@ -4,269 +4,341 @@ import WeCoLabCore
 
 @main struct WeCoLabApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
-
     var body: some Scene {
         Window("WeCoLab", id: "main") { MainView(model: delegate.model) }
-            .windowResizability(.contentSize)
+            .defaultSize(width: 760, height: 720)
         MenuBarExtra {
             MenuView(model: delegate.model)
         } label: {
-            Image(nsImage: menuBarMark(running: delegate.model.running))
+            if delegate.model.connectionError.isEmpty, delegate.model.snapshot != nil {
+                Image(nsImage: menuBarMark(running: delegate.model.anyRunning))
+                    .accessibilityLabel(delegate.model.anyRunning ? "WeCoLab nodes running" : "WeCoLab nodes stopped")
+            } else {
+                Image(systemName: "questionmark.circle").accessibilityLabel("WeCoLab runner unavailable")
+            }
         }
     }
 }
 
-/// A menu bar app (LSUIElement), in the Dock only while its main window is open. Closing that window
-/// leaves the node running; quitting stops the guest cleanly first: pulling the plug risks its disk.
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = Model()
-    private var sigterm: DispatchSourceSignal?
-
     func applicationWillFinishLaunching(_ notification: Notification) {
         NotificationCenter.default.addObserver(self, selector: #selector(windowChanged), name: NSWindow.didChangeOcclusionStateNotification, object: nil)
-        // `wecolab-node down` sends SIGTERM to whoever holds the VM: quit as from the menu, guest first.
-        signal(SIGTERM, SIG_IGN)
-        sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        sigterm?.setEventHandler { MainActor.assumeIsolated { NSApp.terminate(nil) } }
-        sigterm?.resume()
     }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // Only a guest that exists starts unattended: the first start asks about the invite's Console.
-        guard model.config.startNodeOnLaunch, Provision.guest() == .current else { return }
-        // Opened at login, say: the node starts and WeCoLab stays in the menu bar, without its window.
-        NSApp.windows.first { $0.identifier?.rawValue == "main" }?.close()
-        Task { await model.start() }
-    }
-
-    /// SwiftUI names the window after its scene id. onAppear/onDisappear do not follow a Window scene
-    /// being closed and reopened; its visibility does.
-    @objc func windowChanged(_ notification: Notification) {
+    @objc private func windowChanged(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window.identifier?.rawValue == "main" else { return }
         NSApp.setActivationPolicy(window.isVisible || window.isMiniaturized ? .regular : .accessory)
     }
-
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard model.running else { return .terminateNow }
-        Task {
-            await model.stop()
-            sender.reply(toApplicationShouldTerminate: true)
-        }
-        return .terminateLater
-    }
+    // The app is a client. Quit never terminates a VM owned by the background runner.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { .terminateNow }
 }
 
 @MainActor @Observable final class Model {
-    var config = NodeConfig.load() {
-        // Settings outlive the app; start() saves again and reports errors. Views write back unchanged values.
-        didSet { if config != oldValue { try? config.save() } }
-    }
-    var vmState = "stopped"
-    var mode = ""
-    var guest = GuestStatus()
-    var disk = Provision.guest()
-    var message = ""
+    var snapshot: RunnerSnapshot?
+    var selectedID: String?
+    var connectionError = ""
+    var operationError = ""
     var busy = false
-    var running: Bool { lock != nil }
-
-    private let vm = NodeVM()
-    private var lock: Int32?
-    private var modeError = false
+    private let client: RunnerClient
+    private var refreshing = false
+    var anyRunning: Bool { snapshot?.anyRunning ?? false }
+    var selected: NodeSnapshot? { snapshot?.nodes.first { $0.id == selectedID } }
+    var connected: Bool { snapshot != nil && connectionError.isEmpty }
 
     init() {
-        Task {
-            while true {
-                await refresh()
+        let args = CommandLine.arguments
+        let root: URL
+        if let index = args.firstIndex(of: "--root"), index + 1 < args.count {
+            root = URL(fileURLWithPath: args[index + 1], isDirectory: true)
+        } else { root = RunnerLocations.defaultRoot }
+        client = RunnerClient(locations: RunnerLocations(root: root))
+        Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refresh()
                 try? await Task.sleep(for: .seconds(5))
             }
         }
     }
 
     func refresh() async {
-        await vm.reserve(memoryGiB: config.memoryGiB)  // live: the balloon follows the Memory slider
-        do {
-            try await vm.tick()
-            let running = await vm.isRunning
-            if modeError && running { message = ""; modeError = false }
-        } catch {
-            message = "Mode publication failed: \(error.localizedDescription)"
-            modeError = true
-        }
-        vmState = await vm.state
-        mode = await vm.mode
-        (guest, disk) = await Task.detached { (GuestStatus.read(), Provision.guest()) }.value  // the guest's files, off the main actor
-        if let lock, !(await vm.isRunning), !busy {  // the guest powered itself off
-            VMLock.release(lock)
-            self.lock = nil
-        }
+        guard !refreshing, !busy else { return }
+        refreshing = true
+        defer { refreshing = false }
+        do { accept(try await client.send(.status)) }
+        catch { connectionError = error.localizedDescription }
     }
 
-    func start() async {
+    private func accept(_ snapshot: RunnerSnapshot) {
+        self.snapshot = snapshot
+        connectionError = ""
+        if !snapshot.nodes.contains(where: { $0.id == selectedID }) { selectedID = snapshot.nodes.first?.id }
+    }
+
+    @discardableResult func perform(_ command: RunnerCommand) async -> Bool {
+        guard !busy else { return false }
         busy = true
+        operationError = ""
         defer { busy = false }
-        config.invite = config.invite.trimmingCharacters(in: .whitespacesAndNewlines)
+        do { accept(try await client.send(command)); return true }
+        catch { operationError = error.localizedDescription; return false }
+    }
+
+    func startStop(_ node: NodeSnapshot) async {
+        _ = await perform(node.running ? .stop(node.id) : .start(node.id))
+    }
+
+    func confirmTrust(_ inviteText: String) -> String? {
         do {
-            lock = try VMLock.acquire()
-            try config.validate()
-            try config.save()
-            try await Provision.run(config, confirm: { invite in await self.confirmJoin(invite) }) { line in Task { @MainActor in self.message = line } }
-            message = "booting"
-            try await vm.start(config)
-            message = ""
-        } catch {
-            message = error.localizedDescription
-            if !(await vm.isRunning) {
-                if let lock { VMLock.release(lock) }
-                lock = nil
-            }
-        }
-        await refresh()
+            let invite = try Invite(inviteText.trimmingCharacters(in: .whitespacesAndNewlines))
+            let alert = NSAlert()
+            alert.messageText = "Join through \(invite.console)?"
+            alert.informativeText = "This fabric's administrators will control this VM as root. The node gets its own disk, credentials and resource limits. Join only if you trust this Console."
+            alert.addButton(withTitle: "Join this fabric")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn ? invite.console : nil
+        } catch { operationError = error.localizedDescription; return nil }
     }
 
-    func stop() async {
-        busy = true
-        message = "asking the guest to shut down"
-        await vm.stop()
-        if let lock { VMLock.release(lock) }
-        lock = nil
-        message = ""
-        busy = false
-        await refresh()
-    }
-
-    /// The first start gives whoever runs the invite's Console root on a VM on this Mac's network.
-    private func confirmJoin(_ invite: Invite) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = "Join through \(URL(string: invite.console)?.host() ?? invite.console)?"
-        alert.informativeText = "The Console at \(invite.console) will install and run software as root in this Mac's VM, on your network. Join only if this invite came from your site's Console (Sites, your site, Add a Mac)."
-        alert.addButton(withTitle: "Join")
-        alert.addButton(withTitle: "Cancel")
-        NSApp.activate()
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    func reset() {
+    func delete(_ node: NodeSnapshot, removeProfile: Bool) async {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Reset this Mac's VM?"
-        alert.informativeText = "This deletes the VM (its disk, identity and share) and its spent invite. First remove its box in the Console (Sites, your site, the box, Remove): joining again takes the same name. Then add this Mac again with a new invite."
-        alert.addButton(withTitle: "Reset")
+        alert.messageText = removeProfile ? "Remove \(node.profile.name)?" : "Reset \(node.profile.name)'s VM?"
+        alert.informativeText = "This deletes only this stopped node's local disk, identity and invite. First remove its box in its fabric Console; deleting it here does not revoke remote membership. Other nodes are not affected."
+        alert.addButton(withTitle: removeProfile ? "Remove node" : "Reset VM")
         alert.addButton(withTitle: "Cancel")
-        NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            config = try Provision.reset()
-            message = ""
-        } catch {
-            message = error.localizedDescription
-        }
-        Task { await refresh() }
+        _ = await perform(removeProfile ? .remove(node.id) : .reset(node.id))
     }
 }
 
 struct MainView: View {
     @Bindable var model: Model
+    @State private var adding = false
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError = ""
-    private let maxCPUs = ProcessInfo.processInfo.activeProcessorCount
-    private let maxMemory = max(2, Int(ProcessInfo.processInfo.physicalMemory >> 30) - 4)
-    private let maxIdleMemory = max(2, Int(ProcessInfo.processInfo.physicalMemory >> 30) - 2)
+
+    var body: some View {
+        NavigationSplitView {
+            VStack(spacing: 0) {
+                List(selection: $model.selectedID) {
+                    ForEach(model.snapshot?.nodes ?? []) { node in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(node.profile.name).font(.headline)
+                            Text(model.connected ? node.state.capitalized : "Status unavailable").font(.caption).foregroundStyle(.secondary)
+                        }.tag(node.id)
+                    }
+                }
+                Button("Add node…", systemImage: "plus") { adding = true }
+                    .padding().disabled(!model.connected || model.busy)
+            }
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+        } detail: {
+            VStack(spacing: 0) {
+                if !model.connectionError.isEmpty {
+                    Label("Runner unavailable: \(model.connectionError)", systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.red).padding().frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let message = model.snapshot?.message, !message.isEmpty {
+                    Text(message).font(.callout).padding().frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let pid = model.snapshot?.legacyPID {
+                    Text("Your original node is running (PID \(pid)). Stop it gracefully once to migrate it; do not reset its VM.")
+                        .padding().frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if !model.operationError.isEmpty {
+                    Text(model.operationError).foregroundStyle(.red).font(.callout).padding().frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let node = model.selected {
+                    NodeDetail(model: model, node: node).id(node.id)
+                } else {
+                    ContentUnavailableView("Your Mac nodes", systemImage: "desktopcomputer",
+                                           description: Text(model.connected ? "Add a node with an invite from a fabric. Each node runs in a separate VM." : "Connecting to the shared background runner…"))
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    if let state = model.snapshot {
+                        Text("Runner reservations: \(state.reservedCPUs) / \(state.cpuBudget) vCPUs · \(state.reservedMemoryGiB) / \(state.memoryBudgetGiB) GiB (including \(ResourceBudget.workerMemoryGiB) GiB overhead per VM)")
+                            .font(.caption).monospacedDigit()
+                    }
+                    Toggle("Open WeCoLab at login", isOn: Binding(get: { loginStatus == .enabled }, set: { setLogin($0) }))
+                    if loginStatus == .requiresApproval {
+                        Button("Allow in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                    }
+                    if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
+                    Text("Closing or quitting this app leaves nodes running. Use Stop node to shut down a VM.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding().frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .sheet(isPresented: $adding) { AddNodeView(model: model) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginStatus = SMAppService.mainApp.status
+            Task { await model.refresh() }
+        }
+    }
+
+    private func setLogin(_ enabled: Bool) {
+        do {
+            try enabled ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+            loginError = ""
+        } catch { loginError = error.localizedDescription }
+        loginStatus = SMAppService.mainApp.status
+    }
+}
+
+struct NodeDetail: View {
+    let model: Model
+    let node: NodeSnapshot
+    @State private var draft: NodeProfile
+    init(model: Model, node: NodeSnapshot) {
+        self.model = model; self.node = node
+        _draft = State(initialValue: node.profile)
+    }
+    private var dirty: Bool { draft != node.profile }
+    private var cpuMaximum: Int { max(1, model.snapshot?.cpuBudget ?? 1) }
+    private var memoryMaximum: Int { max(2, model.snapshot?.memoryBudgetGiB ?? 2) }
 
     var body: some View {
         Form {
-            Section("Invite") {
-                switch model.disk {
-                case .none:
-                    TextField("Invite", text: $model.config.invite, prompt: Text("wcl2.…"), axis: .vertical)
-                        .labelsHidden()
-                        .lineLimit(3...5)
-                        .font(.system(.caption, design: .monospaced))
-                    Text("In the Console, open Sites, choose Add a Mac on your site, and paste the invite here. The first start asks you to confirm the Console it joins through.")
-                        .font(.caption).foregroundStyle(.secondary)
-                case .current:
-                    Text("This Mac's VM was made with its invite, which is used only once. Reset deletes the VM, so this Mac can be added again.")
-                        .font(.caption).foregroundStyle(.secondary)
-                case .old:
-                    Text("This VM was made by an older WeCoLab for Mac and does not start here. Remove its box in the Console, reset, then add this Mac again.")
-                        .font(.caption)
+            Section("Node") {
+                TextField("Name", text: $draft.name)
+                LabeledContent("Fabric", value: node.consoleURL.isEmpty ? "Not enrolled" : node.consoleURL)
+                LabeledContent("VM", value: model.connected ? node.state.capitalized : "Unavailable (last state: \(node.state))")
+                if !node.mode.isEmpty { LabeledContent("Mac activity", value: node.mode) }
+                LabeledContent("Mesh", value: node.meshIP.isEmpty ? "—" : node.meshIP)
+                if !node.meshIP.isEmpty && !node.guestStatusFresh {
+                    Text("Guest network report is stale or the VM is stopped.").font(.caption).foregroundStyle(.secondary)
                 }
-                if model.disk != .none {
-                    Button("Reset…") { model.reset() }.disabled(model.running || model.busy)
+                LabeledContent("Join", value: node.join)
+                if !node.message.isEmpty { Text(node.message).font(.caption) }
+                if let blocker = node.profile.networkAccess.startupBlocker {
+                    Text(blocker).font(.callout).foregroundStyle(.orange)
+                }
+                if node.join != "finished", !node.lastJoinLine.isEmpty { Text(node.lastJoinLine).font(.caption.monospaced()).lineLimit(3) }
+            }
+            if node.guestGeneration == "none" {
+                Section("Invite") {
+                    SecureField(node.consoleURL.isEmpty ? "Paste a fabric invite" : "New invite (leave blank to keep current)", text: $draft.config.invite)
+                    Text("An invite is used only for this VM's first join.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Section {
-                IntSlider(label: "CPUs", value: $model.config.cpus, range: 1...maxCPUs, unit: "")
-                IntSlider(label: "Memory", value: $model.config.memoryGiB, range: 2...maxMemory, unit: "GiB")
-                IntSlider(label: "Disk", value: $model.config.diskGiB, range: 8...256, unit: "GiB")
-            } header: {
-                Text("What this Mac contributes")
-            } footer: {
-                Text("Reserved for the node all the time while WeCoLab runs. Memory changes apply within seconds while the node runs, up to the size it started with; CPUs and disk at the next start. The disk can grow but not shrink.")
+            ResourceFields(config: $draft.config, cpuMaximum: cpuMaximum, memoryMaximum: memoryMaximum)
+            Section("Isolation and startup") {
+                NetworkPicker(access: $draft.networkAccess)
+                Toggle("Start this node when the background runner starts", isOn: $draft.autoStart)
+                Text("The runner starts at login independently of the menu-bar app.").font(.caption).foregroundStyle(.secondary)
+            }
+            if node.needsRestart {
+                Text("Saved CPU, disk, idle or network settings differ from this running VM. Stop and start this node to apply them.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if let actual = node.runningConfig {
+                Text("Running VM maximum: \(actual.idleCPUs) vCPUs and \(actual.idleMemoryGiB) GiB. Active reservation: \(actual.memoryGiB) GiB.")
                     .font(.caption).foregroundStyle(.secondary)
-            }
-            Section {
-                IntSlider(label: "Idle after", value: $model.config.idleMinutes, range: 1...60, unit: "min")
-                IntSlider(label: "Idle CPUs", value: $model.config.idleCPUs,
-                          range: model.config.cpus...max(model.config.cpus, maxCPUs), unit: "")
-                IntSlider(label: "Idle memory", value: $model.config.idleMemoryGiB,
-                          range: model.config.memoryGiB...max(model.config.memoryGiB, maxIdleMemory), unit: "GiB")
-            } header: {
-                Text("When idle")
-            } footer: {
-                Text("After this long without keyboard, mouse or trackpad input the node may use up to these; never less than what this Mac contributes. When you are back it hands the extra memory back to macOS and its apps move off this Mac. Changes here apply at the next start of the node.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Startup") {
-                Toggle("Start WeCoLab at login", isOn: Binding(get: { model.config.startAtLogin }, set: { setStartAtLogin($0) }))
-                Text(loginText).font(.caption).foregroundStyle(.secondary)
-                if loginStatus == .requiresApproval {
-                    Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
-                }
-                if !loginError.isEmpty { Text(loginError).font(.caption) }
-                Toggle("Start the node when WeCoLab opens", isOn: $model.config.startNodeOnLaunch)
-            }
-            Section("Status") {
-                LabeledContent("VM", value: model.vmState + (model.mode.isEmpty ? "" : ", you are \(model.mode)"))
-                LabeledContent("Mesh address", value: model.guest.meshIP.isEmpty ? "—" : model.guest.meshIP)
-                LabeledContent("Join", value: model.guest.join)
-                if !model.guest.lastLine.isEmpty, model.guest.join != "finished" {
-                    Text(model.guest.lastLine).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
-                }
-                if !model.message.isEmpty { Text(model.message).font(.caption) }
             }
             HStack {
+                Button("Apply settings") {
+                    Task {
+                        var confirmed: String?
+                        if !draft.config.invite.isEmpty {
+                            guard let console = model.confirmTrust(draft.config.invite) else { return }
+                            confirmed = console
+                        }
+                        if await model.perform(.configure(draft, confirmedConsole: confirmed)),
+                           let saved = model.snapshot?.nodes.first(where: { $0.id == node.id }) {
+                            draft = saved.profile
+                        }
+                    }
+                }.disabled(!dirty || model.busy || !model.connected || node.busy)
                 Spacer()
-                StartStopButton(model: model).keyboardShortcut(.defaultAction)
+                NodeStartStop(model: model, node: node)
+            }
+            Section {
+                HStack {
+                    Button("Reset VM…", role: .destructive) { Task { await model.delete(node, removeProfile: false) } }
+                    Spacer()
+                    Button("Remove node…", role: .destructive) { Task { await model.delete(node, removeProfile: true) } }
+                }.disabled(node.running || model.busy || !model.connected)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480)
-        // Back from System Settings: show what was approved or removed there.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            loginStatus = SMAppService.mainApp.status
+        .onChange(of: node.profile) { old, new in
+            if draft == old || draft == new { draft = new }
         }
     }
+}
 
-    private func setStartAtLogin(_ on: Bool) {
-        model.config.startAtLogin = on
-        do {
-            try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
-            loginError = ""
-        } catch {
-            loginError = error.localizedDescription
-        }
-        loginStatus = SMAppService.mainApp.status
+struct AddNodeView: View {
+    let model: Model
+    @Environment(\.dismiss) private var dismiss
+    @State private var profile = NodeProfile(name: "")
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Add a separate VM node").font(.title2).padding()
+            Form {
+                TextField("Name", text: $profile.name, prompt: Text("My fabric or Friend's fabric"))
+                SecureField("Fabric invite", text: $profile.config.invite)
+                ResourceFields(config: $profile.config, cpuMaximum: max(1, model.snapshot?.cpuBudget ?? 1), memoryMaximum: max(2, model.snapshot?.memoryBudgetGiB ?? 2))
+                NetworkPicker(access: $profile.networkAccess)
+                Toggle("Start when the background runner starts", isOn: $profile.autoStart)
+                Text("This creates a separate VM, disk and identity. It does not share another node's credentials or host folder.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !model.operationError.isEmpty { Text(model.operationError).foregroundStyle(.red) }
+            }.formStyle(.grouped)
+            HStack {
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Add node") {
+                    guard let console = model.confirmTrust(profile.config.invite) else { return }
+                    profile.config.invite = profile.config.invite.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Task {
+                        if await model.perform(.create(profile, confirmedConsole: console)) {
+                            model.selectedID = profile.id
+                            dismiss()
+                        }
+                    }
+                }.keyboardShortcut(.defaultAction)
+                    .disabled(model.busy || profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || profile.config.invite.isEmpty)
+            }.padding()
+        }.frame(width: 520, height: 640)
     }
+}
 
-    private var loginText: String {
-        switch loginStatus {
-        case .enabled: "WeCoLab opens when you log in."
-        case .requiresApproval: "Waiting for your approval in System Settings, General, Login Items."
-        case .notFound: "macOS cannot find WeCoLab as a login item."
-        default: "WeCoLab does not open at login."
+struct ResourceFields: View {
+    @Binding var config: NodeConfig
+    let cpuMaximum: Int
+    let memoryMaximum: Int
+    var body: some View {
+        Section("What this node contributes") {
+            IntSlider(label: "vCPUs", value: $config.cpus, range: 1...max(cpuMaximum, config.cpus), unit: "")
+            IntSlider(label: "Memory", value: $config.memoryGiB, range: 2...max(memoryMaximum, config.memoryGiB), unit: "GiB")
+            IntSlider(label: "Disk", value: $config.diskGiB, range: 8...max(256, config.diskGiB), unit: "GiB")
+            Text("Memory can change live up to the running VM's maximum. vCPUs and disk apply at the next start; disks cannot shrink. vCPUs are not dedicated physical cores.")
+                .font(.caption).foregroundStyle(.secondary)
         }
+        Section("When this Mac is idle") {
+            IntSlider(label: "Idle after", value: $config.idleMinutes, range: 1...max(60, config.idleMinutes), unit: "min")
+            IntSlider(label: "Maximum vCPUs", value: $config.idleCPUs, range: config.cpus...max(cpuMaximum, config.idleCPUs), unit: "")
+            IntSlider(label: "Maximum memory", value: $config.idleMemoryGiB, range: config.memoryGiB...max(memoryMaximum, config.idleMemoryGiB), unit: "GiB")
+            Text("The runner reserves these maxima across running nodes, even while you are active. Changes apply on the next start.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct NetworkPicker: View {
+    @Binding var access: NodeNetworkAccess
+    var body: some View {
+        Picker("Network access", selection: $access) {
+            Text("Strict isolation — unavailable").tag(NodeNetworkAccess.isolated)
+            Text("Trusted LAN access").tag(NodeNetworkAccess.localNetwork)
+        }
+        Text(access == .isolated
+             ? "Startup is blocked: this build has no verified OS-enforced network firewall. App Sandbox alone does not exclude the Mac or LAN."
+             : "Only for a trusted fabric: its administrators share this Mac's network. Destination filtering is defense in depth, not a guarantee against Mac, LAN or peer access.")
+            .font(.caption).foregroundStyle(access == .isolated ? Color.secondary : Color.orange)
     }
 }
 
@@ -275,45 +347,52 @@ struct IntSlider: View {
     @Binding var value: Int
     let range: ClosedRange<Int>
     let unit: String
-
     var body: some View {
         LabeledContent {
             HStack {
                 Slider(value: Binding(get: { Double(value) }, set: { value = min(Int($0.rounded()), range.upperBound) }),
                        in: Double(range.lowerBound)...Double(max(range.upperBound, range.lowerBound + 1)))
+                    .accessibilityLabel(label)
                 Text("\(value) \(unit)").monospacedDigit().frame(width: 64, alignment: .trailing)
             }
         } label: { Text(label) }
     }
 }
 
-struct StartStopButton: View {
+struct NodeStartStop: View {
     let model: Model
+    let node: NodeSnapshot
     var body: some View {
-        Button(model.running ? "Stop node" : "Start node") {
-            Task { model.running ? await model.stop() : await model.start() }
-        }
-        .disabled(model.busy)
+        Button(node.running ? "Stop node" : "Start node") { Task { await model.startStop(node) } }
+            .disabled(model.busy || !model.connected || node.state == "stopping" ||
+                      (!node.running && node.profile.networkAccess.startupBlocker != nil))
     }
 }
 
 struct MenuView: View {
     let model: Model
     @Environment(\.openWindow) private var openWindow
-
     var body: some View {
-        Text("VM: \(model.vmState)")
-        if !model.mode.isEmpty { Text("Mode: \(model.mode)") }
-        Text("Mesh: \(model.guest.meshIP.isEmpty ? "—" : model.guest.meshIP)")
-        Text("Join: \(model.guest.join)")
-        if !model.message.isEmpty { Text(model.message) }  // progress or error, also when the window is closed
-        Divider()
-        StartStopButton(model: model)
-        Button("Open WeCoLab") {
-            openWindow(id: "main")
-            NSApp.activate()
+        if !model.connected {
+            Text("Background runner unavailable")
+            if !model.connectionError.isEmpty { Text(model.connectionError) }
+        } else {
+            let nodes = model.snapshot?.nodes ?? []
+            Text("\(nodes.filter(\.running).count) of \(nodes.count) nodes running")
+            if let pid = model.snapshot?.legacyPID { Text("Original node running (PID \(pid)); migration pending") }
+            ForEach(nodes) { node in
+                Menu("\(node.profile.name): \(node.state)") {
+                    Text("Mesh: \(node.meshIP.isEmpty ? "—" : node.meshIP)")
+                    Text("Join: \(node.join)")
+                    if !node.message.isEmpty { Text(node.message) }
+                    NodeStartStop(model: model, node: node)
+                }
+            }
         }
+        if !model.operationError.isEmpty { Text(model.operationError) }
         Divider()
-        Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        Button("Open WeCoLab") { openWindow(id: "main"); NSApp.activate() }
+        Divider()
+        Button("Quit WeCoLab (nodes keep running)") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }

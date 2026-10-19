@@ -31,10 +31,9 @@ func run(_ tool: String, _ args: [String]) throws -> String {
     var c = NodeConfig()
     #expect(c.cpus == 2 && c.memoryGiB == 4 && c.diskGiB == 20 && c.idleMinutes == 5)
     try c.validate()  // no invite needed: only the first start reads it
-    #expect(c.idleCPUs == 2 && c.idleMemoryGiB == 4 && !c.startAtLogin && !c.startNodeOnLaunch)
+    #expect(c.idleCPUs == 2 && c.idleMemoryGiB == 4)
     c.invite = makeInvite()
     c.idleCPUs = 6
-    c.startNodeOnLaunch = true
     #expect(try JSONDecoder().decode(NodeConfig.self, from: JSONEncoder().encode(c)) == c)
     c.memoryGiB = 1
     #expect(throws: NodeError.self) { try c.validate() }
@@ -44,7 +43,7 @@ func run(_ tool: String, _ args: [String]) throws -> String {
     let old = #"{"cpus":3,"memoryGiB":6,"diskGiB":30,"idleMinutes":10,"invite":"wcl1.x"}"#
     let c = try JSONDecoder().decode(NodeConfig.self, from: Data(old.utf8))
     #expect(c.cpus == 3 && c.memoryGiB == 6 && c.diskGiB == 30 && c.idleMinutes == 10 && c.invite == "wcl1.x")
-    #expect(c.idleCPUs == 3 && c.idleMemoryGiB == 6 && !c.startAtLogin && !c.startNodeOnLaunch)
+    #expect(c.idleCPUs == 3 && c.idleMemoryGiB == 6)
 }
 
 @Test func idleIsNeverLessThanTheReservation() throws {
@@ -257,6 +256,7 @@ func joinWrapper(in dir: URL) throws -> String {
     let dir = try tempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let paths = Paths(root: dir)
+    try FileManager.default.createDirectory(at: paths.share, withIntermediateDirectories: false)
     try paths.prepare()
     #expect(Provision.guest(paths) == .none)
     try Data().write(to: paths.disk)
@@ -271,27 +271,33 @@ func joinWrapper(in dir: URL) throws -> String {
     let dir = try tempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let paths = Paths(root: dir), fm = FileManager.default
+    try fm.createDirectory(at: paths.share, withIntermediateDirectories: false)
     var c = NodeConfig()
     c.invite = makeInvite()
     c.diskGiB = 8
     // Not confirmed: nothing is made.
-    await #expect(throws: NodeError.self) { try await Provision.run(c, at: paths, confirm: { _ in false }, log: { _ in }) }
+    await #expect(throws: NodeError.self) { try await Provision.run(c, at: paths, hostname: "mac-test", confirm: { _ in false }, log: { _ in }) }
     for url in [paths.seed, paths.guestVersion, paths.disk] { #expect(!fm.fileExists(atPath: url.path)) }
-    // Confirmed, over what v1 left: a new guest, with nothing of the old one's.
-    try Data(count: 1 << 20).write(to: paths.image)  // stands in for the download
-    try Data("{}".utf8).write(to: paths.share.appending(path: "netbird.json"))
+    // A pre-existing identity cannot be silently replaced by provisioning.
     try Data("v1".utf8).write(to: paths.machineID)
-    try await Provision.run(c, at: paths, confirm: { _ in true }, log: { _ in })
+    await #expect(throws: NodeError.self) {
+        try await Provision.run(c, at: paths, hostname: "mac-test", confirm: { _ in true }, log: { _ in })
+    }
+    try fm.removeItem(at: paths.machineID)
+    try Data(count: 1 << 20).write(to: paths.image)  // stands in for the download
+    try await Provision.run(c, at: paths, hostname: "mac-test", confirm: { _ in true }, log: { _ in })
     #expect(Provision.guest(paths) == .current)
-    #expect(fm.fileExists(atPath: paths.seed.path) && !fm.fileExists(atPath: paths.machineID.path))
+    #expect(fm.fileExists(atPath: paths.seed.path))
     // Made: the invite is neither read nor confirmed again.
     c.invite = ""
-    try await Provision.run(c, at: paths, confirm: { _ in Issue.record("asked again"); return false }, log: { _ in })
+    try await Provision.run(c, at: paths, hostname: "mac-test", confirm: { _ in Issue.record("asked again"); return false }, log: { _ in })
     // Reset deletes the guest and forgets the spent invite; the image stays.
     c.invite = makeInvite()
     try c.save(paths)
     try Data().write(to: paths.share.appending(path: "wecolab-join.log"))
-    #expect(try Provision.reset(paths).invite == "" && NodeConfig.load(paths).invite == "")
+    let cleared = try Provision.reset(paths)
+    #expect(cleared.invite == "")
+    #expect(try NodeConfig.load(paths).invite == "")
     for url in [paths.seed, paths.guestVersion, paths.disk, paths.share.appending(path: "wecolab-join.log")] {
         #expect(!fm.fileExists(atPath: url.path))
     }
@@ -300,7 +306,7 @@ func joinWrapper(in dir: URL) throws -> String {
     try paths.prepare()
     try Data().write(to: paths.disk)
     await #expect(throws: NodeError.self) {
-        try await Provision.run(c, at: paths, confirm: { _ in Issue.record("asked about an old guest"); return true }, log: { _ in })
+        try await Provision.run(c, at: paths, hostname: "mac-test", confirm: { _ in Issue.record("asked about an old guest"); return true }, log: { _ in })
     }
 }
 
@@ -412,29 +418,31 @@ func seedFiles(_ userData: String) -> [String: (content: String, permissions: St
 }
 
 @Test func guestStatusReadsTheShare() throws {
-    let dir = try tempDir()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    #expect(GuestStatus.read(from: dir).join == "waiting for first boot")
+    let root = try tempDir(), dir = root.appending(path: "share")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: root) }
+    #expect(GuestStatus.read(Paths(root: dir.deletingLastPathComponent())).join == "waiting for first boot")
     try #"{"ip":"10.77.1.4","name":"vince-mac","connected":true}"#
         .write(to: dir.appending(path: "nebula.json"), atomically: true, encoding: .utf8)
     // As the guest writes it: the wrapper's lines around install.sh's.
     let start = "==> wecolab-join, 2026-09-29T10:00:00Z\n\n==> Nebula\n", refused = "wecolab: the Console refused the invite\n"
     let log = dir.appending(path: "wecolab-join.log")
     try start.write(to: log, atomically: true, encoding: .utf8)
-    let s = GuestStatus.read(from: dir)
+    let s = GuestStatus.read(Paths(root: dir.deletingLastPathComponent()))
     #expect(s.meshIP == "10.77.1.4" && s.meshName == "vince-mac" && s.meshConnected && s.join == "running" && s.lastLine == "==> Nebula")
     try (start + refused + "wecolab-join exit=1\n").write(to: log, atomically: true, encoding: .utf8)
-    #expect(GuestStatus.read(from: dir).join == "failed (exit 1), will retry")
-    #expect(GuestStatus.read(from: dir).lastLine == "wecolab: the Console refused the invite")  // the error, not the wrapper's line
+    #expect(GuestStatus.read(Paths(root: dir.deletingLastPathComponent())).join == "failed (exit 1), will retry")
+    #expect(GuestStatus.read(Paths(root: dir.deletingLastPathComponent())).lastLine == "wecolab: the Console refused the invite")
     try (start + refused + "wecolab-join exit=1\n" + start).write(to: log, atomically: true, encoding: .utf8)
-    #expect(GuestStatus.read(from: dir).join == "retrying")
+    #expect(GuestStatus.read(Paths(root: dir.deletingLastPathComponent())).join == "retrying")
     try (start + refused + "wecolab-join exit=1\n" + start + "wecolab-join exit=0\n").write(to: log, atomically: true, encoding: .utf8)
-    #expect(GuestStatus.read(from: dir).join == "finished")
+    #expect(GuestStatus.read(Paths(root: dir.deletingLastPathComponent())).join == "finished")
 }
 
 @Test func shareIsReadWithoutFollowingTheGuest() throws {
-    let dir = try tempDir()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let root = try tempDir(), dir = root.appending(path: "share")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: root) }
     let secret = dir.appending(path: "disk.img")
     try "not the guest's".write(to: secret, atomically: true, encoding: .utf8)
     // A symlink to a file on the Mac, a FIFO that would block, a directory: none is read.
@@ -444,7 +452,7 @@ func seedFiles(_ userData: String) -> [String: (content: String, permissions: St
     #expect(readShare("wecolab-join.log", in: dir, limit: 1024) == nil)
     #expect(readShare("nebula.json", in: dir, limit: 1024) == nil)
     #expect(readShare("mode", in: dir, limit: 16) == nil)
-    #expect(GuestStatus.read(from: dir) == GuestStatus())
+    #expect(GuestStatus.read(Paths(root: dir.deletingLastPathComponent())) == GuestStatus())
     // A file without end: only its tail.
     try (String(repeating: "x", count: 1 << 20) + "wecolab-join exit=0\n").write(to: dir.appending(path: "big"), atomically: true, encoding: .utf8)
     #expect(readShare("big", in: dir, limit: 64) == String(repeating: "x", count: 44) + "wecolab-join exit=0\n")
@@ -452,5 +460,5 @@ func seedFiles(_ userData: String) -> [String: (content: String, permissions: St
     try "\u{1b}[2K\rok\u{202e}\n".write(to: dir.appending(path: "text"), atomically: true, encoding: .utf8)
     #expect(readShare("text", in: dir, limit: 64) == "[2Kok\n")
     try #"{"ip":"10.77.1.4","name":"\u001b[2Kvince"}"#.write(to: dir.appending(path: "nebula.json"), atomically: true, encoding: .utf8)
-    #expect(GuestStatus.read(from: dir).meshName == "[2Kvince")  // a JSON escape too
+    #expect(GuestStatus.read(Paths(root: dir.deletingLastPathComponent())).meshName == "[2Kvince")
 }

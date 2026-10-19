@@ -1,32 +1,45 @@
 # WeCoLab for Mac
 
 Requires an Apple Silicon Mac running macOS 14 or newer and a site already
-created on a supported Linux box. Build from this checkout with Swift 6 and
-Apple's signing tools; the ad-hoc-signed build is for the Mac that built it,
-not a notarized release for other Macs.
+created on a supported Linux box. Build with Swift 6, Go (the version in
+`network/go.mod` or newer), and Apple's signing tools. The ad-hoc-signed build
+is for the Mac that built it, not a notarized release for other Macs.
 
-A Mac cannot run k3s, so this runs one small Debian VM through Virtualization.framework and, inside it,
-the standard join (`install.sh`). The Mac becomes a laptop node of its owner's site, over Nebula.
-Paste an invite (Console: Sites → your site → Add a Mac), set what the Mac contributes, press Start node.
+The app and CLI control one per-user background runner. Each node profile has
+its own Debian VM, fabric invite, guest identity, disk and resource settings.
+Closing either client does not stop its VMs.
+
+**Untrusted/friend fabrics cannot start in this build.** The default `isolated`
+policy rejects startup before provisioning: a verified OS-enforced Mac/LAN
+firewall is not implemented or installed. App Sandbox and user-space packet
+filtering are not substitutes. `localNetwork` is an explicitly confirmed mode
+for trusted fabrics only; it does not guarantee exclusion of the Mac, LAN
+devices or peer VMs. Do not switch a friend's node to this mode to bypass the
+strict-mode blocker.
 
 ```text
-WeCoLabCore/      the VM logic, no UI
-  Config.swift      config model, invite check, paths, lock, reading what the guest publishes
-  Provision.swift   Debian image download + SHA512 check, sparse grow, NoCloud seed (user-data), reset
-  NodeVM.swift      the VM actor: devices, start/stop, memory balloon + activity mode
-wecolab-node/     headless CLI on the same core
-WeCoLab/          SwiftUI menu bar app and its main window
-Plugins/          compiles ../install.sh into WeCoLabCore at build time
-Tests/            config and its migration, invite, user-data and its join wrapper, seed ISO, guest version,
-                  first start and reset, sparse grow, share reading, balloon target
+WeCoLabCore/      profiles, provisioning, shared control protocol and VM implementation
+  Profiles.swift      per-node storage, legacy import and aggregate resource admission
+  RunnerClient.swift  shared XPC client and user LaunchAgent registration
+  RunnerService.swift serialized admission and worker lifecycle
+  Provision.swift     Debian image verification, disk/seed and bounded host channel
+  NodeVM.swift        Virtualization.framework devices and memory balloon
+wecolab-runner/   background supervisor; neither client owns VM processes
+wecolab-vm/       sandboxed worker with a capability for one profile directory
+network/         inherited-sandbox Go network backend with bounded flow admission
+wecolab-node/    headless client
+WeCoLab/         SwiftUI menu bar app and profile window
+Plugins/         compiles ../install.sh into WeCoLabCore at build time
+Tests/           configuration, provisioning, migration, boundaries and lifecycle regressions
 ```
 
 ## Build
 
 ```bash
-make test     # unit tests (swift test)
-make sign     # dist/WeCoLab.app and dist/wecolab-node, ad-hoc signed with WeCoLab.entitlements
-make dmg      # dist/WeCoLab.dmg
+make test     # Swift tests and Go race tests
+make sign     # signed dist/WeCoLab.app, CLI, runner, VM worker and network backend
+make test-sandbox # build/sign and exercise a real worker's home-directory capability
+make dmg      # dist/WeCoLab.dmg (local development signing by default)
 ```
 
 CI also builds the SwiftUI executable with the macOS 15 runner's Swift 6.1 compiler.
@@ -34,69 +47,95 @@ Keep the login-item `Binding` setter as an explicit closure: passing the actor-i
 method reference directly triggers [Swift compiler crash #82491](https://github.com/swiftlang/swift/issues/82491)
 in that toolchain. The closure preserves the same synchronous main-actor behavior.
 
-Virtualization.framework refuses to run without the `com.apple.security.virtualization` entitlement.
-An unsigned `swift build` binary fails with *"Invalid virtual machine configuration. The process doesn't
-have the “com.apple.security.virtualization” entitlement."*; `make sign` fixes that. The signature is
-ad-hoc, which is enough on the Mac that built it. A DMG for other people's Macs needs a Developer ID
-signature and notarization, otherwise Gatekeeper blocks it.
+Only `wecolab-vm` receives the virtualization entitlement and App Sandbox
+capabilities. It resolves the supervisor's bookmark for its own profile; its
+network child inherits the sandbox. The app, CLI and runner do not host VMs.
+`swift build` alone is insufficient to boot a VM: use the complete signed
+package. Keep the CLI's three helper executables beside it.
+
+The sandbox smoke creates a disposable profile under Application Support, checks
+that the signed worker can acquire its VM lock, and confirms strict startup stays
+blocked without creating a guest disk. It does not start a VM.
+
+`SIGN_IDENTITY` selects the signing identity; the default is ad hoc. Distribution
+to other Macs also requires Developer ID signing and notarization. A signed app
+alone does not enable strict isolation: that needs a supported, fail-closed OS
+enforcement design, an Apple-authorized Network Extension provisioning/signing
+setup, installation/approval and verified enforcement before startup is enabled.
 
 ## Use
 
-WeCoLab is a menu bar app. Its icon, top right (the WeCoLab mark: a ring, a triangle, three sites; dimmed
-while the node is stopped), opens a menu with the VM's state, the mode (you are `active` or `idle`), the
-box's Nebula address (shown as Mesh; it is not the people mesh) and the join, then Start node / Stop node,
-Open WeCoLab and Quit. Quit, or a SIGTERM (as `wecolab-node down` sends), shuts the guest down first.
+The menu lists nodes and their state; the main window selects a profile and
+shows its fabric, VM state, activity, mesh report, settings and runner resource
+reservations. **Add node** confirms the invite's exact HTTPS Console: that
+fabric's administrators control the guest as root. Each profile requires its
+own invite. Never paste invites into shell command arguments.
 
-The main window takes the invite and **what this Mac contributes** (CPUs, Memory, Disk). WeCoLab is in
-the Dock only while that window is open; closing it leaves the node running. The window opens when WeCoLab
-starts, unless WeCoLab starts the node itself (below).
+**Start node / Stop node** affect only the selected profile. Closing the window
+or quitting the app leaves VMs running. **Open WeCoLab at login** controls the
+UI login item; each profile's auto-start setting controls whether the runner
+starts that VM when it launches. A user LaunchAgent owns the runner, independent
+of the UI, and appears under macOS Login Items/background permissions.
 
-The first start shows the Console the invite joins through and asks before going on: that Console gets
-root in the VM, on your network. An invite whose Console is anything but `https://<host>` (with an
-optional port) is refused, so what is shown is the host the guest will talk to. Only the first start
-reads the invite. Afterwards the window offers **Reset** instead, which deletes the VM (disk, seed,
-identity, share) and the spent invite. Remove the Mac's box in the Console first (Sites → the site → the
-box → Remove): joining again takes the same box name, `<site>-mac-<name>`.
+Resource admission reserves each preparing/running/stopping VM's maximum idle
+CPUs and memory, plus 1 GiB per worker. The combined budget leaves one logical
+CPU and 4 GiB memory for the host. These are admission limits, not a hard quota
+on every host allocation. The guest disk has a fixed virtual capacity but is
+sparse on the host. Stop a VM before resetting/removing it.
 
-Like Docker Desktop's resource settings, what this Mac contributes is a reservation: the node has it all the
-time while WeCoLab runs, and nothing takes it back. The main window (Open WeCoLab in the menu) also holds:
-
-- **When idle**: *Idle after* N minutes, *Idle CPUs*, *Idle memory*. Once nobody has touched the Mac for N
-  minutes the node may use up to these: up to every core, and all memory but 2 GiB. Never less than the
-  reservation; raising the reservation raises them with it.
-- **Start WeCoLab at login**: a login item (`SMAppService.mainApp`). Its status shows under the toggle;
-  macOS may ask you to allow it in System Settings, General, Login Items.
-- **Start the node when WeCoLab opens**: once the VM exists, the node starts at launch and the window
-  stays closed. With both on, the Mac rejoins its Site after every login without anyone opening anything.
-
-Memory in the main window applies within seconds while the node runs, up to the size it started with.
-CPUs, disk and everything under When idle apply at the next start.
-
-The CLI does the same, headless:
+Memory reservation changes apply while running, up to that VM's boot-time
+maximum. CPU, disk, network policy and idle settings require a restart; the UI
+and CLI report pending settings rather than presenting them as applied.
 
 ```bash
-dist/wecolab-node up --invite - --cpus 2 --memory 4 --disk 20 --idle-cpus 6 --idle-memory 12
-                             # --invite - reads the invite from stdin (paste it), never from the command
-                             # line, where every process can read it; stays in the foreground; omitted
-                             # flags keep saved values; the first start asks to confirm the invite's Console
-dist/wecolab-node status     # profiles, VM, mode, Nebula address, join progress (last lines of the join log)
-dist/wecolab-node down       # signals the running app or CLI, waits up to 90 s for it to exit;
-                             # the VM asks the guest to power off and forces it after 60 s
-dist/wecolab-node reset      # deletes the guest and invite, keeps downloaded image and settings;
-                             # remove the old box in the Console and wait for node deletion first
+# Trusted fabric only: confirmation includes Console ownership and LAN risk.
+dist/wecolab-node add --name Personal --invite - --network localNetwork \
+  --cpus 2 --memory 4 --disk 20 --idle-cpus 2 --idle-memory 4
+dist/wecolab-node up --node Personal       # returns once the VM is running
+dist/wecolab-node list
+dist/wecolab-node status --node Personal --json
+dist/wecolab-node configure --node Personal --auto-start true
+dist/wecolab-node down --node Personal     # guest shutdown, forced after 60 seconds
+
+# Safe default: a profile can be saved, but cannot start without strict enforcement.
+dist/wecolab-node add --name Friend --invite -
+dist/wecolab-node up --node Friend         # rejected; no weaker fallback
+
+# Remove the box in its fabric Console and wait for node deletion first.
+dist/wecolab-node reset --node Personal    # deletes guest/identity/invite, keeps profile
+dist/wecolab-node remove --node Personal   # deletes only this stopped profile
 ```
 
-The app and the CLI share `config.json`. Only one VM runs per user (`vm.pid` is a lock), so they never share
-a disk.
+`--node` accepts a name or full profile ID. Mutations require it when multiple
+profiles exist. `--yes` explicitly accepts CLI trust/destruction confirmations;
+it does not bypass strict-mode enforcement. Status responses redact invites.
+Reset/remove do not revoke remote fabric membership.
+
+### Existing single-node installation
+
+The old CLI/app-owned VM is never taken over while running. The new clients
+report its PID and require one graceful stop using the **old** owner before
+migration. Do not reset, kill or re-enroll it. On the next runner request,
+journaled import moves the existing disk, identity, seed and configuration into
+one profile, preserving its enrollment. Its original network behavior is
+represented as trusted LAN mode. A partially completed import resumes; conflicting
+files or unsafe links block migration instead of overwriting them.
+
+For development, both clients accept `--root PATH` to use a separate state
+directory and LaunchAgent. Always use a disposable root for smoke tests, never
+the existing node. Keep the installed app/CLI path stable while its runner is
+registered. Another client connects to an already registered runner rather than
+replacing it with its own build.
 
 ## What happens
 
-First `up`: download `debian-13-genericcloud-arm64.raw` (3 GiB, raw because Virtualization.framework
-reads raw images) from cloud.debian.org, check it against the published `SHA512SUMS`, clone it to
-`disk.img` (an APFS clone, no extra space) and grow that sparsely to the disk size. A NoCloud seed
-(`hdiutil makehybrid -iso -joliet`, label `cidata`) carries `meta-data` and `user-data`. The user-data
-sets the hostname to `mac-<short name>` (at most 30 characters: the node is `<site>-<host>`, at most 63,
-and a site name may take 32), writes `install.sh` (compiled into the binary, never downloaded) to
+First start of a permitted profile: download `debian-13-genericcloud-arm64.raw`
+from cloud.debian.org, verify its published SHA512 checksum, clone it to that
+profile's `disk.img`, and grow it sparsely to the requested capacity. A NoCloud
+seed (`hdiutil makehybrid -iso -joliet`, label `cidata`) carries `meta-data` and
+`user-data`. New profiles use a stable UUID-derived hostname of at most 30
+characters, distinct from the editable display name. The user-data writes the
+embedded installer to
 `/opt/wecolab/join.sh` and the invite to a root-only file, and enables three units: the share's mount, the
 host-channel timer, and `wecolab-join.service`, which runs `install.sh` with the invite as its argument
 (sourced in a subshell, so the invite is in no process's argv) and `WECOLAB_LAPTOP=1` (the Console refuses
@@ -107,17 +146,12 @@ counts as one that succeeded. Each attempt first finishes an interrupted `dpkg`,
 again, which skips what an earlier attempt finished. The Console uses up the invite only when it has
 recorded the Mac; a VM that is reset needs a new one.
 
-The seed test mounts a transient `hdiutil makehybrid` ISO in a temporary directory (never the
-user's VM), checks its `cidata` label and `meta-data` keys, and reads the mounted cloud-config
-as cloud-init's NoCloud consumer would. It checks the decoded installer against `install.sh`,
-the root-only invite, the join service and its first-boot commands. The Oct 5 failure compared
-mounted `user-data` to a second, independently generated invite: the test's JSON-backed invite
-can serialize its dictionary keys in different orders. That byte equality did not establish
-an ISO or guest-boot defect; the test now uses one invite and checks consumed content instead.
-Do not print the mounted `user-data`: it contains the invite. A passing ISO test does not
-prove guest boot; the release gate still requires a disposable ARM VM with a throwaway
-invite/fabric, observing cloud-init `wecolab-join`, its log, Nebula and node-agent, then
-removing only that VM and its throwaway identity.
+The seed test mounts only a transient ISO, checks its `cidata` label and decoded
+cloud-config, installer, root-only invite and join commands. Do not print
+`user-data`: it contains the invite. These tests do not prove fabric enrollment.
+A release still requires a disposable ARM VM and throwaway fabric/invite,
+observing cloud-init, `wecolab-join`, Nebula and node-agent, then removing only
+that VM and its throwaway identity.
 
 `guest-version` is the VM disk's compatibility generation (`2`), not the app's release
 version or a report of the guest's installed Warden version. The app bundle's Info.plist
@@ -129,21 +163,36 @@ deletes its disk and identity and requires removing and rejoining its box. A v1 
 guest at the same paths, a disk without the current stamp, or a share with v1's
 `netbird.json`, cannot start until reset.
 
-The VM: the idle profile's CPUs and memory, EFI boot, virtio disk + seed, NAT network with a fixed MAC
-(cloud-init binds the network config to it), a memory balloon, entropy, a virtio console to `console.log`,
-and a virtio-fs share. Every 5 s the balloon follows whether you are active (below).
+The VM uses EFI, virtio disk and seed, a fixed MAC, a memory balloon, entropy,
+bounded serial capture and virtio-fs. Its Ethernet attachment goes to a private
+socketpair, not Virtualization.framework NAT. A per-VM Go/gVisor backend handles
+IPv4 TCP/UDP, DNS and DHCP. Flow/handler admission and socket buffers are bounded;
+this is not an OS-enforced network isolation boundary.
+The pinned generated gVisor `go` branch includes
+[UDP packet-overhead accounting](https://github.com/google/gvisor/commit/14dfded19e92b6bfcf49022f81d537fac4278333).
+Do not downgrade to a payload-only receive budget: empty datagrams would bypass
+it. A regression holds the consumer idle during an empty-datagram burst and
+checks both bounded admission and budget recovery after draining.
 
-Everything is in `~/Library/Application Support/WeCoLab/`: `config.json`, the image, `disk.img`,
-`guest-version`, `seed.iso`, EFI variables, machine identifier, MAC address, `console.log`, `vm.pid`, `share/`.
-`config.json` holds every setting, the app's and the CLI's: both profiles, the idle minutes, the two startup
-choices and the invite; a `config.json` from before the idle profile loads with idle equal to the
-reservation. `config.json` and `seed.iso` hold the invite and are readable by the user only. The login item
-itself is registered with macOS (System Settings, General, Login Items), not stored here.
+State lives in `~/Library/Application Support/WeCoLab/profiles/<uuid>/`.
+Each profile owns `profile.json`, disk, seed, guest version, EFI variables,
+machine identifier, MAC address, console capture, `vm.pid`, `channel.dmg` and
+`share/`. Profile directories are private to the user; configuration and seed
+contain the invite and have user-only permissions. A worker's disk lock stays
+held until its guest stops. The runner serializes admission before asynchronous
+provisioning, so concurrent app/CLI starts cannot create duplicate workers for
+one profile. Runtime snapshots distinguish configured from running settings.
 
 ## Host-guest channel
 
-`share/` on the Mac is `/wecolab` in the guest (virtio-fs tag `wecolab`, mounted at boot by `wecolab.mount`,
-before `k3s-agent`, so the node agent's pod never sees an empty directory).
+`share/` is a mounted fixed-size **16 MiB HFS+ image**, exposed as `/wecolab`
+through virtio-fs tag `wecolab`. The worker refuses an unmounted/plain directory.
+This bounds guest-written channel data independently of the host filesystem's
+free space. The image is mounted before worker launch and detached after worker
+exit. Legacy channel files are copied into it without following links.
+
+The guest's `wecolab.mount` runs before `k3s-agent`, so the node agent's pod does
+not see an empty directory at boot.
 
 | file | written by | meaning |
 |---|---|---|
@@ -177,15 +226,14 @@ Kubernetes is told through the `mode` file: the site's node agent (a DaemonSet o
 ones may run on a laptop node. They can start only while the idle taint is off, and are evicted a minute
 after it comes back (when the person returns).
 
-Mode publication is atomic and the cached state advances only after the share write succeeds.
-The app reports publication errors in its window; the headless CLI writes them to stderr.
-Both retry on the next five-second tick. On an idle-to-active transition the Mac removes any
-stale `idle` file before writing `active`: a failed active write leaves no idle grant, so the
-node agent keeps/reapplies its idle taint. If removal fails, the VM is stopped instead of
-continuing to advertise workload eligibility. Failed idle writes retain the non-idle
-backstop; the balloon target is still applied every tick. To test actual guest convergence,
-use a dedicated test account and a disposable VM/share, never change permissions on the
-user's existing VM share.
+Mode publication is atomic and the cached state advances only after the share
+write succeeds. The worker reports publication errors through the runner to
+both clients and retries on the next five-second tick. On an idle-to-active
+transition it removes stale `idle` before writing `active`; a failed write leaves
+no idle grant. If removal fails, the VM stops rather than continuing to advertise
+workload eligibility. The balloon target still applies every tick.
+Test actual guest convergence with a dedicated test account and disposable
+VM/share; never change permissions on the user's existing VM share.
 
 A Mac runs only the apps without a database of projects whose every offer held at its site, directly or
 through a pool, is best effort (Console: Sites, New offer, tick best effort; an offer that names boxes must
@@ -194,6 +242,8 @@ holder runs no apps.
 
 ## Not done yet
 
+- Strict OS-enforced Mac/LAN exclusion is unavailable; untrusted/friend nodes remain blocked.
+- The shared runner and worker sandbox do not constitute a guarantee against hypervisor or OS vulnerabilities.
 - No download progress bar; the first start shows a download status message but not progress through the 3 GiB image.
 - Going from idle to active, the balloon asks for everything above the reservation back at once, while the
   taint's drain takes up to a minute.
