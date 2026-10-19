@@ -7,7 +7,8 @@ is for the Mac that built it, not a notarized release for other Macs.
 
 The app and CLI control one per-user background runner. Each node profile has
 its own Debian VM, fabric invite, guest identity, disk and resource settings.
-Closing either client does not stop its VMs.
+Closing the app window or exiting the CLI leaves VMs running. Explicitly
+quitting WeCoLab shuts down every VM, including those started through the CLI.
 
 **Untrusted/friend fabrics cannot start in this build.** The default `isolated`
 policy rejects startup before provisioning: a verified OS-enforced Mac/LAN
@@ -72,10 +73,19 @@ fabric's administrators control the guest as root. Each profile requires its
 own invite. Never paste invites into shell command arguments.
 
 **Start node / Stop node** affect only the selected profile. Closing the window
-or quitting the app leaves VMs running. **Open WeCoLab at login** controls the
-UI login item; each profile's auto-start setting controls whether the runner
-starts that VM when it launches. A user LaunchAgent owns the runner, independent
-of the UI, and appears under macOS Login Items/background permissions.
+keeps the app in the menu bar and leaves VMs running. **Quit WeCoLab / ⌘Q**
+requests shutdown of every node and waits for worker exit and disk ownership to
+be released before exiting. Other app/CLI changes are rejected during shutdown;
+status remains available. If shutdown fails or cannot be confirmed, Quit is
+cancelled and the app stays open with an error. Crashes or force-quitting the UI
+do not abruptly terminate its VMs.
+
+After a successful Quit, the runner remains idle: it does not immediately
+restart the stopped nodes. Profile auto-start preferences are preserved and
+apply when the runner next launches, such as at login. Nodes can still be
+started headlessly through the CLI. **Open WeCoLab at login** controls the UI
+login item. A user LaunchAgent owns the runner, independent of the UI, and
+appears under macOS Login Items/background permissions.
 
 Resource admission reserves each preparing/running/stopping VM's maximum idle
 CPUs and memory, plus 1 GiB per worker. The combined budget leaves one logical

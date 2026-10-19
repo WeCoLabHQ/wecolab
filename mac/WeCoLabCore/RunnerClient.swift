@@ -32,6 +32,8 @@ public final class RunnerClient: @unchecked Sendable {
     public func send(_ command: RunnerCommand) async throws -> RunnerSnapshot {
         try await RunnerInstallation.shared.ensure(locations)
         let request = try JSONEncoder().encode(command)
+        // stopAll acknowledges worker exit, including the guest's 60-second graceful-stop window.
+        let timeout: Double = if case .stopAll = command { 90 } else { 20 }
         let data: Data = try await withCheckedThrowingContinuation { continuation in
             let connection = NSXPCConnection(machServiceName: locations.serviceName)
             connection.remoteObjectInterface = NSXPCInterface(with: RunnerXPCProtocol.self)
@@ -46,7 +48,7 @@ public final class RunnerClient: @unchecked Sendable {
                 return
             }
             remote.request(request) { pending.finish(.success($0)) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 pending.fail("The background runner did not answer; VM state is unavailable.")
             }
         }

@@ -9,6 +9,7 @@ public actor RunnerService {
     private var lastErrors: [String: String] = [:]
     private var migrationError = ""
     private var initialized = false
+    private var stopAllTask: Task<Void, any Error>?
 
     private struct RunRecord {
         let generation = UUID()
@@ -42,6 +43,12 @@ public actor RunnerService {
     public func handle(_ command: RunnerCommand) async -> RunnerReply {
         await initialize()
         do {
+            if stopAllTask != nil {
+                switch command {
+                case .status, .stopAll: break
+                default: throw NodeError("All nodes are shutting down. Wait before changing or starting a node.")
+                }
+            }
             switch command {
             case .status: break
             case .create(let profile, let confirmedConsole):
@@ -93,10 +100,37 @@ public actor RunnerService {
                 try store.remove(id: id)
                 lastErrors[id] = nil
             case .stopAll:
-                for id in Array(running.keys) { try stop(id) }
+                try await stopAll()
             }
             return RunnerReply(snapshot: try snapshot())
         } catch { return RunnerReply(error: error.localizedDescription) }
+    }
+
+    private func stopAll() async throws {
+        if let stopAllTask { return try await stopAllTask.value }
+        let task = Task { try await self.finishStoppingAll() }
+        stopAllTask = task
+        defer { stopAllTask = nil }
+        try await task.value
+    }
+
+    private func finishStoppingAll() async throws {
+        var failures: [String] = []
+        for id in Array(running.keys) {
+            do { try stop(id) }
+            catch { failures.append("\(running[id]?.profile.name ?? id): \(error.localizedDescription)") }
+        }
+        if VMLock.holder(Paths(root: locations.root)) != nil {
+            failures.append("The original CLI-owned VM must be stopped with its original client before migration.")
+        }
+        guard failures.isEmpty else { throw NodeError(failures.joined(separator: "\n")) }
+        let deadline = ContinuousClock.now + .seconds(75)
+        while try snapshot().anyRunning {
+            guard ContinuousClock.now < deadline else {
+                throw NodeError("Some VMs still own their disks after 75 seconds. The app will stay open; inspect node status before trying Quit again.")
+            }
+            try await Task.sleep(for: .milliseconds(200))
+        }
     }
 
     public func stopForTermination() async {
@@ -197,11 +231,12 @@ public actor RunnerService {
     private func stop(_ id: String) throws {
         guard var record = running[id] else { return }
         guard record.state != "stopping" else { return }
+        // A failed pipe write must leave the request retryable, not falsely mark it as stopping.
+        if let session = record.session { try session.send(.stop) }
         record.state = "stopping"
         record.message = "Asking the guest to shut down"
         record.preparation?.cancel()
         running[id] = record
-        if let session = record.session { try session.send(.stop) }
     }
 
     private func progress(_ id: String, generation: UUID, line: String) {
@@ -270,6 +305,7 @@ public actor RunnerService {
         return RunnerSnapshot(nodes: nodes, cpuBudget: budget.cpuCount, memoryBudgetGiB: budget.memoryGiB,
                               reservedCPUs: running.values.reduce(0) { $0 + $1.profile.config.idleCPUs },
                               reservedMemoryGiB: running.values.reduce(0) { $0 + $1.profile.config.idleMemoryGiB + ResourceBudget.workerMemoryGiB },
+                              stoppingAll: stopAllTask != nil,
                               legacyPID: VMLock.holder(Paths(root: locations.root)), message: migrationError)
     }
 }

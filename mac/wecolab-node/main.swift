@@ -14,7 +14,7 @@ resource options: --cpus N --memory GiB --disk GiB --idle-minutes N --idle-cpus 
 --invite - reads a one-time invite from stdin; never put it in argv.
 --network isolated is the default and cannot start: this build has no verified OS network firewall.
 localNetwork is only for trusted fabrics; it does not guarantee Mac/LAN exclusion.
-App and CLI control the same background runner; closing either does not stop a node.
+App and CLI share one runner. Closing the app window or exiting the CLI leaves nodes running; Quit WeCoLab stops all nodes.
 With multiple nodes, mutation commands require --node. reset/remove never revoke remote membership.
 --root PATH uses a separate state directory and launch agent for development or disposable smoke runs.
 """

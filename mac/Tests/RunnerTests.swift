@@ -98,3 +98,91 @@ import Testing
     #expect(!FileManager.default.fileExists(atPath: paths.channelImage.path))
     #expect(VMLock.holder(paths) == nil)
 }
+
+@Test func stoppingAllWaitsForEveryWorkerAndPreservesAutoStartProfiles() async throws {
+    let root = try tempDir()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let service = RunnerService(locations: RunnerLocations(root: root), budget: ResourceBudget(cpuCount: 8, memoryGiB: 16))
+    var profiles: [NodeProfile] = []
+    var ownerships: [Int32] = []
+    for name in ["Personal", "Shared"] {
+        var profile = NodeProfile(name: name)
+        profile.config.invite = makeInvite()
+        profile.autoStart = true
+        let created = await service.handle(.create(profile, confirmedConsole: "https://console.fab.example"))
+        try #require(created.error == nil)
+        let paths = try ProfileStore(root: root).paths(for: profile.id)
+        ownerships.append(try VMLock.acquire(paths))
+        profiles.append(profile)
+    }
+    let held = ownerships
+    let release = Task {
+        for ownership in held {
+            try? await Task.sleep(for: .milliseconds(100))
+            VMLock.release(ownership)
+        }
+    }
+    let stopped = await service.handle(.stopAll)
+    #expect(stopped.error == nil)
+    #expect(stopped.snapshot?.anyRunning == false)
+    await release.value
+    let status = try #require(await service.handle(.status).snapshot)
+    #expect(status.nodes.allSatisfy { $0.state == "stopped" && $0.pid == nil })
+    #expect(status.reservedCPUs == 0)
+    #expect(status.reservedMemoryGiB == 0)
+    for profile in profiles {
+        #expect(try ProfileStore(root: root).profile(id: profile.id) == profile)
+    }
+}
+
+@Test func stoppingAllCannotClaimAnUnmanagedLegacyVMHasStopped() async throws {
+    let root = try tempDir()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ownership = try VMLock.acquire(Paths(root: root))
+    defer { VMLock.release(ownership) }
+    let service = RunnerService(locations: RunnerLocations(root: root))
+    let stopped = await service.handle(.stopAll)
+    #expect(stopped.error != nil)
+    #expect(VMLock.holder(Paths(root: root)) != nil)
+}
+
+@Test func stoppingAllRejectsConcurrentMutationsAndAllowsChangesAfterward() async throws {
+    let root = try tempDir()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let service = RunnerService(locations: RunnerLocations(root: root), budget: ResourceBudget(cpuCount: 8, memoryGiB: 16))
+    var profile = NodeProfile(name: "Running")
+    profile.config.invite = makeInvite()
+    try #require(await service.handle(.create(profile, confirmedConsole: "https://console.fab.example")).error == nil)
+    let store = ProfileStore(root: root), paths = try store.paths(for: profile.id)
+    var ownership: Int32? = try VMLock.acquire(paths)
+    defer { if let ownership { VMLock.release(ownership) } }
+    let first = Task { await service.handle(.stopAll) }
+    let deadline = ContinuousClock.now + .seconds(2)
+    var status = try #require(await service.handle(.status).snapshot)
+    while !status.stoppingAll, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+        status = try #require(await service.handle(.status).snapshot)
+    }
+    try #require(status.stoppingAll)
+    #expect(status.anyRunning)
+    var candidate = NodeProfile(name: "New")
+    candidate.config.invite = makeInvite()
+    let rejected = await service.handle(.create(candidate, confirmedConsole: "https://console.fab.example"))
+    #expect(rejected.error != nil)
+    #expect(try store.profiles().map(\.id) == [profile.id])
+    var changed = profile
+    changed.name = "Changed during shutdown"
+    #expect(await service.handle(.configure(changed, confirmedConsole: nil)).error != nil)
+    #expect(try store.profile(id: profile.id) == profile)
+    let second = Task { await service.handle(.stopAll) }
+    VMLock.release(try #require(ownership))
+    ownership = nil
+    let firstReply = await first.value, secondReply = await second.value
+    #expect(firstReply.error == nil)
+    #expect(secondReply.error == nil)
+    #expect(firstReply.snapshot?.anyRunning == false)
+    #expect(secondReply.snapshot?.anyRunning == false)
+    #expect(await service.handle(.status).snapshot?.stoppingAll == false)
+    #expect(await service.handle(.create(candidate, confirmedConsole: "https://console.fab.example")).error == nil)
+    #expect(try store.profile(id: candidate.id) == candidate)
+}

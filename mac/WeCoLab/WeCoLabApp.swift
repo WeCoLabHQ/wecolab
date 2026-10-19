@@ -30,8 +30,25 @@ import WeCoLabCore
         NSApp.setActivationPolicy(window.isVisible || window.isMiniaturized ? .regular : .accessory)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    // The app is a client. Quit never terminates a VM owned by the background runner.
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { .terminateNow }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !model.quitting else { return .terminateLater }
+        model.quitting = true
+        Task {
+            let stopped = await model.stopForQuit()
+            sender.reply(toApplicationShouldTerminate: stopped)
+            if !stopped {
+                model.quitting = false
+                sender.activate(ignoringOtherApps: true)
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "Could not shut down all nodes"
+                alert.informativeText = model.operationError
+                alert.addButton(withTitle: "Keep WeCoLab open")
+                alert.runModal()
+            }
+        }
+        return .terminateLater
+    }
 }
 
 @MainActor @Observable final class Model {
@@ -39,7 +56,9 @@ import WeCoLabCore
     var selectedID: String?
     var connectionError = ""
     var operationError = ""
-    var busy = false
+    var quitting = false
+    private var operationInFlight = false
+    var busy: Bool { quitting || operationInFlight || snapshot?.stoppingAll == true }
     private let client: RunnerClient
     private var refreshing = false
     var anyRunning: Bool { snapshot?.anyRunning ?? false }
@@ -63,7 +82,7 @@ import WeCoLabCore
     }
 
     func refresh() async {
-        guard !refreshing, !busy else { return }
+        guard !refreshing, !operationInFlight, !quitting else { return }
         refreshing = true
         defer { refreshing = false }
         do { accept(try await client.send(.status)) }
@@ -78,11 +97,27 @@ import WeCoLabCore
 
     @discardableResult func perform(_ command: RunnerCommand) async -> Bool {
         guard !busy else { return false }
-        busy = true
+        operationInFlight = true
         operationError = ""
-        defer { busy = false }
+        defer { operationInFlight = false }
         do { accept(try await client.send(command)); return true }
         catch { operationError = error.localizedDescription; return false }
+    }
+
+    func stopForQuit() async -> Bool {
+        operationError = ""
+        do {
+            // Finish requests already sent by this app before taking the runner's shutdown gate.
+            while operationInFlight || refreshing { try await Task.sleep(for: .milliseconds(50)) }
+            accept(try await client.send(.stopAll))
+            guard snapshot?.anyRunning == false else {
+                throw NodeError("The runner has not confirmed that every VM has stopped.")
+            }
+            return true
+        } catch {
+            operationError = error.localizedDescription
+            return false
+        }
     }
 
     func startStop(_ node: NodeSnapshot) async {
@@ -136,6 +171,9 @@ struct MainView: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             VStack(spacing: 0) {
+                if model.quitting || model.snapshot?.stoppingAll == true {
+                    ProgressView("Shutting down all nodes…").padding()
+                }
                 if !model.connectionError.isEmpty {
                     Label("Runner unavailable: \(model.connectionError)", systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.red).padding().frame(maxWidth: .infinity, alignment: .leading)
@@ -167,7 +205,7 @@ struct MainView: View {
                         Button("Allow in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
                     if !loginError.isEmpty { Text(loginError).font(.caption).foregroundStyle(.red) }
-                    Text("Closing or quitting this app leaves nodes running. Use Stop node to shut down a VM.")
+                    Text("Closing this window keeps nodes running in the menu bar. Quit WeCoLab shuts down all nodes, including those started through the CLI.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding().frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -393,6 +431,6 @@ struct MenuView: View {
         Divider()
         Button("Open WeCoLab") { openWindow(id: "main"); NSApp.activate() }
         Divider()
-        Button("Quit WeCoLab (nodes keep running)") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        Button("Quit WeCoLab") { NSApp.terminate(nil) }.keyboardShortcut("q").disabled(model.quitting)
     }
 }

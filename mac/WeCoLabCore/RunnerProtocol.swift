@@ -47,6 +47,7 @@ public struct RunnerSnapshot: Codable, Sendable {
     public var memoryBudgetGiB: Int
     public var reservedCPUs: Int
     public var reservedMemoryGiB: Int
+    public var stoppingAll: Bool
     public var legacyPID: Int32?
     public var message: String
 
