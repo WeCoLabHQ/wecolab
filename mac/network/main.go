@@ -19,6 +19,23 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// The mac/Makefile stamps these private strings from the repository generator.
+// An unstamped direct `go build` reports unknown identity instead of a release.
+var productVersion = "development"
+var buildNumber = "unknown"
+var sourceRevision = "unknown"
+var dirty = "unknown"
+
+func versionString() string {
+	suffix := ""
+	if dirty == "true" {
+		suffix = ", dirty"
+	} else if dirty == "unknown" {
+		suffix = ", dirty unknown"
+	}
+	return fmt.Sprintf("WeCoLab %s (build %s, %s%s)", productVersion, buildNumber, sourceRevision, suffix)
+}
+
 func networkConfig(mac net.HardwareAddr) *types.Configuration {
 	return &types.Configuration{
 		MTU: 1500, Subnet: "192.168.127.0/24", GatewayIP: "192.168.127.1",
@@ -172,6 +189,10 @@ func verifyDatagram(conn *net.UnixConn) error {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(versionString())
+		return
+	}
 	// VM vCPU admission does not account for host-side backend scheduling.
 	// Limit concurrent Go execution; this is not a hard host CPU quota.
 	runtime.GOMAXPROCS(1)

@@ -5,6 +5,5 @@
     <key>CFBundleIdentifier</key><string>io.wecolab.vm</string>
     <key>CFBundleName</key><string>WeCoLab VM</string>
     <key>CFBundleExecutable</key><string>wecolab-vm</string>
-    <key>CFBundleVersion</key><string>1</string>
 </dict>
 </plist>

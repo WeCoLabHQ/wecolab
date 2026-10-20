@@ -10,13 +10,15 @@ vet:
 	go vet ./...
 
 build:
-	go build -o bin/ ./cmd/...
+	@flags="$$(python3 hack/build-info.py --format go-ldflags)" || exit 1; \
+	  go build -ldflags "$(LDFLAGS) $$flags" -o bin/ ./cmd/...
 
 # Linux binaries for both architectures: what install.sh images when WECOLAB_BIN points here.
 dist: join
 	@mkdir -p dist/bin
-	@for a in amd64 arm64; do for c in warden console; do \
-	  CGO_ENABLED=0 GOOS=linux GOARCH=$$a go build -trimpath -ldflags "$(LDFLAGS)" -o dist/bin/$$c-$$a ./cmd/$$c || exit 1; done; done
+	@flags="$$(python3 hack/build-info.py --format go-ldflags)" || exit 1; \
+	  for a in amd64 arm64; do for c in warden console; do \
+	    CGO_ENABLED=0 GOOS=linux GOARCH=$$a go build -trimpath -ldflags "$(LDFLAGS) $$flags" -o dist/bin/$$c-$$a ./cmd/$$c || exit 1; done; done
 	@echo $(VERSION) > dist/bin/VERSION
 
 crds:

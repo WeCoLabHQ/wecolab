@@ -10,9 +10,11 @@ HELPERS := wecolab-runner wecolab-vm wecolab-network
 # The app bundle is assembled by hand: an executable, an Info.plist and the icons.
 build:
 	swift build -c $(CONFIG)
-	go -C network build -trimpath -o "$(BIN)/wecolab-network" .
+	LD_FLAGS="$$(python3 ../hack/build-info.py --format go-ldflags --go-package main)" && \
+	  go -C network build -trimpath -ldflags "$$LD_FLAGS" -o "$(BIN)/wecolab-network" .
 	rm -rf $(APP) && mkdir -p $(APP)/Contents/MacOS
 	cp Info.plist $(APP)/Contents/
+	python3 ../hack/build-info.py --format json | python3 -c 'import json, plistlib, sys; p="$(APP)/Contents/Info.plist"; info=json.load(sys.stdin); f=open(p,"rb"); data=plistlib.load(f); f.close(); data.update(CFBundleShortVersionString=info["productVersion"], CFBundleVersion=str(info["buildNumber"]), WeCoLabSourceRevision=info["sourceRevision"], WeCoLabSourceDirty=info["dirty"]); f=open(p,"wb"); plistlib.dump(data,f,sort_keys=False); f.close()'
 	mkdir -p $(APP)/Contents/Resources && cp AppIcon.icns $(APP)/Contents/Resources/
 	# The native icon (macOS 26 and later draw legacy icons small, on a gray tile): Icon Composer
 	# source compiled into Assets.car by actool, which ships with Xcode. Without Xcode the .icns stays.

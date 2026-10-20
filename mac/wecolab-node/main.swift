@@ -4,6 +4,7 @@ import WeCoLabCore
 let usage = """
 usage: wecolab-node list
        wecolab-node status [--node NAME-OR-ID] [--json]
+       wecolab-node version [--json] | --version [--json]
        wecolab-node add --name NAME --invite - [resource options] [--network isolated|localNetwork] [--yes]
        wecolab-node up [--node NAME-OR-ID] [resource options]
        wecolab-node down [--node NAME-OR-ID]
@@ -129,8 +130,19 @@ func show(_ node: NodeSnapshot) {
 
 setvbuf(stdout, nil, _IOLBF, 0)
 do {
-    let options = try Arguments(Array(CommandLine.arguments.dropFirst()))
+    let args = Array(CommandLine.arguments.dropFirst())
+    if args.first == "--version" {
+        guard args == ["--version"] || args == ["--version", "--json"] else { throw NodeError(usage) }
+        print(args.contains("--json") ? BuildInfo.json : BuildInfo.display)
+        exit(EXIT_SUCCESS)
+    }
+    let options = try Arguments(args)
     if options.command == "help" { print(usage); exit(EXIT_SUCCESS) }
+    if options.command == "version" {
+        guard options.values.isEmpty, !options.yes else { throw NodeError(usage) }
+        print(options.json ? BuildInfo.json : BuildInfo.display)
+        exit(EXIT_SUCCESS)
+    }
     let commands: Set<String> = ["list", "status", "add", "up", "down", "configure", "reset", "remove"]
     guard commands.contains(options.command) else { throw NodeError(usage) }
     let locations = RunnerLocations(root: options.values["root"].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? RunnerLocations.defaultRoot)

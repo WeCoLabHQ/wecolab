@@ -144,7 +144,10 @@ reload() { # new code into the running fabric: images rebuilt and imported, WeCo
   make -s dist
   local a=arm64 w="/tmp/$PREFIX-warden-host"
   [ "$(docker info -f '{{.Architecture}}')" = x86_64 ] && a=amd64
-  go build -o "$w" ./cmd/warden
+  command -v python3 >/dev/null || { echo "python3 is required to stamp development builds" >&2; return 1; }
+  local build_flags
+  build_flags=$(python3 hack/build-info.py --format go-ldflags) || return 1
+  go build -ldflags "$build_flags" -o "$w" ./cmd/warden
   "$w" image --name ghcr.io/wecolabhq/warden:dev --arch "$a" --out "/tmp/$PREFIX-warden-dev-$a.tar" "dist/bin/warden-$a=/warden" "$CACHE/sops-v3.13.3.linux.$a=/usr/local/bin/sops"
   "$w" image --name ghcr.io/wecolabhq/console:dev --arch "$a" --out "/tmp/$PREFIX-console-dev-$a.tar" "dist/bin/console-$a=/console" "$CACHE/sops-v3.13.3.linux.$a=/usr/local/bin/sops"
   for n in pub home mac; do

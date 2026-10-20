@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"wecolab.io/wecolab/api/v1alpha1"
+	"wecolab.io/wecolab/internal/buildinfo"
 	"wecolab.io/wecolab/internal/fabric"
 	"wecolab.io/wecolab/internal/nebula"
 	"wecolab.io/wecolab/internal/validate"
@@ -800,9 +801,14 @@ var Version = "dev"
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil))) // log.Printf's lines too
 	listen := flag.String("listen", ":8080", "address to serve on")
+	showVersion := flag.Bool("version", false, "print product build information and exit")
 	site := flag.String("site", os.Getenv("WECOLAB_SITE"), "this site")
 	dist := flag.String("dist", "/dist", "what joining boxes download")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(buildinfo.Current())
+		return
+	}
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
@@ -952,6 +958,9 @@ func (s *server) routes() *http.ServeMux {
 		mux.HandleFunc("GET /oauth/logout", s.logout)
 	}
 	mux.HandleFunc("GET /api/me", s.me)
+	mux.HandleFunc("GET /api/build-info", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, buildinfo.Current())
+	})
 	mux.HandleFunc("POST /api/me/keys", s.myKeys)
 	mux.HandleFunc("GET /api/members", s.members)
 	mux.HandleFunc("POST /api/projects", s.createProject)

@@ -2,8 +2,9 @@
 
 Requires an Apple Silicon Mac running macOS 14 or newer and a site already
 created on a supported Linux box. Build with Swift 6, Go (the version in
-`network/go.mod` or newer), and Apple's signing tools. The ad-hoc-signed build
-is for the Mac that built it, not a notarized release for other Macs.
+`network/go.mod` or newer), Python 3, a complete (non-shallow) Git checkout,
+and Apple's signing tools. The ad-hoc-signed build is for the Mac that built
+it, not a notarized release for other Macs.
 
 The app and CLI control one per-user background runner. Each node profile has
 its own Debian VM, fabric invite, guest identity, disk and resource settings.
@@ -30,7 +31,7 @@ wecolab-vm/       sandboxed worker with a capability for one profile directory
 network/         inherited-sandbox Go network backend with bounded flow admission
 wecolab-node/    headless client
 WeCoLab/         SwiftUI menu bar app and profile window
-Plugins/         compiles ../install.sh into WeCoLabCore at build time
+Plugins/         compiles ../install.sh and source identity into WeCoLabCore at build time
 Tests/           configuration, provisioning, migration, boundaries and lifecycle regressions
 ```
 
@@ -42,6 +43,22 @@ make sign     # signed dist/WeCoLab.app, CLI, runner, VM worker and network back
 make test-sandbox # build/sign and exercise a real worker's home-directory capability
 make dmg      # dist/WeCoLab.dmg (local development signing by default)
 ```
+
+`VERSION` at the repository root is the product version. The Mac executables
+embed the same product version, history-derived numeric build number and full
+source revision; dirty working trees are explicitly marked. Use the menu-bar
+**About WeCoLab** item to see the app identity, or run
+`dist/wecolab-node version [--json]`, `dist/wecolab-node --version [--json]`,
+`dist/wecolab-runner --version`, or `dist/wecolab-vm --version`. These commands
+do not contact the runner or start a VM. The signed network helper carries
+the same identity but requires the VM worker's inherited sandbox; it cannot
+be launched directly from a shell, even with `--version`.
+
+The app bundle's Info.plist carries the product version, build number,
+`WeCoLabSourceRevision` and `WeCoLabSourceDirty`. Standard `swift build` and
+`swift test` regenerate embedded identity when the checkout changes;
+`make sign` also stamps the Go network helper and assembled bundle. Python 3
+and a complete Git history are required for either build path.
 
 CI also builds the SwiftUI executable with the macOS 15 runner's Swift 6.1 compiler.
 Keep the login-item `Binding` setter as an explicit closure: passing the actor-isolated
@@ -189,11 +206,11 @@ A release still requires a disposable ARM VM and throwaway fabric/invite,
 observing cloud-init, `wecolab-join`, Nebula and node-agent, then removing only
 that VM and its throwaway identity.
 
-`guest-version` is the VM disk's compatibility generation (`2`), not the app's release
-version or a report of the guest's installed Warden version. The app bundle's Info.plist
-reports version `0.1` (build `1`); `wecolab-node status` reports config, VM and join state,
-not a software release version. Installing a newer host app does not replace a current
-guest's seed, embedded installer or installed guest software: `Provision.run` reuses its
+`guest-version` is the VM disk's compatibility generation (`2`), not the app's
+product version or a report of the guest's installed Warden version.
+`wecolab-node status` reports config, VM and join state, not a software release
+version. Installing a newer host app does not replace a current guest's seed,
+embedded installer or installed guest software: `Provision.run` reuses its
 disk and only grows it if requested. Do not reset a live VM to "upgrade" it; that
 deletes its disk and identity and requires removing and rejoining its box. A v1 NetBird
 guest at the same paths, a disk without the current stamp, or a share with v1's

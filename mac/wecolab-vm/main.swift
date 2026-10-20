@@ -140,6 +140,10 @@ private actor Worker {
 @main
 private struct VMWorkerMain {
     static func main() async {
+        if CommandLine.arguments.dropFirst().elementsEqual(["--version"]) {
+            print(BuildInfo.display)
+            return
+        }
         let worker = Worker()
         signal(SIGPIPE, SIG_IGN)
         signal(SIGTERM, SIG_IGN)

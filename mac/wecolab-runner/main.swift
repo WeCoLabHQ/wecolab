@@ -52,10 +52,16 @@ private func holdRunnerLock(_ root: URL) throws -> Int32 {
     return fd
 }
 
+let args = Array(CommandLine.arguments.dropFirst())
+if args == ["--version"] {
+    print(BuildInfo.display)
+    exit(EXIT_SUCCESS)
+}
+
 // A worker may close its command pipe while a stop or memory request is being written.
 signal(SIGPIPE, SIG_IGN)
 
-let args = Array(CommandLine.arguments.dropFirst())
+// Only service startup below may touch the user's runner state.
 guard args.count == 4, args[0] == "--root", args[2] == "--service" else {
     FileHandle.standardError.write(Data("wecolab-runner is managed by the WeCoLab launch agent.\n".utf8))
     exit(EXIT_FAILURE)

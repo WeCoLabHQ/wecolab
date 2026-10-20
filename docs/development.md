@@ -26,12 +26,18 @@ website/               the public-facing Astro site and searchable source docume
 
 ## Build and test
 
+Versioned builds require Python 3, Git and a complete checkout. CI uses
+`fetch-depth: 0`; for a shallow clone, fetch the missing history before building.
+The source archive in a release candidate is an audit snapshot, not a substitute
+for the complete Git checkout used to derive the build number.
+
 ```bash
 cmp install.sh cmd/console/join.sh  # non-mutating embed gate: run BEFORE make test/dist/join
 bash -n install.sh && bash -n cmd/console/join.sh && bash -n hack/release.sh
 go vet ./...
 go test -race -count=1 ./...
 make dist                         # Linux amd64 and arm64 binaries, mutates join.sh if stale
+python3 -m unittest discover -s hack -p 'test_build_info.py'
 python3 -m unittest discover -s hack -p 'test_catalog_import.py'
 make -C mac test                   # Swift tests and Go backend race tests; arm64 macOS 14+
 make -C mac test-sandbox           # build/sign package and exercise a signed VM worker
@@ -348,6 +354,48 @@ the credential-free Keycloak JDBC service address in `cmd/console/web/catalog.js
 The exception requires both that file and that exact match; it does not exempt the file,
 other values, commit history or publication metadata.
 
+## Product version and build identity
+
+The root `VERSION` file is the shared product version, initially `0.1.0`.
+Change it deliberately for a product release, not for each source commit.
+`hack/build-info.py` derives the rest of the identity from the checkout:
+
+- `buildNumber`: the number of commits reachable from `HEAD`. On the public
+  snapshot history this advances with each published snapshot. Private and
+  development branch counts are not comparable with public build numbers.
+- `sourceRevision`: the full Git commit SHA; this is the authoritative source
+  reference, even when two branches have the same build number.
+- `dirty`: tracked or untracked source changes are present. Ignored build
+  outputs do not dirty the identity. A dirty build cannot be reproduced from
+  the reported commit alone and cannot be an official release candidate.
+
+`make build`, `make dist`, the development installer/lab scripts and the Mac
+package stamp this identity into their binaries. Direct, unstamped Go builds
+report development/unknown identity rather than claiming a release.
+Build distributed packages from the **public snapshot**, not the private
+commit with the same tree, so the reported revision is publicly resolvable.
+
+Use `wecolab-node version --json`, `warden build-info`, or the binaries'
+`--version` option to inspect it. The Mac app's About window and the Console's
+sidebar and Settings display the product identity. The app bundle uses the
+product version as `CFBundleShortVersionString` and the build number as
+`CFBundleVersion`; its metadata also records source revision and dirty state.
+
+These identifiers remain separate:
+
+- `dist/bin/VERSION`, the candidate's `VERSION` artifact, legacy
+  `warden version`, and site schema/image version reports retain their
+  deployment identity semantics. Do not replace an upgrade's image identifier
+  with the product version.
+- `wecolab.io/v1alpha1` is the API version, not the product version.
+- The Mac guest's `guest-version` generation is a disk compatibility marker,
+  not the product or guest-installed Warden version. Updating host metadata
+  never resets, re-enrolls, or upgrades an existing guest.
+
+Setting the product version does not publish a GitHub Release. Public source
+publication, candidate construction/attestation and an authorized release are
+distinct operations.
+
 ## Candidate releases and upgrade preflight
 
 `.github/workflows/verification.yml` has independent Linux Go/race/shell/amd64+arm64,
@@ -522,6 +570,13 @@ artifact/platform digests and the GitHub signer workflow/main-ref/source commit 
 root execution. Intentionally swap an artifact, omit a platform or reject the signer in a
 throwaway checkout to prove refusal. A public GitHub Release and native embedding/actual
 multiarch installs require separate authorization and disposable-system observation.
+
+The manifest also records `productVersion`, `buildNumber`, `sourceRevision`
+and `dirty`. Construction requires a clean, complete source checkout;
+verification checks the source revision against the pinned commit and the
+product version against `VERSION` inside the authenticated source archive.
+The attested build establishes the historical build count; a verifier does not
+need to check out that old commit.
 
 The signer workflow identity is case-sensitive:
 `WeCoLabHQ/wecolab/.github/workflows/release.yml` must match the certificate,

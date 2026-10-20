@@ -973,10 +973,13 @@ build() { # WeCoLab's binaries and images, before a registry holds them (decisio
       export PATH=$PATH:$STATE/go/bin
     fi
     bin=$STATE/bin && mkdir -p "$bin"
+    command -v python3 >/dev/null || die "Python 3 is required for developer source builds"
+    [ -f "$src/hack/build-info.py" ] || die "developer source is missing hack/build-info.py"
+    build_flags=$(python3 "$src/hack/build-info.py" --root "$src" --format go-ldflags) || die "could not determine complete Git build identity for developer source"
     VERSION=$(cd "$src" && git describe --tags --always --dirty) || die "developer source must be a named Git checkout"
     for a in amd64 arm64; do
       for c in warden console; do
-        (cd "$src" && CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags "-s -w -X main.Version=$VERSION" -o "$bin/$c-$a" "./cmd/$c")
+        (cd "$src" && CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags "-s -w -X main.Version=$VERSION $build_flags" -o "$bin/$c-$a" "./cmd/$c")
       done
     done
     echo "$VERSION" > "$bin/VERSION"

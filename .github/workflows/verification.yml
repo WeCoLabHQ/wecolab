@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -35,6 +37,8 @@ jobs:
           bash -n cmd/console/testdata/firewall-gate.sh
       - name: Recovery runner safety and evidence checks
         run: python3 -m unittest discover -s hack/dev -p test_recovery_runner.py -v
+      - name: Build identity boundaries
+        run: python3 -m unittest discover -s hack -p test_build_info.py -v
       - name: Vet
         run: go vet ./...
       - name: Race tests
@@ -63,6 +67,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Require the supported native architecture
         run: test "$(uname -m)" = arm64
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -84,6 +90,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod

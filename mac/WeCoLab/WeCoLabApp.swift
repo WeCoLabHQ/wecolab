@@ -7,6 +7,25 @@ import WeCoLabCore
     var body: some Scene {
         Window("WeCoLab", id: "main") { MainView(model: delegate.model) }
             .defaultSize(width: 760, height: 720)
+        Window("About WeCoLab", id: "about") {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("WeCoLab").font(.largeTitle.weight(.semibold))
+                Text("Version \(BuildInfo.productVersion) · Build \(BuildInfo.buildNumber)")
+                    .font(.headline).monospacedDigit()
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("SOURCE REVISION").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(BuildInfo.sourceRevision).font(.caption.monospaced()).textSelection(.enabled)
+                    if BuildInfo.dirty {
+                        Text("Local changes — this build is not reproducible from the revision alone.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(28)
+            .frame(width: 470, alignment: .leading)
+        }
+        .windowResizability(.contentSize)
         MenuBarExtra {
             MenuView(model: delegate.model)
         } label: {
@@ -430,6 +449,7 @@ struct MenuView: View {
         if !model.operationError.isEmpty { Text(model.operationError) }
         Divider()
         Button("Open WeCoLab") { openWindow(id: "main"); NSApp.activate() }
+        Button("About WeCoLab") { openWindow(id: "about"); NSApp.activate() }
         Divider()
         Button("Quit WeCoLab") { NSApp.terminate(nil) }.keyboardShortcut("q").disabled(model.quitting)
     }

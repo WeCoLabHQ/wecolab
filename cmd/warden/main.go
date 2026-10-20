@@ -42,6 +42,7 @@ import (
 
 	"wecolab.io/wecolab/api/v1alpha1"
 	"wecolab.io/wecolab/internal/bootstrap"
+	"wecolab.io/wecolab/internal/buildinfo"
 	"wecolab.io/wecolab/internal/fabric"
 	"wecolab.io/wecolab/internal/nebula"
 	"wecolab.io/wecolab/internal/netbird"
@@ -53,11 +54,15 @@ var Version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: warden site|entrance|entrance-init|node-agent|bootstrap|people|upgrade|record-restore|takeover|image|version [flags]")
+		fmt.Fprintln(os.Stderr, "usage: warden site|entrance|entrance-init|node-agent|bootstrap|people|upgrade|record-restore|takeover|image|version|build-info|--version [flags]")
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
+	if cmd == "--version" {
+		fmt.Println(buildinfo.Current())
+		return
+	}
 	switch cmd {
 	case "site":
 		err = site(args)
@@ -81,6 +86,8 @@ func main() {
 		err = entranceInit(args)
 	case "version":
 		fmt.Println(Version)
+	case "build-info":
+		err = json.NewEncoder(os.Stdout).Encode(buildinfo.Current())
 	default:
 		err = fmt.Errorf("unknown command %q", cmd)
 	}

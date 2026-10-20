@@ -37,8 +37,10 @@ for h in ${LAB_SITES:-}; do hosts+=("$h"); done
 arches=()
 for h in "${hosts[@]}"; do arch=$(arch_for "$h") || exit 1; arches+=("$arch"); done
 out=$(mktemp -d)
+command -v python3 >/dev/null || { echo "python3 is required to stamp lab builds" >&2; exit 1; }
+build_flags=$(python3 hack/build-info.py --format go-ldflags)
 for a in amd64 arm64; do # warden always: it makes the images
-  for c in $(printf '%s\n' warden "$@" | sort -u); do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags "-s -w -X main.Version=$V" -o "$out/$c-$a" "./cmd/$c"; done
+  for c in $(printf '%s\n' warden "$@" | sort -u); do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags "-s -w -X main.Version=$V $build_flags" -o "$out/$c-$a" "./cmd/$c"; done
 done
 remote "$LAB_WRITER" 'rm -rf /tmp/wcl-reload && mkdir -p /tmp/wcl-reload'
 scp -q "$out"/* "$LAB_WRITER":/tmp/wcl-reload/

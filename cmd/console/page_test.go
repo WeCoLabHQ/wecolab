@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"wecolab.io/wecolab/api/v1alpha1"
+	"wecolab.io/wecolab/internal/buildinfo"
 	"wecolab.io/wecolab/internal/warden"
 )
 
@@ -73,6 +74,35 @@ func TestDemotedAdminLosesAdmin(t *testing.T) {
 		if w.Code != want {
 			t.Errorf("an admin session of a Member now %s: %d, want %d", role, w.Code, want)
 		}
+	}
+}
+
+// Build information is the Console executable's own identity, visible to signed-in
+// members but never served to unauthenticated callers.
+func TestBuildInfoRequiresMemberSession(t *testing.T) {
+	sc := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(sc)
+	member := &v1alpha1.Member{ObjectMeta: metav1.ObjectMeta{Name: "a"}, Spec: v1alpha1.MemberSpec{Email: "a@example.org", Role: "member"}}
+	s := &server{c: fake.NewClientBuilder().WithScheme(sc).WithObjects(member).Build(), auth: &auth{key: []byte("0123456789abcdef0123456789abcdef")}}
+	req := httptest.NewRequest(http.MethodGet, "/api/build-info", nil)
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous build info: HTTP %d, want 401", w.Code)
+	}
+
+	req.AddCookie(cookie(sessionCookie, s.auth.sign("session", identity{Email: "a@example.org", Exp: time.Now().Add(time.Hour).Unix()}), 60))
+	w = httptest.NewRecorder()
+	s.handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("member build info: HTTP %d: %s", w.Code, w.Body)
+	}
+	var info buildinfo.Info
+	if err := json.NewDecoder(w.Body).Decode(&info); err != nil {
+		t.Fatal(err)
+	}
+	if info != buildinfo.Current() {
+		t.Fatalf("Console identity %+v, executable identity %+v", info, buildinfo.Current())
 	}
 }
 

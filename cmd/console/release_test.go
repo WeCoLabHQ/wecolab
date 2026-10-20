@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -19,6 +22,25 @@ func candidate(t *testing.T) (string, string) {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte(f), 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	const productVersion = "0.1.0\n"
+	if err := tw.WriteHeader(&tar.Header{Name: "VERSION", Mode: 0600, Size: int64(len(productVersion))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(productVersion)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "source.tar.gz"), archive.Bytes(), 0600); err != nil {
+		t.Fatal(err)
 	}
 	script := `#!/bin/sh
 case "$*" in
@@ -40,7 +62,7 @@ esac
 		fields := strings.Fields(line)
 		digests[fields[1]] = fields[0]
 	}
-	manifest := `{"schema":1,"repository":"wecolabhq/wecolab","sourceCommit":"` + releaseCommit + `","apiVersion":"wecolab.io/v1alpha1","migrations":["archive-id","vault-key-version","name-claims","placement-revision"],"artifacts":[{"name":"install.sh","platform":"linux/amd64,linux/arm64","sha256":"` + digests["install.sh"] + `"},{"name":"VERSION","platform":"linux/amd64,linux/arm64","sha256":"` + digests["VERSION"] + `"},{"name":"source.tar.gz","platform":"source","sha256":"` + digests["source.tar.gz"] + `"},{"name":"warden-amd64","platform":"linux/amd64","sha256":"` + digests["warden-amd64"] + `"},{"name":"warden-arm64","platform":"linux/arm64","sha256":"` + digests["warden-arm64"] + `"},{"name":"console-amd64","platform":"linux/amd64","sha256":"` + digests["console-amd64"] + `"},{"name":"console-arm64","platform":"linux/arm64","sha256":"` + digests["console-arm64"] + `"}]}`
+	manifest := `{"schema":1,"repository":"wecolabhq/wecolab","sourceCommit":"` + releaseCommit + `","sourceRevision":"` + releaseCommit + `","productVersion":"0.1.0","buildNumber":7,"dirty":false,"apiVersion":"wecolab.io/v1alpha1","migrations":["archive-id","vault-key-version","name-claims","placement-revision"],"artifacts":[{"name":"install.sh","platform":"linux/amd64,linux/arm64","sha256":"` + digests["install.sh"] + `"},{"name":"VERSION","platform":"linux/amd64,linux/arm64","sha256":"` + digests["VERSION"] + `"},{"name":"source.tar.gz","platform":"source","sha256":"` + digests["source.tar.gz"] + `"},{"name":"warden-amd64","platform":"linux/amd64","sha256":"` + digests["warden-amd64"] + `"},{"name":"warden-arm64","platform":"linux/arm64","sha256":"` + digests["warden-arm64"] + `"},{"name":"console-amd64","platform":"linux/amd64","sha256":"` + digests["console-amd64"] + `"},{"name":"console-arm64","platform":"linux/arm64","sha256":"` + digests["console-arm64"] + `"}]}`
 	writeFile(t, filepath.Join(dir, "release.json"), manifest, 0600)
 	return dir, bin
 }
@@ -68,6 +90,22 @@ func TestReleaseVerificationRejectsUntrustedInputs(t *testing.T) {
 			writeFile(t, d+"/release.json", strings.Replace(payload, `"platform":"linux/arm64"`, `"platform":"unsupported"`, 1), 0600)
 		}},
 		{"wrong signer", func(d, b string) { writeFile(t, b+"/gh", "#!/bin/sh\nexit 1\n", 0700) }},
+		{"wrong product version", func(d, b string) {
+			payload := readFile(t, d+"/release.json")
+			writeFile(t, d+"/release.json", strings.Replace(payload, `"productVersion":"0.1.0"`, `"productVersion":"0.2.0"`, 1), 0600)
+		}},
+		{"wrong source revision", func(d, b string) {
+			payload := readFile(t, d+"/release.json")
+			writeFile(t, d+"/release.json", strings.Replace(payload, `"sourceRevision":"`+releaseCommit+`"`, `"sourceRevision":"`+strings.Repeat("b", 40)+`"`, 1), 0600)
+		}},
+		{"dirty candidate", func(d, b string) {
+			payload := readFile(t, d+"/release.json")
+			writeFile(t, d+"/release.json", strings.Replace(payload, `"dirty":false`, `"dirty":true`, 1), 0600)
+		}},
+		{"fractional build number", func(d, b string) {
+			payload := readFile(t, d+"/release.json")
+			writeFile(t, d+"/release.json", strings.Replace(payload, `"buildNumber":7`, `"buildNumber":7.5`, 1), 0600)
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

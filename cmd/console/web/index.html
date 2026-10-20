@@ -89,7 +89,8 @@ html.booting body{visibility:hidden}
 .navsec a .ico{width:16px;height:16px;flex:none;opacity:.8}
 .navsec a .cnt{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--fg-3)}
 .navsec a .dot{margin-left:auto}
-nav.side .foot{margin-top:auto;padding:var(--pad);border-top:1px solid var(--line);font-size:12px;color:var(--fg-2);display:flex;align-items:center;gap:8px}
+nav.side .foot{padding:var(--pad);border-top:1px solid var(--line);font-size:12px;color:var(--fg-2);display:flex;align-items:center;gap:8px}
+nav.side .build{margin-top:auto;padding:8px var(--pad);border-top:1px solid var(--line);font-size:11px;color:var(--fg-2);overflow-wrap:anywhere}
 nav.side .foot .avatar{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--info))}
 
 header.top{display:flex;align-items:center;gap:14px;padding:0 var(--pad) 0 calc(var(--pad) + 4px);border-bottom:1px solid var(--line);background:var(--bg-1)}
@@ -334,6 +335,7 @@ td .nm{font-weight:500} td .sub{color:var(--fg-3);font-size:11.5px;margin-left:8
       <a href="#members" data-route="members" data-admin>Members</a>
       <a href="#settings" data-route="settings" data-admin>Settings</a>
     </div>
+    <div class="build mono" id="build-summary" aria-label="Console build information">Console build information loading…</div>
     <div class="foot"><span class="avatar"></span><span id="foot-me">…</span><span class="dim" style="margin-left:auto" id="refreshed"></span></div>
   </nav>
   <div class="scrim" id="scrim" data-action="closeMenu"></div>
@@ -472,6 +474,12 @@ td .nm{font-weight:500} td .sub{color:var(--fg-3);font-size:11.5px;margin-left:8
         <div class="frow"><label></label><div style="display:flex;gap:8px;align-items:center"><button class="btn primary" data-action="saveB2">Save</button><span class="err" id="b2-err"></span></div></div>
       </div></div></div>
       <div class="card" style="margin-bottom:var(--pad)"><div class="hd"><h3>Writer</h3></div><div class="bd" style="display:grid;gap:10px"><p style="margin:0" id="wr-state" class="muted"></p><div><button class="btn" id="wr-take" style="display:none" data-action="takeover">Take over as writer here</button><span class="err"></span></div></div></div>
+      <div class="card" style="margin-bottom:var(--pad)"><div class="hd"><h3>Console build</h3></div><div class="bd"><div class="kv">
+        <span class="muted">Product version</span><span class="mono" id="build-version">…</span>
+        <span class="muted">Build number</span><span class="mono" id="build-number">…</span>
+        <span class="muted">Source revision</span><span class="mono" id="build-revision" style="overflow-wrap:anywhere">…</span>
+        <span class="muted">Source state</span><span id="build-dirty">…</span>
+      </div></div></div>
       <div class="card"><div class="hd"><h3>Appearance</h3></div><div class="bd" style="display:flex;gap:18px;align-items:center">
         <div class="seg"><button data-action="theme" data-v="graphite">Graphite</button><button data-action="theme" data-v="paper">Paper</button><button data-action="theme" data-v="dusk">Dusk</button></div>
         <div class="swatches"><span class="sw" style="background:#2dd4bf" data-action="accent" data-v="teal"></span><span class="sw" style="background:#4f8ef7" data-action="accent" data-v="blue"></span><span class="sw" style="background:#f5b544" data-action="accent" data-v="amber"></span><span class="sw" style="background:#f472a6" data-action="accent" data-v="rose"></span></div>
@@ -545,7 +553,15 @@ function secret(title,lead,text,note){ $('#inv-title').textContent=title; $('#in
 const once=j=>'It works once and expires '+when(j.expires)+'. It is not shown again: copy it now.';
 async function whoami(){ ME=await api('GET','/api/me'); if(document.activeElement!==$('#me-keys'))$('#me-keys').value=(ME.sshKeys||[]).join('\n'); $('#foot-me').textContent=ME.auth?(ME.name||ME.email):'owner';
   put('#me',ME.auth&&html`${ME.email} <span class="dim">· ${ME.role}</span> · <a href="/oauth/logout">sign out</a>`); document.querySelectorAll('[data-admin]').forEach(a=>a.style.display=ME.admin?'':'none');
-  for(const i of ['#dp-project','#dm-project','#rd-project']) if(!$(i).value)$(i).value=(ME.projects||[])[0]||''; }
+  for(const i of ['#dp-project','#dm-project','#rd-project']) if(!$(i).value)$(i).value=(ME.projects||[])[0]||'';
+  const build=await api('GET','/api/build-info');
+  const stamped=build.buildNumber>0&&build.sourceRevision!=='unknown';
+  $('#build-summary').textContent=`Console ${build.productVersion} · build ${build.buildNumber||'unknown'}${build.dirty?' · dirty':''}`;
+  $('#build-version').textContent=build.productVersion;
+  $('#build-number').textContent=build.buildNumber||'unknown';
+  $('#build-revision').textContent=build.sourceRevision;
+  $('#build-dirty').textContent=build.dirty?'dirty':stamped?'clean':'unknown (unstamped build)';
+}
 let statePending=null, stateQueued=false;
 function load(){
   if(statePending){stateQueued=true;return statePending;}
