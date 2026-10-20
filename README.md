@@ -17,8 +17,12 @@ Each location controls what it shares; you manage apps and capacity through a br
 
 ## Try locally
 
-**WeCoLab is in development; no release has been published yet.** Start with the
-[disposable Docker lab](docs/development.md#a-whole-fabric-on-one-laptop), not a production machine.
+**WeCoLab 0.1.0 is an early development release.** The [release](https://github.com/WeCoLabHQ/wecolab/releases/tag/v0.1.0)
+provides attested Linux amd64/arm64 binaries, the installer and source. It does not include a
+Developer-ID-signed/notarized Mac app or installer.
+
+Start with the [disposable Docker lab](docs/development.md#a-whole-fabric-on-one-laptop),
+not a production machine.
 It creates two sites, a laptop node and an object-storage vault on one machine, then prints site and node status.
 
 The lab uses privileged Docker containers. Allow at least **30 GiB free in Docker's backing store**
