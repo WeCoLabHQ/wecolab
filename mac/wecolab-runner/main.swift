@@ -18,7 +18,9 @@ private final class ControlEndpoint: NSObject, RunnerXPCProtocol {
         }
         do {
             let command = try JSONDecoder().decode(RunnerCommand.self, from: data)
-            Task { [service] in completion.call(Self.encode(await service.handle(command))) }
+            Task { @Sendable [service, completion, command] in
+                completion.call(ControlEndpoint.encode(await service.handle(command)))
+            }
         } catch { completion.call(Self.encode(RunnerReply(error: "Invalid runner control request."))) }
     }
     private static func encode(_ reply: RunnerReply) -> Data {

@@ -64,6 +64,9 @@ CI also builds the SwiftUI executable with the macOS 15 runner's Swift 6.1 compi
 Keep the login-item `Binding` setter as an explicit closure: passing the actor-isolated
 method reference directly triggers [Swift compiler crash #82491](https://github.com/swiftlang/swift/issues/82491)
 in that toolchain. The closure preserves the same synchronous main-actor behavior.
+The runner's XPC reply task captures its sendable values explicitly and uses
+`ControlEndpoint.encode`, not dynamic `Self`, so Swift 6.1 does not infer a
+capture of the non-sendable XPC endpoint.
 
 Only `wecolab-vm` receives the virtualization entitlement and App Sandbox
 capabilities. It resolves the supervisor's bookmark for its own profile; its
